@@ -10,8 +10,8 @@ import xbmc
 import xbmcaddon
 import xbmcvfs
 
-from resources.lib.prime.users import UserStore
-from resources.lib.prime.web import create_server
+from resources.lib.users import UserStore
+from resources.lib.web import create_server
 
 
 WEB_HOST = "0.0.0.0"

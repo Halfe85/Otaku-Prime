@@ -40,6 +40,18 @@ body {
   color: var(--text);
   font: 15px/1.5 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
+body::before, body::after {
+  content: "";
+  position: fixed;
+  width: 360px;
+  height: 360px;
+  border-radius: 50%;
+  filter: blur(100px);
+  opacity: .16;
+  pointer-events: none;
+}
+body::before { top: -150px; right: -90px; background: #8b7cff; }
+body::after { bottom: -180px; left: -100px; background: #3d7cff; }
 button, input, select { font: inherit; }
 a { color: var(--accent-strong); }
 .main-container {
@@ -164,10 +176,45 @@ input:disabled, select:disabled { opacity: .55; cursor: not-allowed; }
   justify-content: space-between;
   gap: 16px;
 }
-.login-shell { grid-template-rows: 1fr; place-items: center; padding: 20px; }
-.login-card { width: min(430px, 100%); }
-.login-card .brand { margin-bottom: 24px; }
-.login-card form { display: grid; gap: 15px; }
+.auth-screen {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+}
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(4, 6, 12, .58);
+  backdrop-filter: blur(10px);
+}
+.auth-modal {
+  width: min(440px, 100%);
+  margin: 0;
+  padding: 28px;
+  border: 1px solid rgba(139, 124, 255, .34);
+  border-radius: 20px;
+  background: linear-gradient(155deg, rgba(28, 34, 52, .98), rgba(13, 17, 28, .98));
+  box-shadow: 0 28px 90px rgba(0, 0, 0, .55), 0 0 0 1px rgba(255,255,255,.025) inset;
+}
+.auth-modal .brand { margin-bottom: 24px; }
+.auth-modal h2 { margin: 0 0 7px; font-size: 23px; }
+.auth-modal > p { margin-top: 0; }
+.auth-modal form { display: grid; gap: 15px; }
+.auth-modal .button { width: 100%; margin-top: 2px; }
+.security-note {
+  display: flex;
+  gap: 9px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
 @media (max-width: 620px) {
   .brand-row { min-height: 58px; }
   .brand p, .user-name { display: none; }
@@ -193,18 +240,46 @@ def _document(title: str, body: str, script: str = "") -> str:
 def render_login(message: str = "") -> str:
     notice = '<p class="notice warning">{}</p>'.format(html.escape(message)) if message else ""
     body = """
-<main class="main-container login-shell">
-  <section class="card login-card">
-    <div class="brand"><span class="brand-mark">OP</span><div><h1>Otaku Prime</h1><p>Local management</p></div></div>
-    {notice}
-    <form method="post" action="/login">
-      <label>Username<input name="username" autocomplete="username" required autofocus></label>
-      <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
-      <button class="button" type="submit">Sign in</button>
-    </form>
-  </section>
+<main class="auth-screen">
+  <div class="modal-backdrop">
+    <section class="auth-modal" id="login-modal" role="dialog" aria-modal="true" aria-labelledby="login-title">
+      <div class="brand"><span class="brand-mark">OP</span><div><h1>Otaku Prime</h1><p>Local management</p></div></div>
+      <h2 id="login-title">Welcome back</h2>
+      <p class="muted">Sign in to manage this Otaku Prime installation.</p>
+      {notice}
+      <form method="post" action="/login">
+        <label>Username<input name="username" autocomplete="username" required autofocus></label>
+        <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+        <button class="button" type="submit">Sign in</button>
+      </form>
+    </section>
+  </div>
 </main>""".format(notice=notice)
     return _document("Sign in - Otaku Prime", body)
+
+
+def render_new_password(user: dict, message: str = "") -> str:
+    notice = '<p class="notice warning">{}</p>'.format(html.escape(message)) if message else ""
+    body = """
+<main class="auth-screen">
+  <div class="modal-backdrop">
+    <section class="auth-modal" id="new-password-modal" role="dialog" aria-modal="true" aria-labelledby="password-title">
+      <div class="brand"><span class="brand-mark">OP</span><div><h1>Otaku Prime</h1><p>Account security</p></div></div>
+      <span class="badge">Required</span>
+      <h2 id="password-title">Create a new password</h2>
+      <p class="muted">The bootstrap password for <strong>{username}</strong> must be replaced before settings can be opened.</p>
+      {notice}
+      <form method="post" action="/password">
+        <label>Current password<input name="current_password" type="password" autocomplete="current-password" required autofocus></label>
+        <label>New password<input name="new_password" type="password" autocomplete="new-password" minlength="8" required></label>
+        <label>Confirm new password<input name="confirm_password" type="password" autocomplete="new-password" minlength="8" required></label>
+        <div class="security-note"><span>●</span><span>Use at least 8 characters. The password is stored only as a salted hash.</span></div>
+        <button class="button" type="submit">Save new password</button>
+      </form>
+    </section>
+  </div>
+</main>""".format(username=html.escape(user["username"]), notice=notice)
+    return _document("New password - Otaku Prime", body)
 
 
 def _preview_card(category_id: str) -> str:

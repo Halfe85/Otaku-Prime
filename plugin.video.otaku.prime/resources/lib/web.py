@@ -8,8 +8,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional
 from urllib.parse import parse_qs
 
-from resources.lib.prime.auth import AuthService
-from resources.lib.prime.ui import render_home, render_login
+from resources.lib.auth import AuthService
+from resources.lib.ui import render_home, render_login, render_new_password
 
 MAX_FORM_BYTES = 16 * 1024
 
@@ -90,7 +90,10 @@ def create_server(host: str, port: int, user_store) -> ThreadingHTTPServer:
 
             user = self._current_user()
             if user:
-                self._send_html(200, render_home(user))
+                if user.get("must_change_password"):
+                    self._send_html(200, render_new_password(user))
+                else:
+                    self._send_html(200, render_home(user))
             else:
                 self._send_html(200, render_login())
 
@@ -120,16 +123,29 @@ def create_server(host: str, port: int, user_store) -> ThreadingHTTPServer:
                     return
 
                 token = self._cookie_value("otaku_prime_session")
+                new_password = form.get("new_password", "")
+                if new_password != form.get("confirm_password", new_password):
+                    page = render_new_password(user, "The new passwords do not match.")
+                    self._send_html(400, page)
+                    return
                 result = auth.change_password(
                     token,
                     form.get("current_password", ""),
-                    form.get("new_password", ""),
+                    new_password,
                 )
                 if result == "incorrect_password":
-                    self._send_html(403, render_home(user, "Current password is incorrect.", "accounts"))
+                    if user.get("must_change_password"):
+                        page = render_new_password(user, "Current password is incorrect.")
+                    else:
+                        page = render_home(user, "Current password is incorrect.", "accounts")
+                    self._send_html(403, page)
                     return
                 if result == "password_too_short":
-                    self._send_html(400, render_home(user, "New password must be at least 8 characters.", "accounts"))
+                    if user.get("must_change_password"):
+                        page = render_new_password(user, "New password must be at least 8 characters.")
+                    else:
+                        page = render_home(user, "New password must be at least 8 characters.", "accounts")
+                    self._send_html(400, page)
                     return
                 if result == "not_authenticated":
                     self._redirect("/")
