@@ -3,25 +3,19 @@
 
 from __future__ import annotations
 
-import socket
 import sys
 
+import xbmc
 import xbmcgui
 import xbmcplugin
 
-PORT = 9898
+from service import WEB_PORT
 
 
 def get_server_ip() -> str:
-    """Return the Kodi host's LAN IP, with a safe localhost fallback."""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        sock.connect(("8.8.8.8", 80))
-        return sock.getsockname()[0]
-    except OSError:
-        return "127.0.0.1"
-    finally:
-        sock.close()
+    """Return the IP address reported by Kodi for this device."""
+    address = xbmc.getInfoLabel("Network.IPAddress").strip()
+    return address or "127.0.0.1"
 
 
 def main() -> None:
@@ -29,7 +23,7 @@ def main() -> None:
     handle = int(sys.argv[1])
     server_ip = get_server_ip()
 
-    item = xbmcgui.ListItem(label=f"Enter http://{server_ip}:{PORT}")
+    item = xbmcgui.ListItem(label=f"Enter http://{server_ip}:{WEB_PORT}")
     item.setProperty("IsPlayable", "false")
 
     xbmcplugin.addDirectoryItem(
