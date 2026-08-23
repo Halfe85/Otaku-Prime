@@ -1,0 +1,11 @@
+Otaku Prime 0.1.0 Alpha
+
+Initial development foundation:
+- Fresh Otaku Prime addon architecture.
+- Kodi launches main.py as the plugin entry point.
+- Background service hosts the management interface on port 9898.
+- Local SQLite user database with an initial admin account.
+- Web login, sessions, logout, and password change support.
+- Kodi addon screen displays the local web-management address.
+
+This is an alpha development release. Playback and Kodi library import are not implemented yet.
