@@ -4,9 +4,10 @@
 from __future__ import annotations
 
 import html
+from typing import Optional
 
 
-def render_anilist_auth(*, authorize_url: str, connected_account: dict | None, message: str = "") -> str:
+def render_anilist_auth(*, authorize_url: str, connected_account: Optional[dict], message: str = "") -> str:
     notice = f'<p class="notice">{html.escape(message)}</p>' if message else ""
     if connected_account:
         account_html = f"""
