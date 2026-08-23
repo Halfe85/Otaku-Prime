@@ -3,55 +3,19 @@
 
 from __future__ import annotations
 
-import html
-import secrets
-import threading
-import time
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional
 from urllib.parse import parse_qs
 
+from resources.lib.prime.auth import AuthService
+from resources.lib.prime.ui import render_home, render_login
 
-SESSION_TTL_SECONDS = 12 * 60 * 60
 MAX_FORM_BYTES = 16 * 1024
 
 
-class SessionStore:
-    def __init__(self) -> None:
-        self._sessions = {}
-        self._lock = threading.Lock()
-
-    def create(self, user: dict) -> str:
-        token = secrets.token_urlsafe(32)
-        with self._lock:
-            self._sessions[token] = {
-                "user": user,
-                "expires": time.time() + SESSION_TTL_SECONDS,
-            }
-        return token
-
-    def get(self, token: str):
-        if not token:
-            return None
-        with self._lock:
-            session = self._sessions.get(token)
-            if not session:
-                return None
-            if session["expires"] <= time.time():
-                self._sessions.pop(token, None)
-                return None
-            return session["user"]
-
-    def delete(self, token: str) -> None:
-        if not token:
-            return
-        with self._lock:
-            self._sessions.pop(token, None)
-
-
 def create_server(host: str, port: int, user_store) -> ThreadingHTTPServer:
-    sessions = SessionStore()
+    auth = AuthService(user_store)
 
     class PrimeRequestHandler(BaseHTTPRequestHandler):
         server_version = "OtakuPrime/0.1"
@@ -70,7 +34,7 @@ def create_server(host: str, port: int, user_store) -> ThreadingHTTPServer:
             return morsel.value if morsel else ""
 
         def _current_user(self):
-            return sessions.get(self._cookie_value("otaku_prime_session"))
+            return auth.current_user(self._cookie_value("otaku_prime_session"))
 
         def _send_html(self, status: int, body: str) -> None:
             payload = body.encode("utf-8")
@@ -100,48 +64,6 @@ def create_server(host: str, port: int, user_store) -> ThreadingHTTPServer:
             raw = self.rfile.read(length).decode("utf-8", errors="replace")
             return {key: values[0] for key, values in parse_qs(raw).items() if values}
 
-        def _login_page(self, message: str = "") -> str:
-            notice = f"<p>{html.escape(message)}</p>" if message else ""
-            return f"""<!doctype html>
-<html>
-<head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Otaku Prime</title></head>
-<body>
-  <main>
-    <h1>Otaku Prime</h1>
-    {notice}
-    <form method=\"post\" action=\"/login\">
-      <label>Username <input name=\"username\" autocomplete=\"username\" required></label><br>
-      <label>Password <input name=\"password\" type=\"password\" autocomplete=\"current-password\" required></label><br>
-      <button type=\"submit\">Sign in</button>
-    </form>
-  </main>
-</body>
-</html>"""
-
-        def _home_page(self, user: dict, message: str = "") -> str:
-            warning = ""
-            if user.get("must_change_password"):
-                warning = "<p><strong>Default password is active. Change it below.</strong></p>"
-            notice = f"<p>{html.escape(message)}</p>" if message else ""
-            return f"""<!doctype html>
-<html>
-<head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Otaku Prime</title></head>
-<body>
-  <main>
-    <h1>Otaku Prime</h1>
-    <p>Signed in as <strong>{html.escape(user['username'])}</strong> ({html.escape(user['role'])})</p>
-    {warning}
-    {notice}
-    <form method=\"post\" action=\"/password\">
-      <label>Current password <input name=\"current_password\" type=\"password\" required></label><br>
-      <label>New password <input name=\"new_password\" type=\"password\" required></label><br>
-      <button type=\"submit\">Change password</button>
-    </form>
-    <p><a href=\"/logout\">Sign out</a></p>
-  </main>
-</body>
-</html>"""
-
         def do_GET(self):
             path = self.path.split("?", 1)[0]
             if path == "/health":
@@ -155,7 +77,7 @@ def create_server(host: str, port: int, user_store) -> ThreadingHTTPServer:
 
             if path == "/logout":
                 token = self._cookie_value("otaku_prime_session")
-                sessions.delete(token)
+                auth.logout(token)
                 self._redirect(
                     "/",
                     "otaku_prime_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict",
@@ -168,24 +90,23 @@ def create_server(host: str, port: int, user_store) -> ThreadingHTTPServer:
 
             user = self._current_user()
             if user:
-                self._send_html(200, self._home_page(user))
+                self._send_html(200, render_home(user))
             else:
-                self._send_html(200, self._login_page())
+                self._send_html(200, render_login())
 
         def do_POST(self):
             path = self.path.split("?", 1)[0]
             form = self._read_form()
 
             if path == "/login":
-                user = user_store.authenticate(
+                token = auth.login(
                     form.get("username", ""),
                     form.get("password", ""),
                 )
-                if user is None:
-                    self._send_html(401, self._login_page("Invalid username or password."))
+                if token is None:
+                    self._send_html(401, render_login("Invalid username or password."))
                     return
 
-                token = sessions.create(user)
                 self._redirect(
                     "/",
                     f"otaku_prime_session={token}; Path=/; HttpOnly; SameSite=Strict",
@@ -198,20 +119,22 @@ def create_server(host: str, port: int, user_store) -> ThreadingHTTPServer:
                     self._redirect("/")
                     return
 
-                verified = user_store.authenticate(
-                    user["username"],
+                token = self._cookie_value("otaku_prime_session")
+                result = auth.change_password(
+                    token,
                     form.get("current_password", ""),
+                    form.get("new_password", ""),
                 )
-                new_password = form.get("new_password", "")
-                if verified is None:
-                    self._send_html(403, self._home_page(user, "Current password is incorrect."))
+                if result == "incorrect_password":
+                    self._send_html(403, render_home(user, "Current password is incorrect.", "accounts"))
                     return
-                if len(new_password) < 8:
-                    self._send_html(400, self._home_page(user, "New password must be at least 8 characters."))
+                if result == "password_too_short":
+                    self._send_html(400, render_home(user, "New password must be at least 8 characters.", "accounts"))
+                    return
+                if result == "not_authenticated":
+                    self._redirect("/")
                     return
 
-                user_store.update_password(user["id"], new_password)
-                sessions.delete(self._cookie_value("otaku_prime_session"))
                 self._redirect(
                     "/",
                     "otaku_prime_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict",
