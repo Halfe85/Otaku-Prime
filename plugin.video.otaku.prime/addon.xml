@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<addon id="plugin.video.otaku.prime" name="Otaku Prime" provider-name="Otaku Prime" version="0.1.0">
+  <requires>
+    <import addon="xbmc.python" version="3.0.1"/>
+  </requires>
+  <extension library="default.py" point="xbmc.python.pluginsource">
+    <provides>video</provides>
+  </extension>
+  <extension point="xbmc.service" library="service.py"/>
+  <extension point="xbmc.addon.metadata">
+    <summary lang="en">Otaku Prime anime library and playback addon</summary>
+    <description lang="en">Otaku Prime integrates anime watchlists with Kodi's native video library and uses provider-based playback resolution.</description>
+    <platform>all</platform>
+    <license>GPL-3.0</license>
+    <source>https://github.com/Halfe85/Otaku-Prime</source>
+  </extension>
+</addon>

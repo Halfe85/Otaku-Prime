@@ -1,82 +1,20 @@
-# 📺 Otaku Repository
+# Otaku Prime
 
-[![Kodi version](https://img.shields.io/badge/Kodi%2020+/21-blue?style=for-the-badge)](https://kodi.tv/)
-[![License: GPL3](https://img.shields.io/badge/License-GPL3-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/GPL-3.0)
+Otaku Prime is a new Kodi anime addon built from a fresh codebase.
 
-This is a **fork of the original Kaito addon** made by **SwagOtaku**.  
-⚠️ **All credit goes to SwagOtaku for the original work.**  
+## Branch model
 
----
+- `main` — upstream/reference snapshot used to study Otaku behavior and implementations.
+- `Otaku-Prime` — the new Otaku Prime codebase.
 
-## 📌 Requirements
+Otaku Prime may reimplement or port selected concepts and functions from Otaku where useful, but code is moved deliberately rather than treating the upstream addon as the application base.
 
-- **Kodi 20 Nexus or later** (this addon does **not** support Kodi 19 or earlier).
+## Architecture direction
 
----
+Kodi owns the user's media library and viewing state (watched, resume, last played). Otaku Prime owns metadata/provider integration, watchlist synchronization, source discovery, and playback resolution.
 
-## 🔧 Installation & Updates
+The first major milestone is watchlist -> Kodi native library import using stable `.strm` playback entries.
 
-You can install this addon via the repository to enable **automatic updates**.  
-_Note: Some updates may require rebuilding the database._
+## License and upstream attribution
 
-### 📥 Install via Repository (Recommended)
-1. **Download repository**: [repository.otaku.zip](https://github.com/Goldenfreddy0703/repository.otaku/blob/master/repository.otaku-1.0.zip?raw=true)
-2. **Install via Kodi File Manager**:
-   - Add this source: `https://goldenfreddy0703.github.io/repository.otaku`
-3. Install the repository and get automatic updates.
-
-### 🛠️ Manual Installation (Not Recommended)
-_Only use this if absolutely necessary. Future updates should be installed via the repository._
-
-1. **Install dependencies in order**:
-   - [Context Menu Addon](https://github.com/Goldenfreddy0703/repository.otaku/raw/master/repo/zips/context.otaku/context.otaku-1.0.29.zip)
-   - [Otaku Addon](https://github.com/Goldenfreddy0703/repository.otaku/raw/master/repo/zips/plugin.video.otaku/plugin.video.otaku-5.2.45.zip)
-
-2. **Clear Cache & Rebuild Database**  
-   _After each update, it is recommended to clear the cache and rebuild the database to ensure all changes take effect._
-
----
-
-## 🛠 Troubleshooting
-
-Having issues? Check out these resources:
-
-- 📖 [Otaku Wiki](https://github.com/Goldenfreddy0703/Otaku/wiki)  
-- 💬 **Need Help?** Feel free to contact me via **Discord** or **Keybase** (details below).
-
----
-
-## ✅ Todo List (Optional Features)
-
-- 🔹 **Accounts:** Add **EasyNews** Debrid Provider
-- 🔹 **Accounts:** Add **OffCloud** Debrid Provider
-
----
-
-## 🤝 Help Wanted!  
-
-I am very clueless on this project currently cause this addon was made by SwagOtaku who has done a very great job creating this addon. Be aware that this is a community-driven project, so feel free to submit PRs yourself to improve the code and/or help others with support on the issues etc. If you're willing to really participate in the development, please contact me so I can give you write access to the repo. I will do my best to maintain the project for SwagOtaku. Thanks for understanding!
-
----
-
-## 📬 Contact
-
-- **💬 Discord:** The Steampunk Owl#3126  
-- **🔑 Keybase:** [Goldenfreddy0703](https://keybase.io/goldenfreddy0703)
-- **🐛 Bug Reports & Troubleshooting:** [Github Issues](https://github.com/Goldenfreddy0703/Otaku/issues)
-- **🌐 Join the Addons4Kodi Discord for Otaku Support:** https://discord.gg/SqX7buB
-
----
-
-## ⚠️ Disclaimer
-
-Otaku is and always will be free and open-source. None of its code and resources may be sold or redistributed for any commercial purposes. This addon and its developers DO NOT host, create, or distribute any of the content displayed in the addon; it simply scrapes ad-financed public websites. It is the responsibility of the user to ensure that they are following all applicable laws and regulations in their country. This addon and its developers are not in any way affiliated with Team Kodi or any of the sites and providers used in the addon.
-
----
-
-## 📜 License
-
-Otaku is licensed under the **GPL-3.0 License**.  
-🔗 Read more: [GPL-3.0 License](https://opensource.org/licenses/GPL-3.0)  
-
----
+Otaku Prime is GPL-3.0 licensed. It is inspired by and may contain adapted GPL-licensed portions of Otaku. When upstream code is copied or adapted, its copyright/license notices must be retained as required by GPL-3.0.
