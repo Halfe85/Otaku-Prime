@@ -9,6 +9,7 @@ import threading
 import time
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Optional
 from urllib.parse import parse_qs
 
 
@@ -82,7 +83,7 @@ def create_server(host: str, port: int, user_store) -> ThreadingHTTPServer:
             self.end_headers()
             self.wfile.write(payload)
 
-        def _redirect(self, location: str, cookie_header: str | None = None) -> None:
+        def _redirect(self, location: str, cookie_header: Optional[str] = None) -> None:
             self.send_response(303)
             self.send_header("Location", location)
             if cookie_header:
