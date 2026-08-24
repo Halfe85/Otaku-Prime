@@ -16,9 +16,9 @@ AUTHORIZE_URL = "https://anilist.co/api/v2/oauth/authorize"
 GRAPHQL_URL = "https://graphql.anilist.co"
 PIN_REDIRECT_URL = "https://anilist.co/api/v2/oauth/pin"
 
-# AniList client IDs are public identifiers. Put the Otaku Prime client ID here
-# before release. The environment override is useful for development/testing.
-PACKAGED_CLIENT_ID = ""
+# AniList client IDs are public identifiers. The client secret is intentionally
+# not used by Otaku Prime because Kodi is a distributed client application.
+PACKAGED_CLIENT_ID = "47142"
 CLIENT_ID_ENV = "OTAKU_PRIME_ANILIST_CLIENT_ID"
 
 
