@@ -1,0 +1,9 @@
+<div class="status">Not connected</div>
+<div class="auth-grid"><div class="qr-card"><img src="/watchlist/anilist/qr.svg" alt="AniList authorization QR code"></div><div>
+  <p>1. Scan the QR code or open AniList.</p><p>2. Sign in and approve Otaku Prime.</p>
+  <p>3. AniList will show your access token on its official PIN page.</p><p>4. Paste that token below.</p>
+  <p><a class="button" href="{{AUTHORIZE_URL}}" target="_blank" rel="noopener noreferrer">Open AniList Authorization</a></p>
+</div></div>
+<form method="post" action="/watchlist/anilist/connect"><label>Access token
+  <textarea name="token" rows="4" autocomplete="off" spellcheck="false" required></textarea>
+</label><button type="submit" class="button">Connect AniList</button></form>

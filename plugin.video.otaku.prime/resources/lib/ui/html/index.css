@@ -1,0 +1,22 @@
+:root { color-scheme: dark; --background: #090b12; --surface: #121724; --surface-raised: #191f30; --border: #2b3348; --text: #f5f7ff; --muted: #9ba6bd; --accent: #8b7cff; --accent-strong: #aa9fff; --danger: #ff7e8e; }
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { overflow: hidden; background: radial-gradient(circle at top right, #1c1940 0, var(--background) 38%); color: var(--text); font: 15px/1.5 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+body::before, body::after { content: ""; position: fixed; width: 360px; height: 360px; border-radius: 50%; filter: blur(100px); opacity: .16; pointer-events: none; }
+body::before { top: -150px; right: -90px; background: #8b7cff; }
+body::after { bottom: -180px; left: -100px; background: #3d7cff; }
+button, input, select { font: inherit; }
+a { color: var(--accent-strong); }
+.brand { display: flex; align-items: center; gap: 12px; }
+.brand-mark { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 12px; background: linear-gradient(135deg, var(--accent), #5546d7); font-weight: 800; }
+.brand h1 { margin: 0; font-size: 18px; }
+.brand p { margin: 0; color: var(--muted); font-size: 12px; }
+label { display: grid; gap: 6px; color: #d9deec; }
+input, select { width: 100%; min-height: 42px; padding: 9px 11px; border: 1px solid var(--border); border-radius: 9px; background: #0d111c; color: var(--text); }
+input:disabled, select:disabled { opacity: .55; cursor: not-allowed; }
+.button, button.button { display: inline-flex; min-height: 40px; align-items: center; justify-content: center; padding: 8px 14px; border: 1px solid #695bda; border-radius: 9px; background: #5f51d1; color: white; cursor: pointer; text-decoration: none; }
+.button.secondary { border-color: var(--border); background: transparent; }
+.muted { color: var(--muted); }
+.notice { padding: 11px 13px; border-radius: 9px; background: #27213e; color: #ded8ff; }
+.warning { border-left: 3px solid var(--danger); }
+.badge { display: inline-block; margin-bottom: 13px; padding: 3px 8px; border: 1px solid #544b9c; border-radius: 999px; color: #c6beff; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }

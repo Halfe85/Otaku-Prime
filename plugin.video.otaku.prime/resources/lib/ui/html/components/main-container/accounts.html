@@ -1,0 +1,8 @@
+<article class="card"><span class="badge">Active</span><h3>Prime administrator</h3>
+  <p class="muted">Signed in as <strong>{{USERNAME}}</strong> ({{ROLE}}). Password changes are saved securely.</p>{{NOTICE}}
+  <form method="post" action="/password"><div class="field-grid">
+    <label>Current password<input name="current_password" type="password" autocomplete="current-password" required></label>
+    <label>New password<input name="new_password" type="password" autocomplete="new-password" minlength="8" required></label>
+  </div><p><button class="button" type="submit">Change password</button></p></form>
+</article>
+<article class="card"><span class="badge">Alpha preview</span><h3>Debrid accounts</h3><p class="muted">Real-Debrid, AllDebrid, Premiumize, and TorBox connections will be added later.</p></article>

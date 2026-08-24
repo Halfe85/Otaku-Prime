@@ -1,0 +1,8 @@
+.auth-screen { min-height: 100dvh; display: grid; place-items: center; padding: 20px; }
+.modal-backdrop { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; padding: 20px; background: rgba(4, 6, 12, .58); backdrop-filter: blur(10px); }
+.auth-modal { width: min(440px, 100%); padding: 28px; border: 1px solid rgba(139, 124, 255, .34); border-radius: 20px; background: linear-gradient(155deg, rgba(28, 34, 52, .98), rgba(13, 17, 28, .98)); box-shadow: 0 28px 90px rgba(0, 0, 0, .55); }
+.auth-modal .brand { margin-bottom: 24px; }
+.auth-modal h2 { margin: 0 0 7px; font-size: 23px; }
+.auth-modal > p { margin-top: 0; }
+.auth-modal form { display: grid; gap: 15px; }
+.auth-modal .button { width: 100%; margin-top: 2px; }

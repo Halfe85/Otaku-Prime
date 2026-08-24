@@ -10,13 +10,16 @@ import json
 from typing import Optional
 from urllib.parse import parse_qs
 
-import qrcode
-import qrcode.image.svg
+try:
+    import qrcode
+    import qrcode.image.svg
+except ImportError:
+    qrcode = None
 
 from resources.lib.auth import AuthService
 from resources.lib.database.watchlist_accounts import WatchlistAccountStore
 from resources.lib.endpoints.auth_service import AuthenticatorAPI, AuthenticatorAPIError
-from resources.lib.ui import render_home, render_login, render_new_password
+from resources.lib.ui import read_static_asset, render_home, render_login, render_new_password
 from resources.lib.watchlist.anilist_ui import render_anilist_auth
 
 MAX_FORM_BYTES = 16 * 1024
@@ -142,6 +145,15 @@ def create_server(host: str, port: int, user_store) -> ThreadingHTTPServer:
         def do_GET(self):
             path = self.path.split("?", 1)[0]
 
+            if path.startswith("/ui/"):
+                asset = read_static_asset(path[len("/ui/"):])
+                if asset is None:
+                    self._send_html(404, "<h1>404</h1>")
+                    return
+                content_type, payload = asset
+                self._send_bytes(200, content_type, payload)
+                return
+
             if path == "/health":
                 self._send_bytes(200, "text/plain; charset=utf-8", b"ok")
                 return
@@ -178,6 +190,9 @@ def create_server(host: str, port: int, user_store) -> ThreadingHTTPServer:
             if path == "/watchlist/anilist/qr.svg":
                 user = self._require_user()
                 if not user:
+                    return
+                if qrcode is None:
+                    self._send_html(503, "<h1>AniList QR unavailable</h1><p>Open the authorization link instead.</p>")
                     return
                 try:
                     target = authenticator_api.authorization_url("anilist")
