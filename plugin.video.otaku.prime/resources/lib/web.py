@@ -19,8 +19,13 @@ except ImportError:
 from resources.lib.auth import AuthService
 from resources.lib.database.watchlist_accounts import WatchlistAccountStore
 from resources.lib.endpoints.auth_service import AuthenticatorAPI, AuthenticatorAPIError
-from resources.lib.ui import read_static_asset, render_home, render_login, render_new_password
-from resources.lib.watchlist.anilist_ui import render_anilist_auth
+from resources.lib.ui import (
+    read_static_asset,
+    render_anilist_auth,
+    render_home,
+    render_login,
+    render_new_password,
+)
 
 MAX_FORM_BYTES = 16 * 1024
 
@@ -171,7 +176,6 @@ def create_server(host: str, port: int, user_store) -> ThreadingHTTPServer:
                 self._send_json(200, {"ok": True, "provider": info})
                 return
 
-            # Canonical direct AniList authorization redirect. No Armkai or client secret.
             if path == "/api/auth/anilist":
                 try:
                     target = authenticator_api.authorization_url("anilist")
