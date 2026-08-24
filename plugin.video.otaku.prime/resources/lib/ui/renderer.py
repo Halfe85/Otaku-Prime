@@ -82,7 +82,6 @@ def _preview_card(category_id: str) -> str:
         "scraping": ("Source discovery", "Scraping timeout", "30 seconds", "Try next source", "Enabled"),
         "playback": ("Playback defaults", "Audio language", "Japanese", "Subtitle language", "English"),
         "sort-filter": ("Result filtering", "Maximum resolution", "1080p", "Source ordering", "Quality first"),
-        "watchlist": ("Tracker connections", "AniList", "Not connected", "MyAnimeList", "Not connected"),
         "menu": ("Kodi menu visibility", "Watchlist menu", "Planned", "Search menu", "Planned"),
         "context": ("Kodi context actions", "Rescrape", "Planned", "Recommendations", "Planned"),
         "maintenance": ("Maintenance tools", "Clear cache", "Unavailable", "Export settings", "Unavailable"),
@@ -96,6 +95,10 @@ def _accounts_content(user: dict, message: str) -> str:
     return _fill(_template("components/main-container/accounts.html"), USERNAME=html.escape(user["username"]), ROLE=html.escape(user["role"]), NOTICE=notice)
 
 
+def _watchlist_content() -> str:
+    return _template("components/main-container/watchlist.html")
+
+
 def render_home(user: dict, message: str = "", active_tab: str = "general") -> str:
     if active_tab not in {item[0] for item in SETTINGS_CATEGORIES}:
         active_tab = "general"
@@ -103,7 +106,12 @@ def render_home(user: dict, message: str = "", active_tab: str = "general") -> s
     for category_id, label, description in SETTINGS_CATEGORIES:
         selected = category_id == active_tab
         tabs.append('<button class="tab{}" type="button" role="tab" aria-selected="{}" aria-controls="panel-{}" data-tab="{}">{}</button>'.format(" active" if selected else "", "true" if selected else "false", category_id, category_id, html.escape(label)))
-        panel_content = _accounts_content(user, message) if category_id == "accounts" else _preview_card(category_id)
+        if category_id == "accounts":
+            panel_content = _accounts_content(user, message)
+        elif category_id == "watchlist":
+            panel_content = _watchlist_content()
+        else:
+            panel_content = _preview_card(category_id)
         panels.append('<section class="panel" id="panel-{}" role="tabpanel"{}><header class="panel-header"><h2>{}</h2><p>{}</p></header>{}</section>'.format(category_id, "" if selected else " hidden", html.escape(label), html.escape(description), panel_content))
     content = _fill(_template("components/main-container/main-container.html"), USERNAME=html.escape(user["username"]), TABS="".join(tabs), PANELS="".join(panels))
     return _document("Settings - Otaku Prime", content, "settings-page", "main-container")
