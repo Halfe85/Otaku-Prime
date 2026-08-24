@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import Optional
 
 from resources.lib.watchlist.anilist import AniListAuthError, AniListAuthenticator
+from resources.lib.watchlist.kitsu import KitsuAuthError, KitsuAuthenticator
 from resources.lib.watchlist.mal import MALAuthError, MALAuthenticator
 
 
@@ -24,6 +25,7 @@ class AuthenticatorAPI:
 
     def __init__(self, anilist_client_id: Optional[str] = None) -> None:
         self._anilist = AniListAuthenticator(client_id=anilist_client_id)
+        self._kitsu = KitsuAuthenticator()
         self._mal = MALAuthenticator()
 
     def list_providers(self) -> dict:
@@ -35,6 +37,12 @@ class AuthenticatorAPI:
                     "configured": self._anilist.configured,
                     "flow": "armkai_oauth_pin",
                     "authorize_url": self._anilist.authorization_url(),
+                },
+                {
+                    "id": "kitsu",
+                    "name": "Kitsu",
+                    "configured": self._kitsu.configured,
+                    "flow": "password_grant",
                 },
                 {
                     "id": "mal",
@@ -101,6 +109,20 @@ class AuthenticatorAPI:
         return {
             "ok": True,
             "provider": "mal",
+            "user": {"id": connection.user_id, "username": connection.username},
+            "access_token": connection.access_token,
+            "refresh_token": connection.refresh_token,
+            "expires_at": connection.expires_at,
+        }
+
+    def connect_kitsu(self, username: str, password: str) -> dict:
+        try:
+            connection = self._kitsu.connect(username, password)
+        except KitsuAuthError as exc:
+            raise AuthenticatorAPIError("invalid_credentials", str(exc), 401) from exc
+        return {
+            "ok": True,
+            "provider": "kitsu",
             "user": {"id": connection.user_id, "username": connection.username},
             "access_token": connection.access_token,
             "refresh_token": connection.refresh_token,

@@ -91,6 +91,19 @@ def render_mal_auth(*, authorize_url: str, connected_account: Optional[dict], me
     return _document("MyAnimeList - Otaku Prime", content, "mal-page", "mal-auth")
 
 
+def render_kitsu_auth(*, connected_account: Optional[dict], message: str = "") -> str:
+    notice = '<p class="notice">{}</p>'.format(html.escape(message)) if message else ""
+    if connected_account:
+        account = _fill(
+            _template("components/kitsu-auth/connected.html"),
+            EXTERNAL_USERNAME=html.escape(connected_account["external_username"]),
+        )
+    else:
+        account = _template("components/kitsu-auth/connect.html")
+    content = _fill(_template("components/kitsu-auth/kitsu-auth.html"), NOTICE=notice, ACCOUNT_CONTENT=account)
+    return _document("Kitsu - Otaku Prime", content, "kitsu-page", "kitsu-auth")
+
+
 def _preview_card(category_id: str) -> str:
     previews = {
         "general": ("Interface defaults", "Title language", "English", "Preferred artwork", "Kodi default"),
@@ -113,6 +126,7 @@ def _accounts_content(user: dict, message: str) -> str:
 
 def _watchlist_content(accounts: dict) -> str:
     anilist = accounts.get("anilist")
+    kitsu = accounts.get("kitsu")
     mal = accounts.get("mal")
     return _fill(
         _template("components/main-container/watchlist.html"),
@@ -128,6 +142,12 @@ def _watchlist_content(accounts: dict) -> str:
             if mal else "Connect MAL through ArmKai's PKCE authorization flow."
         ),
         MAL_ACTION="Manage" if mal else "Connect",
+        KITSU_BADGE="Connected" if kitsu else "Not connected",
+        KITSU_DESCRIPTION=(
+            "Connected as {}.".format(html.escape(kitsu["external_username"]))
+            if kitsu else "Connect directly with your Kitsu username or email."
+        ),
+        KITSU_ACTION="Manage" if kitsu else "Connect",
     )
 
 

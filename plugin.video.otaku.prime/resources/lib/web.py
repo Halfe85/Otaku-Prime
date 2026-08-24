@@ -16,6 +16,7 @@ from resources.lib.ui import (
     read_static_asset,
     render_anilist_auth,
     render_home,
+    render_kitsu_auth,
     render_login,
     render_mal_auth,
     render_new_password,
@@ -158,9 +159,20 @@ def create_server(host: str, port: int, user_store) -> ThreadingHTTPServer:
                 ),
             )
 
+        def _kitsu_page(self, user: dict, message: str = "") -> None:
+            account = watchlist_accounts.get(user["id"], "kitsu")
+            self._send_html(
+                200,
+                render_kitsu_auth(
+                    connected_account=account,
+                    message=message,
+                ),
+            )
+
         def _home_page(self, user: dict, message: str = "", active_tab: str = "general") -> str:
             accounts = {
                 "anilist": watchlist_accounts.get(user["id"], "anilist"),
+                "kitsu": watchlist_accounts.get(user["id"], "kitsu"),
                 "mal": watchlist_accounts.get(user["id"], "mal"),
             }
             return render_home(
@@ -208,6 +220,15 @@ def create_server(host: str, port: int, user_store) -> ThreadingHTTPServer:
                 self._send_json(200, {"ok": True, "provider": info})
                 return
 
+            if path == "/api/auth/kitsu/info":
+                try:
+                    info = authenticator_api.provider_info("kitsu")
+                except AuthenticatorAPIError as exc:
+                    self._send_auth_api_error(exc)
+                    return
+                self._send_json(200, {"ok": True, "provider": info})
+                return
+
             if path == "/api/auth/anilist":
                 try:
                     target = authenticator_api.authorization_url("anilist")
@@ -236,6 +257,12 @@ def create_server(host: str, port: int, user_store) -> ThreadingHTTPServer:
                 user = self._require_user()
                 if user:
                     self._mal_page(user)
+                return
+
+            if path == "/watchlist/kitsu":
+                user = self._require_user()
+                if user:
+                    self._kitsu_page(user)
                 return
 
             if path == "/logout":
@@ -343,6 +370,40 @@ def create_server(host: str, port: int, user_store) -> ThreadingHTTPServer:
                     return
                 watchlist_accounts.delete(user["id"], "mal")
                 self._redirect("/watchlist/mal")
+                return
+
+            if path == "/watchlist/kitsu/connect":
+                user = self._require_user()
+                if not user:
+                    return
+                form = self._read_form()
+                try:
+                    result = authenticator_api.connect_kitsu(
+                        form.get("username", ""),
+                        form.get("password", ""),
+                    )
+                except AuthenticatorAPIError as exc:
+                    self._kitsu_page(user, exc.message)
+                    return
+                viewer = result["user"]
+                watchlist_accounts.save(
+                    user_id=user["id"],
+                    provider="kitsu",
+                    external_user_id=str(viewer["id"]),
+                    external_username=viewer["username"],
+                    access_token=result["access_token"],
+                    refresh_token=result["refresh_token"],
+                    token_expires_at=result["expires_at"],
+                )
+                self._redirect("/watchlist/kitsu")
+                return
+
+            if path == "/watchlist/kitsu/disconnect":
+                user = self._require_user()
+                if not user:
+                    return
+                watchlist_accounts.delete(user["id"], "kitsu")
+                self._redirect("/watchlist/kitsu")
                 return
 
             if path == "/login":
