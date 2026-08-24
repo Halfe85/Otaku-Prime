@@ -17,6 +17,7 @@ from resources.lib.ui import (
     render_anilist_auth,
     render_home,
     render_login,
+    render_mal_auth,
     render_new_password,
 )
 
@@ -140,6 +141,23 @@ def create_server(host: str, port: int, user_store) -> ThreadingHTTPServer:
                 ),
             )
 
+        def _mal_page(self, user: dict, message: str = "") -> None:
+            account = watchlist_accounts.get(user["id"], "mal")
+            try:
+                authorize_url = authenticator_api.authorization_url("mal")
+            except AuthenticatorAPIError as exc:
+                authorize_url = "#"
+                if not message:
+                    message = exc.message
+            self._send_html(
+                200,
+                render_mal_auth(
+                    authorize_url=authorize_url,
+                    connected_account=account,
+                    message=message,
+                ),
+            )
+
         def do_GET(self):
             path = self.path.split("?", 1)[0]
 
@@ -169,9 +187,27 @@ def create_server(host: str, port: int, user_store) -> ThreadingHTTPServer:
                 self._send_json(200, {"ok": True, "provider": info})
                 return
 
+            if path == "/api/auth/mal/info":
+                try:
+                    info = authenticator_api.provider_info("mal")
+                except AuthenticatorAPIError as exc:
+                    self._send_auth_api_error(exc)
+                    return
+                self._send_json(200, {"ok": True, "provider": info})
+                return
+
             if path == "/api/auth/anilist":
                 try:
                     target = authenticator_api.authorization_url("anilist")
+                except AuthenticatorAPIError as exc:
+                    self._send_auth_api_error(exc)
+                    return
+                self._external_redirect(target)
+                return
+
+            if path == "/api/auth/mal":
+                try:
+                    target = authenticator_api.authorization_url("mal")
                 except AuthenticatorAPIError as exc:
                     self._send_auth_api_error(exc)
                     return
@@ -182,6 +218,12 @@ def create_server(host: str, port: int, user_store) -> ThreadingHTTPServer:
                 user = self._require_user()
                 if user:
                     self._anilist_page(user)
+                return
+
+            if path == "/watchlist/mal":
+                user = self._require_user()
+                if user:
+                    self._mal_page(user)
                 return
 
             if path == "/logout":
@@ -258,6 +300,37 @@ def create_server(host: str, port: int, user_store) -> ThreadingHTTPServer:
                     return
                 watchlist_accounts.delete(user["id"], "anilist")
                 self._redirect("/watchlist/anilist")
+                return
+
+            if path == "/watchlist/mal/connect":
+                user = self._require_user()
+                if not user:
+                    return
+                form = self._read_form()
+                try:
+                    result = authenticator_api.connect_mal(form.get("callback_url", ""))
+                except AuthenticatorAPIError as exc:
+                    self._mal_page(user, exc.message)
+                    return
+                viewer = result["user"]
+                watchlist_accounts.save(
+                    user_id=user["id"],
+                    provider="mal",
+                    external_user_id=str(viewer["id"]),
+                    external_username=viewer["username"],
+                    access_token=result["access_token"],
+                    refresh_token=result["refresh_token"],
+                    token_expires_at=result["expires_at"],
+                )
+                self._redirect("/watchlist/mal")
+                return
+
+            if path == "/watchlist/mal/disconnect":
+                user = self._require_user()
+                if not user:
+                    return
+                watchlist_accounts.delete(user["id"], "mal")
+                self._redirect("/watchlist/mal")
                 return
 
             if path == "/login":

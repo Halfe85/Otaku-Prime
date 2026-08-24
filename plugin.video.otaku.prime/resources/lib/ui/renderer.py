@@ -75,6 +75,22 @@ def render_anilist_auth(*, authorize_url: str, connected_account: Optional[dict]
     return _document("AniList - Otaku Prime", content, "anilist-page", "anilist-auth")
 
 
+def render_mal_auth(*, authorize_url: str, connected_account: Optional[dict], message: str = "") -> str:
+    notice = '<p class="notice">{}</p>'.format(html.escape(message)) if message else ""
+    if connected_account:
+        account = _fill(
+            _template("components/mal-auth/connected.html"),
+            EXTERNAL_USERNAME=html.escape(connected_account["external_username"]),
+        )
+    else:
+        account = _fill(
+            _template("components/mal-auth/connect.html"),
+            AUTHORIZE_URL=html.escape(authorize_url, quote=True),
+        )
+    content = _fill(_template("components/mal-auth/mal-auth.html"), NOTICE=notice, ACCOUNT_CONTENT=account)
+    return _document("MyAnimeList - Otaku Prime", content, "mal-page", "mal-auth")
+
+
 def _preview_card(category_id: str) -> str:
     previews = {
         "general": ("Interface defaults", "Title language", "English", "Preferred artwork", "Kodi default"),

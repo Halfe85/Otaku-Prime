@@ -1,0 +1,11 @@
+<div class="status">Not connected</div>
+<section class="connect-step"><span class="step-number">1</span><div>
+  <h2>Authorize with MyAnimeList</h2><p>Sign in and approve Otaku Prime in the secure popup.</p>
+  <p><a class="button authorize-button" href="{{AUTHORIZE_URL}}" target="mal-auth" rel="noopener noreferrer" data-auth-popup>Connect MyAnimeList</a></p>
+</div></section>
+<section class="connect-step"><span class="step-number">2</span><div>
+  <h2>Paste the final redirect URL</h2><p class="popup-status muted" aria-live="polite">After approval, copy the complete URL from the MyAnimeList address bar.</p>
+  <form method="post" action="/watchlist/mal/connect"><label>MyAnimeList redirect URL
+    <textarea name="callback_url" rows="4" autocomplete="off" spellcheck="false" placeholder="https://myanimelist.net/?code=...&amp;state=..." required></textarea>
+  </label><button type="submit" class="button">Finish connection</button></form>
+</div></section>

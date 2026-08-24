@@ -30,6 +30,8 @@ class WatchlistAccountStore:
                     external_user_id TEXT NOT NULL,
                     external_username TEXT NOT NULL,
                     access_token TEXT NOT NULL,
+                    refresh_token TEXT,
+                    token_expires_at INTEGER,
                     connected_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY (user_id, provider),
@@ -37,6 +39,11 @@ class WatchlistAccountStore:
                 )
                 """
             )
+            columns = {row[1] for row in db.execute("PRAGMA table_info(watchlist_accounts)")}
+            if "refresh_token" not in columns:
+                db.execute("ALTER TABLE watchlist_accounts ADD COLUMN refresh_token TEXT")
+            if "token_expires_at" not in columns:
+                db.execute("ALTER TABLE watchlist_accounts ADD COLUMN token_expires_at INTEGER")
 
     def get(self, user_id: int, provider: str) -> Optional[dict]:
         with self._connect() as db:
@@ -59,23 +66,29 @@ class WatchlistAccountStore:
         external_user_id: str,
         external_username: str,
         access_token: str,
+        refresh_token: Optional[str] = None,
+        token_expires_at: Optional[int] = None,
     ) -> None:
         with self._connect() as db:
             db.execute(
                 """
                 INSERT INTO watchlist_accounts(
                     user_id, provider, external_user_id, external_username,
-                    access_token, connected_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    access_token, refresh_token, token_expires_at,
+                    connected_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 ON CONFLICT(user_id, provider) DO UPDATE SET
                     external_user_id = excluded.external_user_id,
                     external_username = excluded.external_username,
                     access_token = excluded.access_token,
+                    refresh_token = excluded.refresh_token,
+                    token_expires_at = excluded.token_expires_at,
                     updated_at = CURRENT_TIMESTAMP
                 """,
                 (
                     int(user_id), provider, str(external_user_id),
-                    external_username, access_token,
+                    external_username, access_token, refresh_token,
+                    token_expires_at,
                 ),
             )
 
