@@ -1,12 +1,13 @@
-Otaku Prime 0.1.2 Alpha2
+Otaku Prime 0.1.2 Alpha5
 ========================
 
-AniList reliability:
-- Added an Otaku Prime User-Agent to watchlist, franchise-relation, and release-schedule requests.
-- Fixed HTTP 403 responses caused by AniList rejecting Python's default urllib request identity.
-- Added clearer watchlist errors for expired authorization and blocked requests.
-- Deduplicate entries returned through both AniList default and custom list groups.
-- Made AniList staging writes idempotent by media ID.
+AniList request handling:
+- Replaced one-request-per-title franchise resolution with batched AniList ID queries.
+- Fetch up to 50 media records in each AniList relation request.
+- Resolve prequel frontiers in batches without fetching unneeded sequel records.
+- Added a shared AniList request limiter across import, relation, and release services.
+- Honor AniList HTTP 429 retry timing before retrying a request.
 
 Testing:
-- Added coverage that verifies AniList requests include the add-on identity and bearer token.
+- Added coverage for multi-request AniList relation batching.
+- Verified the batched query against the live AniList GraphQL API.

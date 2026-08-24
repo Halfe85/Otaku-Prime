@@ -1,4 +1,5 @@
 import os
+import json
 import sqlite3
 import sys
 import tempfile
@@ -10,7 +11,7 @@ from resources.lib.database.watchlist_media import WatchlistMediaStore
 from resources.lib.database.watchlist_preferences import WatchlistPreferenceStore
 from resources.lib.users import UserStore
 from resources.lib.watchlist.anilist_sync import AniListWatchlistClient, AniListWatchlistImportService
-from resources.lib.services.anilist_relations import AniListFranchiseResolverService
+from resources.lib.services.anilist_relations import AniListFranchiseResolverService, AniListRelationClient
 
 class Client:
     def fetch(self,user_id,token):
@@ -111,5 +112,22 @@ class AniListSyncTests(unittest.TestCase):
           self.accounts,self.preferences,self.media,client=DuplicateClient())
         self.assertEqual(1,importer.sync()["imported"])
         self.assertEqual(1,len(self.media.list_anilist_staging()))
+
+    def test_relation_client_fetches_media_in_batches(self):
+        calls=[]
+        class Response:
+            def __init__(self,payload): self.payload=payload
+            def __enter__(self): return self
+            def __exit__(self,*_): return False
+            def read(self): return json.dumps(self.payload).encode("utf-8")
+        def opener(request,timeout):
+            ids=json.loads(request.data.decode("utf-8"))["variables"]["ids"]
+            calls.append(ids)
+            return Response({"data":{"Page":{"media":[{"id":value,
+              "title":{"english":"Show {}".format(value)},"startDate":{},
+              "relations":{"edges":[]}} for value in ids]}}})
+        result=AniListRelationClient(opener=opener,batch_size=2).fetch_many([1,2,3,4,5])
+        self.assertEqual([[1,2],[3,4],[5]],calls)
+        self.assertEqual([1,2,3,4,5],[item["id"] for item in result])
 
 if __name__=="__main__": unittest.main()

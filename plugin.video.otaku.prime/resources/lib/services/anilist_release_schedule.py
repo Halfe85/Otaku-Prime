@@ -7,6 +7,8 @@ import datetime
 import json
 import time
 from urllib.request import Request, urlopen
+from urllib.error import HTTPError
+from resources.lib.services.anilist_rate_limit import ANILIST_RATE_LIMITER
 
 
 class AniListReleaseScheduleService:
@@ -16,6 +18,7 @@ class AniListReleaseScheduleService:
         self.media_store = media_store
         self.timeout = int(timeout)
         self.refresh_seconds = int(refresh_seconds)
+        self._rate_limited = opener is None
         self._open = opener or urlopen
 
     def refresh_pending(self, now=None):
@@ -56,8 +59,15 @@ class AniListReleaseScheduleService:
                      "User-Agent": "Otaku-Prime/0.1.2"},
             method="POST",
         )
-        with self._open(request, timeout=self.timeout) as response:
-            payload = json.loads(response.read().decode("utf-8"))
+        for attempt in range(2):
+            try:
+                if self._rate_limited: ANILIST_RATE_LIMITER.wait()
+                with self._open(request, timeout=self.timeout) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+                break
+            except HTTPError as exc:
+                if exc.code != 429 or attempt: raise
+                time.sleep(ANILIST_RATE_LIMITER.retry_delay(exc))
         if payload.get("errors"):
             raise RuntimeError("AniList schedule request failed")
         return payload["data"]["Media"]

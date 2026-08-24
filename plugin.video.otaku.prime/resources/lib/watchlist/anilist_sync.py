@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from urllib.request import Request,urlopen
 from urllib.error import HTTPError
+from resources.lib.services.anilist_rate_limit import ANILIST_RATE_LIMITER
 
 STATUSES=("CURRENT","COMPLETED","PAUSED","DROPPED","PLANNING")
 ANILIST_HEADERS={"Content-Type":"application/json","Accept":"application/json",
@@ -11,7 +12,8 @@ ANILIST_HEADERS={"Content-Type":"application/json","Accept":"application/json",
 
 class AniListWatchlistClient:
     API_URL="https://graphql.anilist.co"
-    def __init__(self,timeout=30,opener=None): self.timeout=timeout; self._open=opener or urlopen
+    def __init__(self,timeout=30,opener=None):
+        self.timeout=timeout; self._rate_limited=opener is None; self._open=opener or urlopen
     def fetch(self,user_id,access_token):
         query="""query($userId:Int!){MediaListCollection(userId:$userId,type:ANIME){
           lists{status entries{status progress media{id isAdult title{english romaji}}}}}}"""
@@ -19,6 +21,7 @@ class AniListWatchlistClient:
         headers=dict(ANILIST_HEADERS); headers["Authorization"]="Bearer "+access_token
         request=Request(self.API_URL,data=body,method="POST",headers=headers)
         try:
+            if self._rate_limited: ANILIST_RATE_LIMITER.wait()
             with self._open(request,timeout=self.timeout) as response:
                 payload=json.loads(response.read().decode("utf-8"))
         except HTTPError as exc:
