@@ -46,8 +46,7 @@ class StreamLibraryService:
             series_name, season, number
         )
         return os.path.join(
-            self.library_root,
-            "tv-series",
+            self.tv_series_root,
             series_name,
             "season {:02d}".format(season),
             filename,

@@ -7,4 +7,7 @@
 .watchlist-title strong,.watchlist-title span { display:block; }.watchlist-title span { color:var(--muted);font-size:12px; }
 .provider-pills { display:flex;flex-wrap:wrap;gap:5px; }.provider-pills span { padding:2px 7px;border-radius:999px;background:#262e43;color:#cbd3e7;font-size:10px;text-transform:uppercase; }
 .watch-toggle { width:auto;accent-color:var(--accent); }
+.watchlist-pagination { display:flex;align-items:center;justify-content:center;gap:14px;margin-top:14px; }
+.watchlist-pagination span { min-width:110px;text-align:center;color:var(--muted);font-size:12px; }
+.watchlist-pagination button:disabled { opacity:.4;cursor:not-allowed; }
 @media (max-width:620px) { .watchlist-tools { grid-template-columns:1fr; } }

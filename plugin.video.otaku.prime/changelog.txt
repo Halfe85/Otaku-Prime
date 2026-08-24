@@ -1,13 +1,31 @@
-Otaku Prime 0.1.2 Alpha5
+Otaku Prime 0.1.2 Alpha6
 ========================
 
-AniList request handling:
-- Replaced one-request-per-title franchise resolution with batched AniList ID queries.
-- Fetch up to 50 media records in each AniList relation request.
-- Resolve prequel frontiers in batches without fetching unneeded sequel records.
-- Added a shared AniList request limiter across import, relation, and release services.
-- Honor AniList HTTP 429 retry timing before retrying a request.
+AniList franchise resolution:
+- Ignore manga and one-shot PREQUEL relations when resolving anime franchises.
+- Exclude movie and special relations from TV-season chain numbering.
+- Limit numbered season-chain traversal to TV and TV Short records; route ONA and OVA records through the season-zero mapping path.
+- Allocate the next available local season number for branching franchises.
+- Reconcile season-number collisions left by earlier partial imports instead of failing.
+
+Watchlist management:
+- Added view-sized client-side pagination to the Watchlist Management table.
+- Change watchlist pages instantly without fetching the list again.
+
+Kodi virtual library:
+- Moved generated stream files to special://profile/library/ in Kodi userdata.
+- Keep Kodi's existing video database and leave advancedsettings.xml unchanged.
+- Scan the movie and TV source roots separately using Kodi JSON-RPC.
+- Register the generated Movies and TV Shows folders in sources.xml while preserving existing Kodi sources and creating a one-time backup before changing the file.
+- Report when Kodi must be restarted to load newly registered sources.
+
+AniList media categories:
+- Retain AniList format and release date throughout watchlist staging and promotion.
+- Store media format, relation/category, and optional verified secondary-provider identity on seasons.
+- Distinguish TV, ONA, OVA, movie, special, and spin-off entries. AniList exposes OAD/ODA releases as OVA rather than a separate format.
+- Target movie and special-format entries at Kodi season 00, but keep them unpublished until a verified TMDB/TVDB episode mapping prevents S00E01 collisions.
 
 Testing:
-- Added coverage for multi-request AniList relation batching.
-- Verified the batched query against the live AniList GraphQL API.
+- Added coverage for non-anime PREQUEL relations.
+- Added coverage for two franchise branches sharing the same relation depth.
+- Added coverage for AniList category/date retention, safe season-zero staging, and idempotent Kodi source registration.

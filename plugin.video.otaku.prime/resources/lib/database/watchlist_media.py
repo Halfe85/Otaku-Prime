@@ -44,6 +44,8 @@ class WatchlistMediaStore:
               season_number INTEGER NOT NULL, english_name TEXT, romaji_name TEXT,
               anilist_id TEXT UNIQUE, mal_id TEXT UNIQUE, kitsu_id TEXT UNIQUE,
               simkl_id TEXT UNIQUE, release_date TEXT,
+              media_format TEXT,relation_type TEXT,media_category TEXT,
+              secondary_provider TEXT,secondary_id TEXT,
               kodi_show_name TEXT,kodi_show_year INTEGER,kodi_season_number INTEGER,
               kodi_resolved INTEGER NOT NULL DEFAULT 0,
               watched INTEGER NOT NULL DEFAULT 0 CHECK(watched IN(0,1)),
@@ -54,6 +56,7 @@ class WatchlistMediaStore:
             CREATE TABLE IF NOT EXISTS episodes(
               local_id TEXT PRIMARY KEY, related_series_id TEXT NOT NULL,
               related_season_id TEXT NOT NULL, episode_number INTEGER NOT NULL,
+              kodi_episode_number INTEGER,
               watched INTEGER NOT NULL DEFAULT 0 CHECK(watched IN(0,1)),
               created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
               updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -82,6 +85,7 @@ class WatchlistMediaStore:
               anilist_id TEXT PRIMARY KEY, english_name TEXT, romaji_name TEXT,
               list_status TEXT NOT NULL, progress INTEGER NOT NULL DEFAULT 0,
               is_adult INTEGER NOT NULL DEFAULT 0 CHECK(is_adult IN(0,1)),
+              media_format TEXT,release_date TEXT,
               synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
             CREATE TABLE IF NOT EXISTS watch_status_outbox(
               id INTEGER PRIMARY KEY AUTOINCREMENT, media_type TEXT NOT NULL,
@@ -126,6 +130,14 @@ class WatchlistMediaStore:
             self._ensure_column(db,"seasons","kodi_show_year","INTEGER")
             self._ensure_column(db,"seasons","kodi_season_number","INTEGER")
             self._ensure_column(db,"seasons","kodi_resolved","INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(db,"seasons","media_format","TEXT")
+            self._ensure_column(db,"seasons","relation_type","TEXT")
+            self._ensure_column(db,"seasons","media_category","TEXT")
+            self._ensure_column(db,"seasons","secondary_provider","TEXT")
+            self._ensure_column(db,"seasons","secondary_id","TEXT")
+            self._ensure_column(db,"anilist_import_staging","media_format","TEXT")
+            self._ensure_column(db,"anilist_import_staging","release_date","TEXT")
+            self._ensure_column(db,"episodes","kodi_episode_number","INTEGER")
             db.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_tv_series_anilist_root ON tv_series(anilist_root_id)")
 
     @staticmethod
@@ -194,6 +206,9 @@ class WatchlistMediaStore:
                       "romaji_name": media.get("romaji_name"),
                       "release_date": media.get("release_date")}
             fields.update({key:media.get(key) for key in (
+              "media_format","relation_type","media_category",
+              "secondary_provider","secondary_id")})
+            fields.update({key:media.get(key) for key in (
               "kodi_show_name","kodi_show_year","kodi_season_number","kodi_resolved")})
             fields.update(ids)
             self._update(db, "seasons", value, fields)
@@ -234,16 +249,19 @@ class WatchlistMediaStore:
             db.execute("DELETE FROM anilist_import_staging")
             for entry in entries:
                 db.execute("""INSERT INTO anilist_import_staging(
-                  anilist_id,english_name,romaji_name,list_status,progress,is_adult)
-                  VALUES(?,?,?,?,?,?)
+                  anilist_id,english_name,romaji_name,list_status,progress,is_adult,
+                  media_format,release_date)
+                  VALUES(?,?,?,?,?,?,?,?)
                   ON CONFLICT(anilist_id) DO UPDATE SET
                   english_name=excluded.english_name,romaji_name=excluded.romaji_name,
                   list_status=excluded.list_status,progress=excluded.progress,
-                  is_adult=excluded.is_adult,synced_at=CURRENT_TIMESTAMP""", (
+                  is_adult=excluded.is_adult,media_format=excluded.media_format,
+                  release_date=excluded.release_date,synced_at=CURRENT_TIMESTAMP""", (
                     str(entry["anilist_id"]),entry.get("english_name"),
                     entry.get("romaji_name"),entry["list_status"],
                     max(0,int(entry.get("progress") or 0)),
-                    int(bool(entry.get("is_adult")))))
+                    int(bool(entry.get("is_adult"))),entry.get("media_format"),
+                    entry.get("release_date")))
 
     def list_anilist_staging(self):
         with self._connection() as db:
@@ -258,22 +276,35 @@ class WatchlistMediaStore:
             romaji_name=resolution.get("franchise_romaji_name") or entry.get("romaji_name"),
             anilist_root_id=root_id,franchise_resolved=True)
         anilist_id=str(entry["anilist_id"])
+        category=resolution.get("media_category") or "tv"
+        is_special=category in ("movie","ona","ova","oad","special","spin_off")
+        # Internal season numbers remain unique. Kodi placement is independently
+        # represented by kodi_season_number, so specials can all target season 0.
         season_number=max(1,int(resolution.get("season_number") or 1))
         with self._connection() as db:
             existing=db.execute(
                 "SELECT local_id,related_series_id FROM seasons WHERE anilist_id=?",
                 (anilist_id,)).fetchone()
+            occupied={int(row[0]) for row in db.execute(
+                "SELECT season_number FROM seasons WHERE related_series_id=? AND local_id<>?",
+                (franchise,existing["local_id"] if existing else ""))}
+            while season_number in occupied:
+                season_number+=1
             if existing:
                 # Old builds created title-based placeholders. Re-parent them without
                 # changing their opaque public ID, then remove an empty placeholder.
                 old_series=existing["related_series_id"]
                 db.execute("""UPDATE seasons SET related_series_id=?,season_number=?,
-                  english_name=?,romaji_name=?,kodi_show_name=?,kodi_show_year=?,
-                  kodi_season_number=1,kodi_resolved=1,updated_at=CURRENT_TIMESTAMP
+                  english_name=?,romaji_name=?,release_date=?,media_format=?,relation_type=?,
+                  media_category=?,kodi_show_name=?,kodi_show_year=?,
+                  kodi_season_number=?,kodi_resolved=1,updated_at=CURRENT_TIMESTAMP
                   WHERE local_id=?""", (
                     franchise,season_number,entry.get("english_name"),entry.get("romaji_name"),
+                    entry.get("release_date"),resolution.get("media_format"),
+                    resolution.get("relation_type"),category,
                     entry.get("english_name") or entry.get("romaji_name"),
-                    resolution.get("start_year"),existing["local_id"]))
+                    resolution.get("start_year"),0 if is_special else season_number,
+                    existing["local_id"]))
                 db.execute("UPDATE episodes SET related_series_id=? WHERE related_season_id=?",
                            (franchise,existing["local_id"]))
                 if old_series != franchise:
@@ -284,9 +315,15 @@ class WatchlistMediaStore:
                 season=self.upsert_season(
                     franchise,season_number,english_name=entry.get("english_name"),
                     romaji_name=entry.get("romaji_name"),anilist_id=anilist_id,
+                    release_date=entry.get("release_date"),
+                    media_format=resolution.get("media_format"),
+                    relation_type=resolution.get("relation_type"),media_category=category,
                     kodi_show_name=entry.get("english_name") or entry.get("romaji_name"),
-                    kodi_show_year=resolution.get("start_year"),kodi_season_number=1,
-                    kodi_resolved=True)
+                    kodi_show_year=resolution.get("start_year"),
+                    kodi_season_number=0 if is_special else season_number,
+                    # Specials need a verified TMDB/TVDB episode mapping before
+                    # publishing, otherwise several AniList entries all become S00E01.
+                    kodi_resolved=not is_special)
         progress=max(0,int(entry.get("progress") or 0))
         for number in range(1,progress+1):
             self.upsert_episode(season,number)
@@ -318,7 +355,7 @@ class WatchlistMediaStore:
         """Return episodes enriched with their parent season number."""
         with self._connection() as db:
             return [dict(row) for row in db.execute(
-                """SELECT episode.*, season.season_number
+                """SELECT episode.*, season.season_number,season.kodi_season_number
                    FROM episodes AS episode
                    JOIN seasons AS season
                      ON season.local_id = episode.related_season_id
@@ -332,6 +369,8 @@ class WatchlistMediaStore:
             return [dict(row) for row in db.execute("""SELECT
               season.local_id,season.english_name,season.romaji_name,
               season.season_number,season.watched,season.release_date,
+              season.media_format,season.relation_type,season.media_category,
+              season.kodi_season_number,
               series.local_id AS series_local_id,
               COALESCE(series.english_name,series.romaji_name) AS franchise_name,
               entries.providers,entries.provider_statuses,

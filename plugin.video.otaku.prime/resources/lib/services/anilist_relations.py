@@ -8,6 +8,8 @@ import time
 from resources.lib.services.anilist_rate_limit import ANILIST_RATE_LIMITER
 
 MAIN_RELATIONS=("PREQUEL","SEQUEL")
+SERIES_FORMATS=("TV","TV_SHORT")
+SPECIAL_FORMATS=("MOVIE","ONA","OVA","SPECIAL","MUSIC")
 
 class AniListRelationClient:
     API_URL="https://graphql.anilist.co"
@@ -106,12 +108,18 @@ class AniListFranchiseResolverService:
         nodes=[]
         for edge in (media.get("relations") or {}).get("edges") or []:
             node=edge.get("node") or {}
-            if edge.get("relationType")==relation and node.get("id"):
+            if (edge.get("relationType")==relation and node.get("id")
+                    and node.get("format") in SERIES_FORMATS):
                 nodes.append(node)
         return sorted(nodes,key=self._date_key)
 
     def _resolve(self,media_id):
         current=self._media(media_id); seen=set()
+        media_format=current.get("format")
+        relation_type=None
+        for edge in (current.get("relations") or {}).get("edges") or []:
+            if edge.get("relationType") in ("SPIN_OFF","SIDE_STORY","PARENT"):
+                relation_type=edge.get("relationType"); break
         # Follow the oldest prequel at ambiguous forks. Side stories are excluded.
         while str(current["id"]) not in seen and len(seen)<self.max_nodes:
             seen.add(str(current["id"])); previous=self._main_neighbors(current,"PREQUEL")
@@ -123,6 +131,15 @@ class AniListFranchiseResolverService:
         root=current
         season_number=len(seen)
         titles=root.get("title") or {}; start=(self._media(media_id).get("startDate") or {})
+        category=self._category(media_format,relation_type)
         return {"root_id":root["id"],"season_number":season_number,
           "franchise_english_name":titles.get("english"),
-          "franchise_romaji_name":titles.get("romaji"),"start_year":start.get("year")}
+          "franchise_romaji_name":titles.get("romaji"),"start_year":start.get("year"),
+          "media_format":media_format,"relation_type":relation_type,
+          "media_category":category}
+
+    @staticmethod
+    def _category(media_format,relation_type):
+        if relation_type == "SPIN_OFF": return "spin_off"
+        return {"MOVIE":"movie","ONA":"ona","OVA":"ova",
+                "SPECIAL":"special","MUSIC":"special"}.get(media_format,"tv")

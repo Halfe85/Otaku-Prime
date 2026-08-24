@@ -16,7 +16,8 @@ class AniListWatchlistClient:
         self.timeout=timeout; self._rate_limited=opener is None; self._open=opener or urlopen
     def fetch(self,user_id,access_token):
         query="""query($userId:Int!){MediaListCollection(userId:$userId,type:ANIME){
-          lists{status entries{status progress media{id isAdult title{english romaji}}}}}}"""
+          lists{status entries{status progress media{id isAdult format
+            startDate{year month day} title{english romaji}}}}}}"""
         body=json.dumps({"query":query,"variables":{"userId":int(user_id)}}).encode("utf-8")
         headers=dict(ANILIST_HEADERS); headers["Authorization"]="Bearer "+access_token
         request=Request(self.API_URL,data=body,method="POST",headers=headers)
@@ -58,6 +59,15 @@ class AniListWatchlistImportService:
             staged_by_id[str(media["id"])]={"anilist_id":media["id"],"english_name":titles.get("english"),
               "romaji_name":titles.get("romaji"),"list_status":entry.get("status"),
               "progress":max(0,int(entry.get("progress") or 0)),
-              "is_adult":bool(media.get("isAdult"))}
+              "is_adult":bool(media.get("isAdult")),
+              "media_format":media.get("format"),
+              "release_date":self._date(media.get("startDate"))}
         self.media_store.replace_anilist_staging(staged_by_id.values())
         return {"connected":True,"imported":len(staged_by_id),"filtered":filtered}
+
+    @staticmethod
+    def _date(value):
+        value=value or {}
+        if not value.get("year"): return None
+        return "{:04d}-{:02d}-{:02d}".format(
+          int(value["year"]),int(value.get("month") or 1),int(value.get("day") or 1))

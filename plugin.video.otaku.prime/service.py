@@ -16,6 +16,7 @@ from resources.lib.database.watchlist_accounts import WatchlistAccountStore
 from resources.lib.database.watchlist_preferences import WatchlistPreferenceStore
 from resources.lib.database.app_logs import AppLogStore
 from resources.lib.services.kodi_db_middleware import KodiDbMiddleware
+from resources.lib.services.kodi_source_setup import KodiSourceSetupService
 from resources.lib.services.anilist_release_schedule import AniListReleaseScheduleService
 from resources.lib.services.anilist_relations import AniListFranchiseResolverService
 from resources.lib.services.mediator_service import MediatorService
@@ -44,8 +45,15 @@ def _profile_path() -> str:
     return profile
 
 
+def _kodi_profile_path() -> str:
+    profile = xbmcvfs.translatePath("special://profile/")
+    os.makedirs(profile, exist_ok=True)
+    return profile
+
+
 def main() -> None:
     profile = _profile_path()
+    kodi_profile = _kodi_profile_path()
     users_db = os.path.join(profile, USERS_DB_NAME)
 
     user_store = UserStore(users_db)
@@ -65,10 +73,20 @@ def main() -> None:
         app_logs.write(level, source, message)
     mediator = MediatorService(
         media_store,
-        StreamLibraryService(os.path.join(profile, LIBRARY_DIR_NAME)),
+        StreamLibraryService(os.path.join(kodi_profile, LIBRARY_DIR_NAME)),
         KodiDbMiddleware(media_store),
     )
     mediator.stream_library.initialize()
+    source_setup = KodiSourceSetupService(kodi_profile, mediator.stream_library)
+    try:
+        source_result = source_setup.ensure_sources()
+    except Exception as exc:
+        log("ERROR", "kodi-library", "Kodi source registration failed: {}".format(exc))
+    else:
+        if source_result["added"]:
+            log("INFO", "kodi-library",
+                "Registered {}; restart Kodi, then assign Movies/TV Shows content once"
+                .format(", ".join(source_result["added"])))
     release_watchdog = ReleaseWatchdogService(
         media_store,
         mediator.stream_library,
@@ -109,6 +127,9 @@ def main() -> None:
     server_thread.start()
     background.start()
     log("INFO","service","Web service started on {}:{}".format(WEB_HOST,WEB_PORT))
+    log("INFO","kodi-library","Using Kodi's existing video database; advancedsettings.xml is unchanged")
+    log("INFO","kodi-library","Movie scan source: {}".format(mediator.stream_library.movies_root))
+    log("INFO","kodi-library","TV scan source: {}".format(mediator.stream_library.tv_series_root))
 
     xbmc.log(
         f"OTAKU PRIME: web service started on {WEB_HOST}:{WEB_PORT}",
@@ -116,14 +137,6 @@ def main() -> None:
     )
     xbmc.log(
         f"OTAKU PRIME: user database: {users_db}",
-        xbmc.LOGINFO,
-    )
-    xbmc.log(
-        "OTAKU PRIME: configure Kodi movie source '{}' as Movies and TV source '{}' "
-        "as TV shows".format(
-            mediator.stream_library.movies_root,
-            mediator.stream_library.tv_series_root,
-        ),
         xbmc.LOGINFO,
     )
 

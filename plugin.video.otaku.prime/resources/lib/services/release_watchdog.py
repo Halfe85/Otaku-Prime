@@ -33,8 +33,12 @@ class ReleaseWatchdogService:
                 "year": episode.get("kodi_show_year"),
             }
             episode["season_number"] = (
-                episode.get("kodi_season_number") or episode["season_number"]
+                episode["kodi_season_number"]
+                if episode.get("kodi_season_number") is not None
+                else episode["season_number"]
             )
+            if episode.get("kodi_episode_number") is not None:
+                episode["episode_number"] = episode["kodi_episode_number"]
             try:
                 path = self.stream_library.write_episode(series, episode)
                 pending_publications.append((episode["local_id"], path))

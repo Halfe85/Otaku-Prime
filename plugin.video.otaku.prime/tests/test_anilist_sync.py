@@ -71,14 +71,14 @@ class AniListSyncTests(unittest.TestCase):
             media={
               "10":{"id":10,"title":{"english":"Root","romaji":"Root"},
                 "startDate":{"year":2020},"relations":{"edges":[
-                  {"relationType":"SEQUEL","node":{"id":11,"startDate":{"year":2021}}}]}},
+                  {"relationType":"SEQUEL","node":{"id":11,"format":"TV","startDate":{"year":2021}}}]}},
               "11":{"id":11,"title":{"english":"Root 2","romaji":"Root 2"},
                 "startDate":{"year":2021},"relations":{"edges":[
-                  {"relationType":"PREQUEL","node":{"id":10,"startDate":{"year":2020}}},
-                  {"relationType":"SEQUEL","node":{"id":12,"startDate":{"year":2022}}}]}},
+                  {"relationType":"PREQUEL","node":{"id":10,"format":"TV","startDate":{"year":2020}}},
+                  {"relationType":"SEQUEL","node":{"id":12,"format":"TV","startDate":{"year":2022}}}]}},
               "12":{"id":12,"title":{"english":"Root 3","romaji":"Root 3"},
                 "startDate":{"year":2022},"relations":{"edges":[
-                  {"relationType":"PREQUEL","node":{"id":11,"startDate":{"year":2021}}}]}},
+                  {"relationType":"PREQUEL","node":{"id":11,"format":"TV","startDate":{"year":2021}}}]}},
             }
             def fetch(self,media_id): return self.media[str(media_id)]
         self.media.replace_anilist_staging([{"anilist_id":11,"english_name":"Root 2",
@@ -113,6 +113,34 @@ class AniListSyncTests(unittest.TestCase):
         self.assertEqual(1,importer.sync()["imported"])
         self.assertEqual(1,len(self.media.list_anilist_staging()))
 
+    def test_import_stages_anilist_format_and_release_date(self):
+        class FormatClient:
+            def fetch(self,user_id,token):
+                return [{"status":"PLANNING","progress":0,"media":{"id":8,
+                  "isAdult":False,"format":"OVA","startDate":{"year":2025,"month":3,"day":4},
+                  "title":{"english":"Bonus","romaji":"Bonus"}}}]
+        importer=AniListWatchlistImportService(
+          self.accounts,self.preferences,self.media,client=FormatClient())
+        importer.sync(); staged=self.media.list_anilist_staging()[0]
+        self.assertEqual("OVA",staged["media_format"])
+        self.assertEqual("2025-03-04",staged["release_date"])
+
+    def test_special_format_targets_kodi_season_zero_but_waits_for_mapping(self):
+        class SpecialRelations:
+            def fetch_many(self,ids):
+                return [{"id":int(value),"format":"OVA","title":{"english":"Bonus"},
+                  "startDate":{"year":2025},"relations":{"edges":[]}} for value in ids]
+        self.media.replace_anilist_staging([{"anilist_id":30,"english_name":"Bonus",
+          "list_status":"PLANNING","progress":0,"media_format":"OVA",
+          "release_date":"2025-01-01"}])
+        result=AniListFranchiseResolverService(
+          self.media,client=SpecialRelations()).run_once()
+        self.assertEqual(1,result["resolved"])
+        season=self.media.list_media("season")[0]
+        self.assertEqual("ova",season["media_category"])
+        self.assertEqual(0,season["kodi_season_number"])
+        self.assertEqual(0,season["kodi_resolved"])
+
     def test_relation_client_fetches_media_in_batches(self):
         calls=[]
         class Response:
@@ -129,5 +157,39 @@ class AniListSyncTests(unittest.TestCase):
         result=AniListRelationClient(opener=opener,batch_size=2).fetch_many([1,2,3,4,5])
         self.assertEqual([[1,2],[3,4],[5]],calls)
         self.assertEqual([1,2,3,4,5],[item["id"] for item in result])
+
+    def test_non_anime_prequel_is_not_treated_as_a_season(self):
+        class MixedRelations:
+            def fetch_many(self,ids):
+                return [{"id":int(value),"format":"TV","title":{"english":"Show"},
+                  "startDate":{"year":2020},"relations":{"edges":[
+                    {"relationType":"PREQUEL","node":{"id":999,"format":"MANGA",
+                      "startDate":{"year":2010}}}]}} for value in ids]
+        self.media.replace_anilist_staging([{"anilist_id":20,"english_name":"Show",
+          "list_status":"CURRENT","progress":0}])
+        result=AniListFranchiseResolverService(self.media,client=MixedRelations()).run_once()
+        self.assertEqual(1,result["resolved"]); self.assertEqual([],result["failed"])
+
+    def test_branching_seasons_receive_distinct_local_numbers(self):
+        class BranchRelations:
+            media={
+              "10":{"id":10,"format":"TV","title":{"english":"Root"},
+                "startDate":{"year":2020},"relations":{"edges":[]}},
+              "11":{"id":11,"format":"TV","title":{"english":"Branch A"},
+                "startDate":{"year":2021},"relations":{"edges":[
+                  {"relationType":"PREQUEL","node":{"id":10,"format":"TV",
+                    "startDate":{"year":2020}}}]}},
+              "12":{"id":12,"format":"TV","title":{"english":"Branch B"},
+                "startDate":{"year":2021},"relations":{"edges":[
+                  {"relationType":"PREQUEL","node":{"id":10,"format":"TV",
+                    "startDate":{"year":2020}}}]}},
+            }
+            def fetch_many(self,ids): return [self.media[str(value)] for value in ids]
+        self.media.replace_anilist_staging([
+          {"anilist_id":11,"english_name":"Branch A","list_status":"CURRENT","progress":0},
+          {"anilist_id":12,"english_name":"Branch B","list_status":"CURRENT","progress":0}])
+        result=AniListFranchiseResolverService(self.media,client=BranchRelations()).run_once()
+        self.assertEqual(2,result["resolved"]); self.assertEqual([],result["failed"])
+        self.assertEqual([2,3],sorted(row["season_number"] for row in self.media.list_media("season")))
 
 if __name__=="__main__": unittest.main()
