@@ -6,6 +6,8 @@ from __future__ import annotations
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import threading
+import time
 from typing import Optional
 from urllib.parse import parse_qs
 
@@ -20,6 +22,7 @@ from resources.lib.ui import (
     render_login,
     render_mal_auth,
     render_new_password,
+    render_simkl_auth,
 )
 
 MAX_FORM_BYTES = 16 * 1024
@@ -30,6 +33,8 @@ def create_server(host: str, port: int, user_store) -> ThreadingHTTPServer:
     authenticator_api = AuthenticatorAPI()
     watchlist_accounts = WatchlistAccountStore(user_store.db_path)
     watchlist_accounts.initialize()
+    simkl_flows = {}
+    simkl_flows_lock = threading.Lock()
 
     class PrimeRequestHandler(BaseHTTPRequestHandler):
         server_version = "OtakuPrime/0.1"
@@ -169,11 +174,26 @@ def create_server(host: str, port: int, user_store) -> ThreadingHTTPServer:
                 ),
             )
 
+        def _simkl_page(self, user: dict, message: str = "") -> None:
+            account = watchlist_accounts.get(user["id"], "simkl")
+            with simkl_flows_lock:
+                pending = simkl_flows.get(user["id"])
+                pending = pending.copy() if pending else None
+            self._send_html(
+                200,
+                render_simkl_auth(
+                    connected_account=account,
+                    pending=pending,
+                    message=message,
+                ),
+            )
+
         def _home_page(self, user: dict, message: str = "", active_tab: str = "general") -> str:
             accounts = {
                 "anilist": watchlist_accounts.get(user["id"], "anilist"),
                 "kitsu": watchlist_accounts.get(user["id"], "kitsu"),
                 "mal": watchlist_accounts.get(user["id"], "mal"),
+                "simkl": watchlist_accounts.get(user["id"], "simkl"),
             }
             return render_home(
                 user,
@@ -229,6 +249,15 @@ def create_server(host: str, port: int, user_store) -> ThreadingHTTPServer:
                 self._send_json(200, {"ok": True, "provider": info})
                 return
 
+            if path == "/api/auth/simkl/info":
+                try:
+                    info = authenticator_api.provider_info("simkl")
+                except AuthenticatorAPIError as exc:
+                    self._send_auth_api_error(exc)
+                    return
+                self._send_json(200, {"ok": True, "provider": info})
+                return
+
             if path == "/api/auth/anilist":
                 try:
                     target = authenticator_api.authorization_url("anilist")
@@ -263,6 +292,55 @@ def create_server(host: str, port: int, user_store) -> ThreadingHTTPServer:
                 user = self._require_user()
                 if user:
                     self._kitsu_page(user)
+                return
+
+            if path == "/watchlist/simkl":
+                user = self._require_user()
+                if user:
+                    self._simkl_page(user)
+                return
+
+            if path == "/watchlist/simkl/status":
+                user = self._current_user()
+                if not user:
+                    self._send_json(401, {"status": "error", "message": "Sign in again."})
+                    return
+                now = time.time()
+                with simkl_flows_lock:
+                    flow = simkl_flows.get(user["id"])
+                    if flow is None:
+                        self._send_json(404, {"status": "error", "message": "No Simkl authorization is active."})
+                        return
+                    if flow["expires_at"] <= now:
+                        simkl_flows.pop(user["id"], None)
+                        self._send_json(200, {"status": "expired", "message": "The Simkl code expired. Generate a new one."})
+                        return
+                    if flow["next_poll_at"] > now:
+                        retry_after = max(1, int(flow["next_poll_at"] - now) + 1)
+                        self._send_json(200, {"status": "pending", "retry_after": retry_after})
+                        return
+                    flow["next_poll_at"] = now + flow["interval"]
+                    user_code = flow["user_code"]
+                    interval = flow["interval"]
+                try:
+                    result = authenticator_api.poll_simkl(user_code)
+                except AuthenticatorAPIError as exc:
+                    self._send_json(exc.status, {"status": "error", "message": exc.message})
+                    return
+                if result is None:
+                    self._send_json(200, {"status": "pending", "retry_after": interval})
+                    return
+                viewer = result["user"]
+                watchlist_accounts.save(
+                    user_id=user["id"],
+                    provider="simkl",
+                    external_user_id=str(viewer["id"]),
+                    external_username=viewer["username"],
+                    access_token=result["access_token"],
+                )
+                with simkl_flows_lock:
+                    simkl_flows.pop(user["id"], None)
+                self._send_json(200, {"status": "connected", "username": viewer["username"]})
                 return
 
             if path == "/logout":
@@ -404,6 +482,37 @@ def create_server(host: str, port: int, user_store) -> ThreadingHTTPServer:
                     return
                 watchlist_accounts.delete(user["id"], "kitsu")
                 self._redirect("/watchlist/kitsu")
+                return
+
+            if path == "/watchlist/simkl/start":
+                user = self._require_user()
+                if not user:
+                    return
+                try:
+                    device = authenticator_api.start_simkl()
+                except AuthenticatorAPIError as exc:
+                    self._simkl_page(user, exc.message)
+                    return
+                now = time.time()
+                with simkl_flows_lock:
+                    simkl_flows[user["id"]] = {
+                        "user_code": device["user_code"],
+                        "verification_url": device["verification_url"],
+                        "expires_at": now + device["expires_in"],
+                        "interval": device["interval"],
+                        "next_poll_at": now + device["interval"],
+                    }
+                self._redirect("/watchlist/simkl")
+                return
+
+            if path == "/watchlist/simkl/disconnect":
+                user = self._require_user()
+                if not user:
+                    return
+                watchlist_accounts.delete(user["id"], "simkl")
+                with simkl_flows_lock:
+                    simkl_flows.pop(user["id"], None)
+                self._redirect("/watchlist/simkl")
                 return
 
             if path == "/login":

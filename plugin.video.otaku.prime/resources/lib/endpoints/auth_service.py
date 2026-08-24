@@ -8,6 +8,7 @@ from typing import Optional
 from resources.lib.watchlist.anilist import AniListAuthError, AniListAuthenticator
 from resources.lib.watchlist.kitsu import KitsuAuthError, KitsuAuthenticator
 from resources.lib.watchlist.mal import MALAuthError, MALAuthenticator
+from resources.lib.watchlist.simkl import SimklAuthError, SimklAuthenticator
 
 
 class AuthenticatorAPIError(RuntimeError):
@@ -27,6 +28,7 @@ class AuthenticatorAPI:
         self._anilist = AniListAuthenticator(client_id=anilist_client_id)
         self._kitsu = KitsuAuthenticator()
         self._mal = MALAuthenticator()
+        self._simkl = SimklAuthenticator()
 
     def list_providers(self) -> dict:
         return {
@@ -50,6 +52,13 @@ class AuthenticatorAPI:
                     "configured": self._mal.configured,
                     "flow": "armkai_oauth_pkce",
                     "authorize_url": self._mal.authorization_url(),
+                },
+                {
+                    "id": "simkl",
+                    "name": "Simkl",
+                    "configured": self._simkl.configured,
+                    "flow": "device_pin",
+                    "verification_url": "https://simkl.com/pin",
                 },
             ]
         }
@@ -127,4 +136,29 @@ class AuthenticatorAPI:
             "access_token": connection.access_token,
             "refresh_token": connection.refresh_token,
             "expires_at": connection.expires_at,
+        }
+
+    def start_simkl(self) -> dict:
+        try:
+            device = self._simkl.start()
+        except SimklAuthError as exc:
+            raise AuthenticatorAPIError("provider_unavailable", str(exc), 503) from exc
+        return {
+            "user_code": device.user_code,
+            "verification_url": device.verification_url,
+            "expires_in": device.expires_in,
+            "interval": device.interval,
+        }
+
+    def poll_simkl(self, user_code: str) -> Optional[dict]:
+        try:
+            connection = self._simkl.poll(user_code)
+        except SimklAuthError as exc:
+            raise AuthenticatorAPIError("provider_unavailable", str(exc), 503) from exc
+        if connection is None:
+            return None
+        return {
+            "provider": "simkl",
+            "user": {"id": connection.user_id, "username": connection.username},
+            "access_token": connection.access_token,
         }

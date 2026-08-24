@@ -104,6 +104,26 @@ def render_kitsu_auth(*, connected_account: Optional[dict], message: str = "") -
     return _document("Kitsu - Otaku Prime", content, "kitsu-page", "kitsu-auth")
 
 
+def render_simkl_auth(*, connected_account: Optional[dict], pending: Optional[dict] = None, message: str = "") -> str:
+    notice = '<p class="notice">{}</p>'.format(html.escape(message)) if message else ""
+    if connected_account:
+        account = _fill(
+            _template("components/simkl-auth/connected.html"),
+            EXTERNAL_USERNAME=html.escape(connected_account["external_username"]),
+        )
+    elif pending:
+        account = _fill(
+            _template("components/simkl-auth/pending.html"),
+            USER_CODE=html.escape(pending["user_code"]),
+            VERIFICATION_URL=html.escape(pending["verification_url"], quote=True),
+            INTERVAL=str(int(pending["interval"])),
+        )
+    else:
+        account = _template("components/simkl-auth/connect.html")
+    content = _fill(_template("components/simkl-auth/simkl-auth.html"), NOTICE=notice, ACCOUNT_CONTENT=account)
+    return _document("Simkl - Otaku Prime", content, "simkl-page", "simkl-auth")
+
+
 def _preview_card(category_id: str) -> str:
     previews = {
         "general": ("Interface defaults", "Title language", "English", "Preferred artwork", "Kodi default"),
@@ -128,6 +148,7 @@ def _watchlist_content(accounts: dict) -> str:
     anilist = accounts.get("anilist")
     kitsu = accounts.get("kitsu")
     mal = accounts.get("mal")
+    simkl = accounts.get("simkl")
     return _fill(
         _template("components/main-container/watchlist.html"),
         ANILIST_BADGE="Connected" if anilist else "Not connected",
@@ -148,6 +169,12 @@ def _watchlist_content(accounts: dict) -> str:
             if kitsu else "Connect directly with your Kitsu username or email."
         ),
         KITSU_ACTION="Manage" if kitsu else "Connect",
+        SIMKL_BADGE="Connected" if simkl else "Not connected",
+        SIMKL_DESCRIPTION=(
+            "Connected as {}.".format(html.escape(simkl["external_username"]))
+            if simkl else "Connect securely using Simkl's short PIN flow."
+        ),
+        SIMKL_ACTION="Manage" if simkl else "Connect",
     )
 
 
