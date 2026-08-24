@@ -2,7 +2,6 @@
 <addon id="plugin.video.otaku.prime" name="Otaku Prime" provider-name="Otaku Prime" version="0.1.1">
   <requires>
     <import addon="xbmc.python" version="3.0.1"/>
-    <import addon="script.module.qrcode"/>
   </requires>
   <extension library="main.py" point="xbmc.python.pluginsource">
     <provides>video</provides>

@@ -5,16 +5,9 @@ from __future__ import annotations
 
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-import io
 import json
 from typing import Optional
 from urllib.parse import parse_qs
-
-try:
-    import qrcode
-    import qrcode.image.svg
-except ImportError:
-    qrcode = None
 
 from resources.lib.auth import AuthService
 from resources.lib.database.watchlist_accounts import WatchlistAccountStore
@@ -189,24 +182,6 @@ def create_server(host: str, port: int, user_store) -> ThreadingHTTPServer:
                 user = self._require_user()
                 if user:
                     self._anilist_page(user)
-                return
-
-            if path == "/watchlist/anilist/qr.svg":
-                user = self._require_user()
-                if not user:
-                    return
-                if qrcode is None:
-                    self._send_html(503, "<h1>AniList QR unavailable</h1><p>Open the authorization link instead.</p>")
-                    return
-                try:
-                    target = authenticator_api.authorization_url("anilist")
-                except AuthenticatorAPIError as exc:
-                    self._send_html(exc.status, f"<h1>AniList unavailable</h1><p>{exc.message}</p>")
-                    return
-                image = qrcode.make(target, image_factory=qrcode.image.svg.SvgPathImage)
-                output = io.BytesIO()
-                image.save(output)
-                self._send_bytes(200, "image/svg+xml; charset=utf-8", output.getvalue())
                 return
 
             if path == "/logout":

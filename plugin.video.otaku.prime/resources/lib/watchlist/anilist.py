@@ -5,21 +5,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
-import os
 from typing import Optional
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 
-AUTHORIZE_URL = "https://anilist.co/api/v2/oauth/authorize"
+ARMKAI_AUTH_URL = "https://armkai.vercel.app/api/anilist"
 GRAPHQL_URL = "https://graphql.anilist.co"
-PIN_REDIRECT_URL = "https://anilist.co/api/v2/oauth/pin"
-
-# AniList client IDs are public identifiers. The client secret is intentionally
-# not used by Otaku Prime because Kodi is a distributed client application.
-PACKAGED_CLIENT_ID = "47142"
-CLIENT_ID_ENV = "OTAKU_PRIME_ANILIST_CLIENT_ID"
 
 
 class AniListAuthError(RuntimeError):
@@ -38,26 +30,17 @@ class AniListAuthenticator:
     """Build AniList PIN-flow URLs and validate resulting access tokens."""
 
     def __init__(self, client_id: Optional[str] = None, timeout: int = 15) -> None:
-        self.client_id = (client_id or self._default_client_id()).strip()
+        # client_id remains accepted for compatibility with the provider-neutral API.
+        # ArmKai owns the AniList OAuth client and redirect configuration.
         self.timeout = timeout
-
-    @staticmethod
-    def _default_client_id() -> str:
-        return os.environ.get(CLIENT_ID_ENV, "").strip() or PACKAGED_CLIENT_ID.strip()
 
     @property
     def configured(self) -> bool:
-        return bool(self.client_id)
+        return True
 
     def authorization_url(self) -> str:
-        """Return the official AniList implicit-grant authorization URL."""
-        if not self.configured:
-            raise AniListAuthError(
-                "AniList client ID is not configured. Set PACKAGED_CLIENT_ID "
-                f"or the {CLIENT_ID_ENV} environment variable."
-            )
-
-        return f"{AUTHORIZE_URL}?{urlencode({'client_id': self.client_id, 'response_type': 'token'})}"
+        """Return the ArmKai-managed AniList authorization entry point."""
+        return ARMKAI_AUTH_URL
 
     @staticmethod
     def _decode_response(response_body: bytes) -> dict:

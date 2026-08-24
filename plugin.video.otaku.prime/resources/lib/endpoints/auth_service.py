@@ -31,8 +31,8 @@ class AuthenticatorAPI:
                     "id": "anilist",
                     "name": "AniList",
                     "configured": self._anilist.configured,
-                    "flow": "oauth2_implicit_pin",
-                    "redirect_url": "https://anilist.co/api/v2/oauth/pin",
+                    "flow": "armkai_oauth_pin",
+                    "authorize_url": self._anilist.authorization_url(),
                 }
             ]
         }
@@ -47,11 +47,6 @@ class AuthenticatorAPI:
             )
 
         info = self.list_providers()["providers"][0].copy()
-        if self._anilist.configured:
-            try:
-                info["authorize_url"] = self._anilist.authorization_url()
-            except AniListAuthError:
-                info["configured"] = False
         return info
 
     def authorization_url(self, provider: str) -> str:

@@ -1,9 +1,11 @@
 <div class="status">Not connected</div>
-<div class="auth-grid"><div class="qr-card"><img src="/watchlist/anilist/qr.svg" alt="AniList authorization QR code"></div><div>
-  <p>1. Scan the QR code or open AniList.</p><p>2. Sign in and approve Otaku Prime.</p>
-  <p>3. AniList will show your access token on its official PIN page.</p><p>4. Paste that token below.</p>
-  <p><a class="button" href="{{AUTHORIZE_URL}}" target="_blank" rel="noopener noreferrer">Open AniList Authorization</a></p>
-</div></div>
+<section class="connect-step">
+  <span class="step-number">1</span><div><h2>Authorize with AniList</h2><p>Sign in and approve Otaku Prime in the secure popup.</p>
+  <p><a class="button authorize-button" href="{{AUTHORIZE_URL}}" target="anilist-auth" rel="noopener noreferrer" data-auth-popup>Connect AniList</a></p></div>
+</section>
+<section class="connect-step token-step">
+  <span class="step-number">2</span><div><h2>Paste the access token</h2><p class="popup-status muted" aria-live="polite">AniList will display the token after approval.</p>
 <form method="post" action="/watchlist/anilist/connect"><label>Access token
   <textarea name="token" rows="4" autocomplete="off" spellcheck="false" required></textarea>
-</label><button type="submit" class="button">Connect AniList</button></form>
+</label><button type="submit" class="button">Finish connection</button></form></div>
+</section>
