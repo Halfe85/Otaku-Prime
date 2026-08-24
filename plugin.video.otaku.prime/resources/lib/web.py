@@ -158,6 +158,18 @@ def create_server(host: str, port: int, user_store) -> ThreadingHTTPServer:
                 ),
             )
 
+        def _home_page(self, user: dict, message: str = "", active_tab: str = "general") -> str:
+            accounts = {
+                "anilist": watchlist_accounts.get(user["id"], "anilist"),
+                "mal": watchlist_accounts.get(user["id"], "mal"),
+            }
+            return render_home(
+                user,
+                message=message,
+                active_tab=active_tab,
+                watchlist_accounts=accounts,
+            )
+
         def do_GET(self):
             path = self.path.split("?", 1)[0]
 
@@ -244,7 +256,7 @@ def create_server(host: str, port: int, user_store) -> ThreadingHTTPServer:
                 if user.get("must_change_password"):
                     self._send_html(200, render_new_password(user))
                 else:
-                    self._send_html(200, render_home(user))
+                    self._send_html(200, self._home_page(user))
             else:
                 self._send_html(200, render_login())
 
@@ -361,7 +373,7 @@ def create_server(host: str, port: int, user_store) -> ThreadingHTTPServer:
                     page = (
                         render_new_password(user, "Current password is incorrect.")
                         if user.get("must_change_password")
-                        else render_home(user, "Current password is incorrect.", "accounts")
+                        else self._home_page(user, "Current password is incorrect.", "accounts")
                     )
                     self._send_html(403, page)
                     return
@@ -369,7 +381,7 @@ def create_server(host: str, port: int, user_store) -> ThreadingHTTPServer:
                     page = (
                         render_new_password(user, "New password must be at least 8 characters.")
                         if user.get("must_change_password")
-                        else render_home(user, "New password must be at least 8 characters.", "accounts")
+                        else self._home_page(user, "New password must be at least 8 characters.", "accounts")
                     )
                     self._send_html(400, page)
                     return

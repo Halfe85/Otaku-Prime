@@ -111,11 +111,28 @@ def _accounts_content(user: dict, message: str) -> str:
     return _fill(_template("components/main-container/accounts.html"), USERNAME=html.escape(user["username"]), ROLE=html.escape(user["role"]), NOTICE=notice)
 
 
-def _watchlist_content() -> str:
-    return _template("components/main-container/watchlist.html")
+def _watchlist_content(accounts: dict) -> str:
+    anilist = accounts.get("anilist")
+    mal = accounts.get("mal")
+    return _fill(
+        _template("components/main-container/watchlist.html"),
+        ANILIST_BADGE="Connected" if anilist else "Not connected",
+        ANILIST_DESCRIPTION=(
+            "Connected as {}.".format(html.escape(anilist["external_username"]))
+            if anilist else "Connect AniList through the simplified ArmKai authorization flow."
+        ),
+        ANILIST_ACTION="Manage" if anilist else "Connect",
+        MAL_BADGE="Connected" if mal else "Not connected",
+        MAL_DESCRIPTION=(
+            "Connected as {}.".format(html.escape(mal["external_username"]))
+            if mal else "Connect MAL through ArmKai's PKCE authorization flow."
+        ),
+        MAL_ACTION="Manage" if mal else "Connect",
+    )
 
 
-def render_home(user: dict, message: str = "", active_tab: str = "general") -> str:
+def render_home(user: dict, message: str = "", active_tab: str = "general", watchlist_accounts: Optional[dict] = None) -> str:
+    watchlist_accounts = watchlist_accounts or {}
     if active_tab not in {item[0] for item in SETTINGS_CATEGORIES}:
         active_tab = "general"
     tabs, panels = [], []
@@ -125,7 +142,7 @@ def render_home(user: dict, message: str = "", active_tab: str = "general") -> s
         if category_id == "accounts":
             panel_content = _accounts_content(user, message)
         elif category_id == "watchlist":
-            panel_content = _watchlist_content()
+            panel_content = _watchlist_content(watchlist_accounts)
         else:
             panel_content = _preview_card(category_id)
         panels.append('<section class="panel" id="panel-{}" role="tabpanel"{}><header class="panel-header"><h2>{}</h2><p>{}</p></header>{}</section>'.format(category_id, "" if selected else " hidden", html.escape(label), html.escape(description), panel_content))
