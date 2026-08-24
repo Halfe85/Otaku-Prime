@@ -235,7 +235,11 @@ class WatchlistMediaStore:
             for entry in entries:
                 db.execute("""INSERT INTO anilist_import_staging(
                   anilist_id,english_name,romaji_name,list_status,progress,is_adult)
-                  VALUES(?,?,?,?,?,?)""", (
+                  VALUES(?,?,?,?,?,?)
+                  ON CONFLICT(anilist_id) DO UPDATE SET
+                  english_name=excluded.english_name,romaji_name=excluded.romaji_name,
+                  list_status=excluded.list_status,progress=excluded.progress,
+                  is_adult=excluded.is_adult,synced_at=CURRENT_TIMESTAMP""", (
                     str(entry["anilist_id"]),entry.get("english_name"),
                     entry.get("romaji_name"),entry["list_status"],
                     max(0,int(entry.get("progress") or 0)),

@@ -101,4 +101,15 @@ class AniListSyncTests(unittest.TestCase):
         self.assertEqual("Otaku-Prime/0.1.2",captured[0].get_header("User-agent"))
         self.assertEqual("Bearer token",captured[0].get_header("Authorization"))
 
+    def test_duplicate_custom_list_entry_is_staged_only_once(self):
+        class DuplicateClient:
+            def fetch(self,user_id,token):
+                entry={"status":"CURRENT","progress":2,"media":{"id":1,
+                  "isAdult":False,"title":{"english":"Show","romaji":"Show"}}}
+                return [entry,dict(entry)]
+        importer=AniListWatchlistImportService(
+          self.accounts,self.preferences,self.media,client=DuplicateClient())
+        self.assertEqual(1,importer.sync()["imported"])
+        self.assertEqual(1,len(self.media.list_anilist_staging()))
+
 if __name__=="__main__": unittest.main()

@@ -5,6 +5,8 @@ AniList reliability:
 - Added an Otaku Prime User-Agent to watchlist, franchise-relation, and release-schedule requests.
 - Fixed HTTP 403 responses caused by AniList rejecting Python's default urllib request identity.
 - Added clearer watchlist errors for expired authorization and blocked requests.
+- Deduplicate entries returned through both AniList default and custom list groups.
+- Made AniList staging writes idempotent by media ID.
 
 Testing:
 - Added coverage that verifies AniList requests include the add-on identity and bearer token.

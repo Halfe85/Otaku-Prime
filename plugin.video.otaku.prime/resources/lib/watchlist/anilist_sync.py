@@ -44,7 +44,7 @@ class AniListWatchlistImportService:
         if not account: return {"connected":False,"imported":0,"filtered":0}
         allow_mature=self.preferences.mature_content(self.user_id)
         entries=self.client.fetch(account["external_user_id"],account["access_token"])
-        imported=filtered=0; staged=[]
+        filtered=0; staged_by_id={}
         for entry in entries:
             media=entry.get("media") or {}
             if media.get("isAdult") and not allow_mature:
@@ -52,10 +52,9 @@ class AniListWatchlistImportService:
             title=(media.get("title") or {}).get("english") or (media.get("title") or {}).get("romaji")
             if not media.get("id") or not title: continue
             titles=media.get("title") or {}
-            staged.append({"anilist_id":media["id"],"english_name":titles.get("english"),
+            staged_by_id[str(media["id"])]={"anilist_id":media["id"],"english_name":titles.get("english"),
               "romaji_name":titles.get("romaji"),"list_status":entry.get("status"),
               "progress":max(0,int(entry.get("progress") or 0)),
-              "is_adult":bool(media.get("isAdult"))})
-            imported+=1
-        self.media_store.replace_anilist_staging(staged)
-        return {"connected":True,"imported":imported,"filtered":filtered}
+              "is_adult":bool(media.get("isAdult"))}
+        self.media_store.replace_anilist_staging(staged_by_id.values())
+        return {"connected":True,"imported":len(staged_by_id),"filtered":filtered}
