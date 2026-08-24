@@ -17,7 +17,8 @@ SETTINGS_CATEGORIES = (
     ("playback", "Playback", "Play style, audio, subtitles, skip intro, and playing next."),
     ("sort-filter", "Sort & Filter", "Resolution, codecs, source types, and result ordering."),
     ("accounts", "Accounts", "Prime administrator and future debrid service connections."),
-    ("watchlist", "Watchlist", "AniList, MyAnimeList, Kitsu, and Simkl connections."),
+    ("watchlist", "Watchlist Accounts", "AniList, MyAnimeList, Kitsu, and Simkl connections."),
+    ("watchlist-management", "Watchlist Management", "Browse, filter, and manage imported series."),
     ("menu", "Menu Customization", "Choose which destinations appear in Kodi menus."),
     ("context", "Context Customization", "Configure actions shown in Kodi context menus."),
     ("maintenance", "Maintenance", "Cache, database, diagnostics, import, and export tools."),
@@ -192,6 +193,8 @@ def render_home(user: dict, message: str = "", active_tab: str = "general", watc
             panel_content = _accounts_content(user, message)
         elif category_id == "watchlist":
             panel_content = _watchlist_content(watchlist_accounts)
+        elif category_id == "watchlist-management":
+            panel_content = _template("components/watchlist-management/watchlist-management.html")
         else:
             panel_content = _preview_card(category_id)
         panels.append('<section class="panel" id="panel-{}" role="tabpanel"{}><header class="panel-header"><h2>{}</h2><p>{}</p></header>{}</section>'.format(category_id, "" if selected else " hidden", html.escape(label), html.escape(description), panel_content))

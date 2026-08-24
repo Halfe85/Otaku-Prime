@@ -9,11 +9,13 @@ import json
 import threading
 import time
 from typing import Optional
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlsplit
 
 from resources.lib.auth import AuthService
 from resources.lib.database.watchlist_accounts import WatchlistAccountStore
 from resources.lib.database.watchlist_preferences import WatchlistPreferenceStore
+from resources.lib.database.watchlist_media import WatchlistMediaStore
+from resources.lib.database.app_logs import AppLogStore
 from resources.lib.endpoints.auth_service import AuthenticatorAPI, AuthenticatorAPIError
 from resources.lib.ui import (
     read_static_asset,
@@ -29,13 +31,18 @@ from resources.lib.ui import (
 MAX_FORM_BYTES = 16 * 1024
 
 
-def create_server(host: str, port: int, user_store) -> ThreadingHTTPServer:
+def create_server(host: str, port: int, user_store, media_store=None,
+                  app_log_store=None) -> ThreadingHTTPServer:
     auth = AuthService(user_store)
     authenticator_api = AuthenticatorAPI()
     watchlist_accounts = WatchlistAccountStore(user_store.db_path)
     watchlist_accounts.initialize()
     watchlist_preferences = WatchlistPreferenceStore(user_store.db_path)
     watchlist_preferences.initialize()
+    media_store = media_store or WatchlistMediaStore(user_store.db_path)
+    media_store.initialize()
+    app_log_store = app_log_store or AppLogStore(user_store.db_path)
+    app_log_store.initialize()
     simkl_flows = {}
     simkl_flows_lock = threading.Lock()
 
@@ -207,7 +214,8 @@ def create_server(host: str, port: int, user_store) -> ThreadingHTTPServer:
             )
 
         def do_GET(self):
-            path = self.path.split("?", 1)[0]
+            request_url = urlsplit(self.path)
+            path = request_url.path
 
             if path.startswith("/ui/"):
                 asset = read_static_asset(path[len("/ui/"):])
@@ -224,6 +232,21 @@ def create_server(host: str, port: int, user_store) -> ThreadingHTTPServer:
 
             if path == "/api/auth/providers":
                 self._send_json(200, authenticator_api.list_providers())
+                return
+
+            if path == "/api/logs":
+                if not self._current_user():
+                    self._send_json(401,{"ok":False,"message":"Sign in again."}); return
+                query=parse_qs(request_url.query)
+                try: after_id=int((query.get("after") or [0])[0])
+                except (TypeError,ValueError): after_id=0
+                entries=app_log_store.list(after_id=after_id)
+                self._send_json(200,{"ok":True,"entries":entries}); return
+
+            if path == "/api/watchlist/series":
+                if not self._current_user():
+                    self._send_json(401,{"ok":False,"message":"Sign in again."}); return
+                self._send_json(200,{"ok":True,"entries":media_store.list_watchlist_seasons()})
                 return
 
             if path == "/api/auth/anilist/info":
@@ -371,6 +394,21 @@ def create_server(host: str, port: int, user_store) -> ThreadingHTTPServer:
 
         def do_POST(self):
             path = self.path.split("?", 1)[0]
+
+            if path == "/api/watchlist/series/watch-status":
+                user=self._current_user()
+                if not user:
+                    self._send_json(401,{"ok":False,"message":"Sign in again."}); return
+                payload=self._read_api_payload(); local_id=str(payload.get("local_id") or "")
+                watched=payload.get("watched")
+                if not local_id or not isinstance(watched,bool):
+                    self._send_json(400,{"ok":False,"message":"Invalid watch status."}); return
+                try: media_store.set_watch_status("season",local_id,watched)
+                except KeyError:
+                    self._send_json(404,{"ok":False,"message":"Watchlist entry not found."}); return
+                app_log_store.write("INFO","watchlist",
+                  "{} marked {} by {}".format(local_id,"watched" if watched else "unwatched",user["username"]))
+                self._send_json(200,{"ok":True,"watched":watched}); return
 
             if path == "/api/auth/anilist/verify":
                 user = self._current_user()

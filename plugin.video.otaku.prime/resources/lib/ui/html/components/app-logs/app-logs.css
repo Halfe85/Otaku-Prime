@@ -1,0 +1,16 @@
+.bottom-actions { display:flex;align-items:center;gap:14px; }
+.log-toggle { border:1px solid var(--border);border-radius:999px;background:#171d2c;color:var(--text);padding:6px 12px;cursor:pointer; }
+.log-toggle:hover,.log-toggle:focus-visible { border-color:var(--accent); }
+.app-log-window { position:fixed;right:clamp(12px,3vw,34px);bottom:58px;width:min(520px,calc(100vw - 24px));height:min(520px,70vh);display:grid;grid-template-rows:auto minmax(0,1fr);z-index:20;border:1px solid #39435d;border-radius:16px;background:rgba(10,13,21,.98);box-shadow:0 22px 70px rgba(0,0,0,.55);opacity:0;transform:translateY(18px) scale(.98);pointer-events:none;transition:opacity .18s ease,transform .18s ease;overflow:hidden; }
+.app-log-window.open { opacity:1;transform:none;pointer-events:auto; }
+.app-log-window header { display:flex;align-items:center;justify-content:space-between;padding:13px 15px;border-bottom:1px solid var(--border);background:#141a29; }
+.app-log-window header div { display:grid;gap:1px; }
+.app-log-window header span { color:var(--muted);font-size:11px; }
+.app-log-window header button { border:0;background:transparent;color:var(--muted);font-size:25px;cursor:pointer; }
+.app-log-messages { overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:10px; }
+.log-message { align-self:flex-start;max-width:92%;padding:9px 11px;border:1px solid var(--border);border-radius:4px 13px 13px 13px;background:#171e2d; }
+.log-message.error { border-color:#703947;background:#2a1720; }
+.log-message.warning { border-color:#75622e;background:#292414; }
+.log-message .meta { display:flex;gap:8px;color:var(--muted);font-size:10px;text-transform:uppercase; }
+.log-message p { margin:3px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace; }
+@media (max-width:620px) { .bottom-actions>span { display:none; }.app-log-window { bottom:55px;height:65vh; } }

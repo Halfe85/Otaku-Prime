@@ -14,6 +14,7 @@ from resources.lib.users import UserStore
 from resources.lib.database.watchlist_media import WatchlistMediaStore
 from resources.lib.database.watchlist_accounts import WatchlistAccountStore
 from resources.lib.database.watchlist_preferences import WatchlistPreferenceStore
+from resources.lib.database.app_logs import AppLogStore
 from resources.lib.services.kodi_db_middleware import KodiDbMiddleware
 from resources.lib.services.anilist_release_schedule import AniListReleaseScheduleService
 from resources.lib.services.anilist_relations import AniListFranchiseResolverService
@@ -55,6 +56,13 @@ def main() -> None:
     watchlist_accounts.initialize()
     watchlist_preferences = WatchlistPreferenceStore(users_db)
     watchlist_preferences.initialize()
+    app_logs = AppLogStore(users_db)
+    app_logs.initialize()
+
+    def log(level, source, message):
+        kodi_level = xbmc.LOGERROR if level == "ERROR" else xbmc.LOGINFO
+        xbmc.log("OTAKU PRIME: {}".format(message), kodi_level)
+        app_logs.write(level, source, message)
     mediator = MediatorService(
         media_store,
         StreamLibraryService(os.path.join(profile, LIBRARY_DIR_NAME)),
@@ -65,34 +73,26 @@ def main() -> None:
         media_store,
         mediator.stream_library,
         mediator.kodi_db,
-        error_handler=lambda exc: xbmc.log(
-            "OTAKU PRIME: release watchdog failed: {}".format(exc),
-            xbmc.LOGERROR,
-        ),
+        error_handler=lambda exc: log("ERROR","release","Release watchdog failed: {}".format(exc)),
         schedule_service=AniListReleaseScheduleService(media_store),
     )
     watchlist_sync = WatchlistSyncService(
         [AniListWatchlistImportService(
             watchlist_accounts, watchlist_preferences, media_store
         )],processors=[AniListFranchiseResolverService(media_store)],
-        error_handler=lambda exc: xbmc.log(
-            "OTAKU PRIME: watchlist sync failed: {}".format(exc), xbmc.LOGERROR
-        ),
+        error_handler=lambda exc: log("ERROR","watchlist","Watchlist sync failed: {}".format(exc)),
     )
 
     background = StartupPipelineService(
         watchlist_sync, release_watchdog, mediator,
-        result_handler=lambda name, result: xbmc.log(
-            "OTAKU PRIME: initial {} pipeline: {}".format(name, result), xbmc.LOGINFO
-        ),
-        error_handler=lambda name, exc: xbmc.log(
-            "OTAKU PRIME: initial {} pipeline failed: {}".format(name, exc),
-            xbmc.LOGERROR,
-        ),
+        result_handler=lambda name, result: log(
+            "INFO",name,"Initial {} pipeline: {}".format(name,result)),
+        error_handler=lambda name, exc: log(
+            "ERROR",name,"Initial {} pipeline failed: {}".format(name,exc)),
     )
 
     try:
-        server = create_server(WEB_HOST, WEB_PORT, user_store)
+        server = create_server(WEB_HOST, WEB_PORT, user_store, media_store, app_logs)
     except OSError as exc:
         xbmc.log(
             f"OTAKU PRIME: failed to bind web server on {WEB_HOST}:{WEB_PORT}: {exc}",
@@ -108,6 +108,7 @@ def main() -> None:
     )
     server_thread.start()
     background.start()
+    log("INFO","service","Web service started on {}:{}".format(WEB_HOST,WEB_PORT))
 
     xbmc.log(
         f"OTAKU PRIME: web service started on {WEB_HOST}:{WEB_PORT}",

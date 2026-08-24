@@ -322,6 +322,28 @@ class WatchlistMediaStore:
                    ORDER BY season.season_number, episode.episode_number""",
                 (series_local_id,))]
 
+    def list_watchlist_seasons(self):
+        """Return provider-listed seasons for the administration interface."""
+        with self._connection() as db:
+            return [dict(row) for row in db.execute("""SELECT
+              season.local_id,season.english_name,season.romaji_name,
+              season.season_number,season.watched,season.release_date,
+              series.local_id AS series_local_id,
+              COALESCE(series.english_name,series.romaji_name) AS franchise_name,
+              entries.providers,entries.provider_statuses,
+              COALESCE(progress.episode_count,0) AS episode_count,
+              COALESCE(progress.watched_episodes,0) AS watched_episodes
+              FROM seasons AS season
+              JOIN tv_series AS series ON series.local_id=season.related_series_id
+              JOIN (SELECT media_local_id,GROUP_CONCAT(provider) AS providers,
+                GROUP_CONCAT(provider || ':' || list_status) AS provider_statuses
+                FROM provider_list_entries WHERE media_type='season'
+                GROUP BY media_local_id) AS entries ON entries.media_local_id=season.local_id
+              LEFT JOIN (SELECT related_season_id,COUNT(*) AS episode_count,
+                SUM(watched) AS watched_episodes FROM episodes GROUP BY related_season_id
+              ) AS progress ON progress.related_season_id=season.local_id
+              ORDER BY COALESCE(season.english_name,season.romaji_name),season.season_number""")]
+
     def schedule_release(self, media_type, media_local_id, releases_at):
         if media_type not in ("season", "episode", "movie"):
             raise ValueError("invalid scheduled media_type")

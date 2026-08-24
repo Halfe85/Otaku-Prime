@@ -77,6 +77,21 @@ class MediaStoreTests(unittest.TestCase):
         self.assertEqual(1, result["sent"])
         self.assertEqual([("episode", episode, True)], calls)
 
+    def test_management_view_combines_provider_status_and_progress_once(self):
+        franchise = self.store.upsert_tv_series(english_name="Show")
+        season = self.store.upsert_season(franchise, 1, english_name="Show")
+        self.store.save_provider_list_status("season", season, "anilist", "CURRENT")
+        self.store.save_provider_list_status("season", season, "mal", "PLANNING")
+        first = self.store.upsert_episode(season, 1)
+        self.store.upsert_episode(season, 2)
+        self.store.set_watch_status(
+            "episode", first, True, queue_connected_trackers=False
+        )
+        entry = self.store.list_watchlist_seasons()[0]
+        self.assertEqual(2, entry["episode_count"])
+        self.assertEqual(1, entry["watched_episodes"])
+        self.assertEqual({"anilist", "mal"}, set(entry["providers"].split(",")))
+
 class KodiConnectorTests(unittest.TestCase):
     def test_json_rpc_read(self):
         requests = []
