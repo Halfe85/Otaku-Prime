@@ -9,7 +9,7 @@ from resources.lib.database.watchlist_accounts import WatchlistAccountStore
 from resources.lib.database.watchlist_media import WatchlistMediaStore
 from resources.lib.database.watchlist_preferences import WatchlistPreferenceStore
 from resources.lib.users import UserStore
-from resources.lib.watchlist.anilist_sync import AniListWatchlistImportService
+from resources.lib.watchlist.anilist_sync import AniListWatchlistClient, AniListWatchlistImportService
 from resources.lib.services.anilist_relations import AniListFranchiseResolverService
 
 class Client:
@@ -88,5 +88,17 @@ class AniListSyncTests(unittest.TestCase):
         seasons=self.media.list_media("season")
         self.assertEqual(["11"],[row["anilist_id"] for row in seasons])
         self.assertEqual(2,seasons[0]["season_number"])
+
+    def test_http_client_identifies_addon_to_anilist(self):
+        captured=[]
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self,*_): return False
+            def read(self): return b'{"data":{"MediaListCollection":{"lists":[]}}}'
+        def opener(request,timeout):
+            captured.append(request); return Response()
+        AniListWatchlistClient(opener=opener).fetch(7,"token")
+        self.assertEqual("Otaku-Prime/0.1.2",captured[0].get_header("User-agent"))
+        self.assertEqual("Bearer token",captured[0].get_header("Authorization"))
 
 if __name__=="__main__": unittest.main()

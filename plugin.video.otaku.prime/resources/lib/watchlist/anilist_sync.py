@@ -3,8 +3,11 @@
 from __future__ import annotations
 import json
 from urllib.request import Request,urlopen
+from urllib.error import HTTPError
 
 STATUSES=("CURRENT","COMPLETED","PAUSED","DROPPED","PLANNING")
+ANILIST_HEADERS={"Content-Type":"application/json","Accept":"application/json",
+                 "User-Agent":"Otaku-Prime/0.1.2"}
 
 class AniListWatchlistClient:
     API_URL="https://graphql.anilist.co"
@@ -13,11 +16,17 @@ class AniListWatchlistClient:
         query="""query($userId:Int!){MediaListCollection(userId:$userId,type:ANIME){
           lists{status entries{status progress media{id isAdult title{english romaji}}}}}}"""
         body=json.dumps({"query":query,"variables":{"userId":int(user_id)}}).encode("utf-8")
-        request=Request(self.API_URL,data=body,method="POST",headers={
-          "Content-Type":"application/json","Accept":"application/json",
-          "Authorization":"Bearer "+access_token})
-        with self._open(request,timeout=self.timeout) as response:
-            payload=json.loads(response.read().decode("utf-8"))
+        headers=dict(ANILIST_HEADERS); headers["Authorization"]="Bearer "+access_token
+        request=Request(self.API_URL,data=body,method="POST",headers=headers)
+        try:
+            with self._open(request,timeout=self.timeout) as response:
+                payload=json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            if exc.code == 401:
+                raise RuntimeError("AniList authorization expired; reconnect AniList")
+            if exc.code == 403:
+                raise RuntimeError("AniList blocked the watchlist request (HTTP 403)")
+            raise RuntimeError("AniList watchlist request failed with HTTP {}".format(exc.code))
         if payload.get("errors"): raise RuntimeError("AniList watchlist request failed")
         entries=[]
         for listing in payload.get("data",{}).get("MediaListCollection",{}).get("lists",[]):

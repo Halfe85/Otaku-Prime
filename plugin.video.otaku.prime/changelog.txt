@@ -1,27 +1,10 @@
-Otaku Prime 0.1.2 Alpha1
+Otaku Prime 0.1.2 Alpha2
 ========================
 
-Web administration:
-- Added an App Logs button to the fixed bottom bar.
-- Added a chat-style application log window with live updates while open.
-- Added authenticated log polling through the local administration API.
-- Added bounded SQLite application-log storage to prevent unlimited growth.
-- Connected startup, watchlist, release, and service messages to the application log.
-
-Watchlist management:
-- Renamed the existing watchlist tab to Watchlist Accounts.
-- Added a separate Watchlist Management tab for imported series.
-- Added filtering by title and provider list status.
-- Added merged provider, season, list-status, and episode-progress information.
-- Added an administrator control for changing a season's local watched state.
-- Queue watched-state changes through the existing durable provider update outbox.
+AniList reliability:
+- Added an Otaku Prime User-Agent to watchlist, franchise-relation, and release-schedule requests.
+- Fixed HTTP 403 responses caused by AniList rejecting Python's default urllib request identity.
+- Added clearer watchlist errors for expired authorization and blocked requests.
 
 Testing:
-- Added coverage for bounded and incremental application-log reads.
-- Added coverage for merged watchlist provider status and episode progress.
-- The complete test suite now contains 25 passing tests.
-
-Known limitations:
-- App Logs contains Otaku Prime application events, not Kodi's complete system log.
-- Provider watch-status adapters are not connected to the background dispatcher yet.
-- Season watch-state changes remain queued until those provider adapters are connected.
+- Added coverage that verifies AniList requests include the add-on identity and bearer token.

@@ -52,7 +52,8 @@ class AniListReleaseScheduleService:
         request = Request(
             self.API_URL,
             data=body,
-            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            headers={"Content-Type": "application/json", "Accept": "application/json",
+                     "User-Agent": "Otaku-Prime/0.1.2"},
             method="POST",
         )
         with self._open(request, timeout=self.timeout) as response:

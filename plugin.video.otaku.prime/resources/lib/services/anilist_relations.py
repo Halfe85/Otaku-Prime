@@ -16,7 +16,8 @@ class AniListRelationClient:
             startDate{year month day}}}}}}"""
         body=json.dumps({"query":query,"variables":{"id":int(anilist_id)}}).encode("utf-8")
         request=Request(self.API_URL,data=body,method="POST",headers={
-          "Content-Type":"application/json","Accept":"application/json"})
+          "Content-Type":"application/json","Accept":"application/json",
+          "User-Agent":"Otaku-Prime/0.1.2"})
         with self._open(request,timeout=self.timeout) as response:
             payload=json.loads(response.read().decode("utf-8"))
         if payload.get("errors") or not payload.get("data",{}).get("Media"):
