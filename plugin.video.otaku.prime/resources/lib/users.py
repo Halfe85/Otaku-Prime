@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import os
 import sqlite3
+from contextlib import contextmanager
 from typing import Optional
 
 
@@ -26,6 +27,15 @@ class UserStore:
         connection.execute("PRAGMA journal_mode = WAL")
         return connection
 
+    @contextmanager
+    def _connection(self):
+        db = self._connect()
+        try:
+            with db:
+                yield db
+        finally:
+            db.close()
+
     @staticmethod
     def _hash_password(password: str, salt: bytes, iterations: int) -> bytes:
         return hashlib.pbkdf2_hmac(
@@ -38,7 +48,7 @@ class UserStore:
     def initialize(self) -> None:
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
 
-        with self._connect() as db:
+        with self._connection() as db:
             db.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS users (
@@ -120,7 +130,7 @@ class UserStore:
         return int(cursor.lastrowid)
 
     def authenticate(self, username: str, password: str) -> Optional[dict]:
-        with self._connect() as db:
+        with self._connection() as db:
             row = db.execute(
                 """
                 SELECT id, username, password_hash, password_salt,
@@ -163,7 +173,7 @@ class UserStore:
             PBKDF2_ITERATIONS,
         )
 
-        with self._connect() as db:
+        with self._connection() as db:
             db.execute(
                 """
                 UPDATE users

@@ -13,6 +13,7 @@ from urllib.parse import parse_qs
 
 from resources.lib.auth import AuthService
 from resources.lib.database.watchlist_accounts import WatchlistAccountStore
+from resources.lib.database.watchlist_preferences import WatchlistPreferenceStore
 from resources.lib.endpoints.auth_service import AuthenticatorAPI, AuthenticatorAPIError
 from resources.lib.ui import (
     read_static_asset,
@@ -33,6 +34,8 @@ def create_server(host: str, port: int, user_store) -> ThreadingHTTPServer:
     authenticator_api = AuthenticatorAPI()
     watchlist_accounts = WatchlistAccountStore(user_store.db_path)
     watchlist_accounts.initialize()
+    watchlist_preferences = WatchlistPreferenceStore(user_store.db_path)
+    watchlist_preferences.initialize()
     simkl_flows = {}
     simkl_flows_lock = threading.Lock()
 
@@ -143,6 +146,7 @@ def create_server(host: str, port: int, user_store) -> ThreadingHTTPServer:
                 render_anilist_auth(
                     authorize_url=authorize_url,
                     connected_account=account,
+                    mature_content=watchlist_preferences.mature_content(user["id"]),
                     message=message,
                 ),
             )
@@ -416,6 +420,17 @@ def create_server(host: str, port: int, user_store) -> ThreadingHTTPServer:
                 if not user:
                     return
                 watchlist_accounts.delete(user["id"], "anilist")
+                self._redirect("/watchlist/anilist")
+                return
+
+            if path == "/watchlist/anilist/preferences":
+                user = self._require_user()
+                if not user:
+                    return
+                form = self._read_form()
+                watchlist_preferences.set_mature_content(
+                    user["id"], form.get("mature_content") == "1"
+                )
                 self._redirect("/watchlist/anilist")
                 return
 

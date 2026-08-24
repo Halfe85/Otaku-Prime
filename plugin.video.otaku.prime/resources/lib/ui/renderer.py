@@ -59,12 +59,14 @@ def render_new_password(user: dict, message: str = "") -> str:
     return _document("New password - Otaku Prime", content, "auth-page", "new-password-modal")
 
 
-def render_anilist_auth(*, authorize_url: str, connected_account: Optional[dict], message: str = "") -> str:
+def render_anilist_auth(*, authorize_url: str, connected_account: Optional[dict],
+                        mature_content: bool = False, message: str = "") -> str:
     notice = '<p class="notice">{}</p>'.format(html.escape(message)) if message else ""
     if connected_account:
         account = _fill(
             _template("components/anilist-auth/connected.html"),
             EXTERNAL_USERNAME=html.escape(connected_account["external_username"]),
+            MATURE_CHECKED=" checked" if mature_content else "",
         )
     else:
         account = _fill(

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import contextmanager
 from typing import Optional
 
 
@@ -20,8 +21,17 @@ class WatchlistAccountStore:
         connection.execute("PRAGMA journal_mode = WAL")
         return connection
 
+    @contextmanager
+    def _connection(self):
+        db = self._connect()
+        try:
+            with db:
+                yield db
+        finally:
+            db.close()
+
     def initialize(self) -> None:
-        with self._connect() as db:
+        with self._connection() as db:
             db.execute(
                 """
                 CREATE TABLE IF NOT EXISTS watchlist_accounts (
@@ -46,7 +56,7 @@ class WatchlistAccountStore:
                 db.execute("ALTER TABLE watchlist_accounts ADD COLUMN token_expires_at INTEGER")
 
     def get(self, user_id: int, provider: str) -> Optional[dict]:
-        with self._connect() as db:
+        with self._connection() as db:
             row = db.execute(
                 """
                 SELECT user_id, provider, external_user_id, external_username,
@@ -54,6 +64,17 @@ class WatchlistAccountStore:
                 FROM watchlist_accounts
                 WHERE user_id = ? AND provider = ?
                 """,
+                (int(user_id), provider),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_credentials(self, user_id: int, provider: str) -> Optional[dict]:
+        """Internal service access; never expose this result through the web UI."""
+        with self._connection() as db:
+            row = db.execute(
+                """SELECT user_id,provider,external_user_id,external_username,
+                          access_token,refresh_token,token_expires_at
+                   FROM watchlist_accounts WHERE user_id=? AND provider=?""",
                 (int(user_id), provider),
             ).fetchone()
         return dict(row) if row else None
@@ -69,7 +90,7 @@ class WatchlistAccountStore:
         refresh_token: Optional[str] = None,
         token_expires_at: Optional[int] = None,
     ) -> None:
-        with self._connect() as db:
+        with self._connection() as db:
             db.execute(
                 """
                 INSERT INTO watchlist_accounts(
@@ -93,7 +114,7 @@ class WatchlistAccountStore:
             )
 
     def delete(self, user_id: int, provider: str) -> None:
-        with self._connect() as db:
+        with self._connection() as db:
             db.execute(
                 "DELETE FROM watchlist_accounts WHERE user_id = ? AND provider = ?",
                 (int(user_id), provider),

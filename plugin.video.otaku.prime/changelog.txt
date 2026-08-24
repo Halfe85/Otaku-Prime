@@ -1,11 +1,70 @@
-Otaku Prime 0.1.0 Alpha
+Otaku Prime 0.1.2 Alpha0
 
-Initial development foundation:
-- Fresh Otaku Prime addon architecture.
-- Kodi launches main.py as the plugin entry point.
-- Background service hosts the management interface on port 9898.
-- Local SQLite user database with an initial admin account.
-- Web login, sessions, logout, and password change support.
-- Kodi addon screen displays the local web-management address.
+Web management and authentication:
+- Added the background web service on port 9898.
+- Added a Kodi modal showing the local web address and service port.
+- Added a fixed top and bottom bar layout with scrollable main content.
+- Split the web interface into reusable HTML, CSS, and JavaScript components.
+- Added admin login, forced initial password change, sessions, and logout.
+- Moved admin authentication out of the main plugin entry point.
+- Added SQLite storage with hashed admin passwords.
+- Added account-management tabs and interface styling.
 
-This is an alpha development release. Playback and Kodi library import are not implemented yet.
+Watchlist accounts:
+- Added AniList authentication through armkai.vercel.app.
+- Added MyAnimeList authentication through armkai.vercel.app.
+- Added direct Kitsu authentication.
+- Added Simkl device authentication.
+- Store the connected single-user account credentials in SQLite.
+- Show connected account state and account-management actions in the web UI.
+- Added the AniList mature-content preference.
+
+Watchlist mediator database:
+- Added provider-neutral franchise, season, episode, and movie records.
+- Added random hierarchical local IDs for franchises, seasons, and episodes.
+- Added boolean watched state for series, seasons, episodes, and movies.
+- Added provider list membership, provider watch state, and durable update-outbox tables.
+- Added Kodi library-link, release-schedule, and stream-publication tables.
+- Removed episode titles and provider IDs from the minimal episode records.
+
+AniList synchronization:
+- Import CURRENT, COMPLETED, PAUSED, DROPPED, and PLANNING list entries.
+- Import the minimal AniList ID, title, list status, and watched progress data.
+- Filter mature entries when the mature-content preference is disabled.
+- Split synchronization into watchlist staging, franchise resolution, and promotion services.
+- Resolve main franchise chains through AniList PREQUEL and SEQUEL relations.
+- Use related entries only to determine franchise roots and season numbers.
+- Create local seasons only when the specific entry exists in the user's watchlist.
+- Do not automatically import unlisted sequels, prequels, side stories, or spin-offs.
+
+Kodi mediator and virtual library:
+- Added a Kodi database middleware boundary using JSON-RPC instead of opening MyVideos databases.
+- Added Kodi library-link synchronization and watched-state update operations.
+- Added persistent virtual library roots under the add-on profile directory.
+- Added movie layout: movies/Movie Title YEAR.strm.
+- Added TV layout: tv-series/TV Series Title/season XX/TV Series Title - SXXEXX.strm.
+- Added stable plugin URLs inside generated stream files.
+- Added a Kodi video-source readiness check before marking files as published.
+- Added silent Kodi scans after newly released episodes are written.
+
+Release and background services:
+- Added AniList airing-schedule lookups for seasons and episodes.
+- Added a release watchdog that blocks unreleased seasons and episodes.
+- Added franchise-resolution and Kodi-resolution publication gates.
+- Retry publication when stream writing or the Kodi scan fails.
+- Added an ordered asynchronous startup pipeline.
+- Run watchlist import, relation resolution, release publication, and Kodi linking at startup.
+- Start periodic watchlist and release watchdogs after the initial pass.
+
+Testing:
+- Added tests for AniList importing, mature filtering, and watchlist-only promotion.
+- Added tests for mediator identities, provider progress, Kodi JSON-RPC, and stream paths.
+- Added tests for release scheduling, scan retry behavior, and startup ordering.
+
+Known limitations:
+- Episode and movie playback routes are not implemented yet.
+- Movie watchlist import, release scheduling, and automatic publication are not connected yet.
+- MyAnimeList, Kitsu, and Simkl watchlist imports and progress synchronization are not connected yet.
+- Provider watch-status update adapters are not connected to the background service yet.
+- Kodi movie and TV content/scraper assignment requires one-time setup in Kodi.
+- This remains an alpha development build and is not yet ready as a functional playback release.
