@@ -20,17 +20,25 @@ class WatchlistSyncService:
         self.error_handler = error_handler or (lambda error: None)
         self._stop = threading.Event()
         self._thread = None
+        self._busy_notice = False
         for processor in self.processors:
             binder = getattr(processor, "bind_stop_event", None)
             if binder:
                 binder(self._stop)
 
     def run_once(self):
-        while not _PIPELINE_LOCK.acquire(timeout=0.5):
-            if self._stop.is_set():
-                LOGGER.warning("Watchlist synchronization cancelled while another pipeline is active")
-                return [{"cancelled": True, "reason": "pipeline_stopping"}]
-            LOGGER.info("Watchlist synchronization waiting for the active pipeline")
+        # Immediate callbacks can arrive together (account connected, settings
+        # changed, startup pipeline). Do not queue multiple full AniList/TMDB/
+        # TVDB pipelines behind the active one; the active run already reads the
+        # latest persisted settings/watchlist state in normal UI use.
+        if not _PIPELINE_LOCK.acquire(blocking=False):
+            if not self._busy_notice:
+                LOGGER.info(
+                    "Watchlist synchronization request skipped because a pipeline is already active"
+                )
+                self._busy_notice = True
+            return [{"skipped": True, "reason": "pipeline_already_active"}]
+        self._busy_notice = False
         try:
             return self._run_once_locked()
         finally:
