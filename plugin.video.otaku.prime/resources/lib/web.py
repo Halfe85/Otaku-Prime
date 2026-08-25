@@ -15,8 +15,13 @@ from resources.lib.auth import AuthService
 from resources.lib.database.watchlist_accounts import WatchlistAccountStore
 from resources.lib.database.watchlist_preferences import WatchlistPreferenceStore
 from resources.lib.database.watchlist_media import WatchlistMediaStore
+from resources.lib.database.metadata_provider import MetadataProviderStore
 from resources.lib.database.app_logs import AppLogStore
 from resources.lib.endpoints.auth_service import AuthenticatorAPI, AuthenticatorAPIError
+from resources.lib.services.metadata_resolver import (
+    MetadataProviderError,
+    MetadataResolverService,
+)
 from resources.lib.ui import (
     read_static_asset,
     render_anilist_auth,
@@ -32,7 +37,8 @@ MAX_FORM_BYTES = 16 * 1024
 
 
 def create_server(host: str, port: int, user_store, media_store=None,
-                  app_log_store=None) -> ThreadingHTTPServer:
+                  app_log_store=None, metadata_resolver=None,
+                  on_metadata_configured=None) -> ThreadingHTTPServer:
     auth = AuthService(user_store)
     authenticator_api = AuthenticatorAPI()
     watchlist_accounts = WatchlistAccountStore(user_store.db_path)
@@ -43,6 +49,10 @@ def create_server(host: str, port: int, user_store, media_store=None,
     media_store.initialize()
     app_log_store = app_log_store or AppLogStore(user_store.db_path)
     app_log_store.initialize()
+    if metadata_resolver is None:
+        metadata_store = MetadataProviderStore(user_store.db_path)
+        metadata_store.initialize()
+        metadata_resolver = MetadataResolverService(metadata_store)
     simkl_flows = {}
     simkl_flows_lock = threading.Lock()
 
@@ -205,6 +215,8 @@ def create_server(host: str, port: int, user_store, media_store=None,
                 "kitsu": watchlist_accounts.get(user["id"], "kitsu"),
                 "mal": watchlist_accounts.get(user["id"], "mal"),
                 "simkl": watchlist_accounts.get(user["id"], "simkl"),
+                "_metadata": metadata_resolver.status(),
+                "_metadata_message": message if active_tab == "watchlist" else "",
             }
             return render_home(
                 user,
@@ -232,6 +244,13 @@ def create_server(host: str, port: int, user_store, media_store=None,
 
             if path == "/api/auth/providers":
                 self._send_json(200, authenticator_api.list_providers())
+                return
+
+            if path == "/api/metadata-resolver":
+                if not self._current_user():
+                    self._send_json(401, {"ok": False, "message": "Sign in again."})
+                    return
+                self._send_json(200, {"ok": True, "resolver": metadata_resolver.status()})
                 return
 
             if path == "/api/logs":
@@ -394,6 +413,47 @@ def create_server(host: str, port: int, user_store, media_store=None,
 
         def do_POST(self):
             path = self.path.split("?", 1)[0]
+
+            if path == "/settings/metadata-provider":
+                user = self._require_user()
+                if not user:
+                    return
+                form = self._read_form()
+                provider = str(form.get("provider") or "").strip().lower()
+                try:
+                    if provider == "tmdb":
+                        status = metadata_resolver.configure(
+                            "tmdb",
+                            auth_type=form.get("tmdb_auth_type", "bearer"),
+                            credential=form.get("tmdb_credential", ""),
+                        )
+                    elif provider == "thetvdb":
+                        status = metadata_resolver.configure(
+                            "thetvdb",
+                            api_key=form.get("tvdb_api_key", ""),
+                            pin=form.get("tvdb_pin", ""),
+                        )
+                    else:
+                        raise MetadataProviderError("Choose TMDB or TheTVDB")
+                    scraper = metadata_resolver.ensure_kodi_scraper()
+                except (MetadataProviderError, ValueError) as exc:
+                    self._send_html(400, self._home_page(user, str(exc), "watchlist"))
+                    return
+                app_log_store.write(
+                    "INFO",
+                    "metadata",
+                    "Metadata resolver configured: {}; Kodi scraper={}".format(
+                        status.get("provider"), scraper.get("required")
+                    ),
+                )
+                if on_metadata_configured:
+                    threading.Thread(
+                        target=on_metadata_configured,
+                        name="OtakuPrimeMetadataConfigured",
+                        daemon=True,
+                    ).start()
+                self._redirect("/#watchlist")
+                return
 
             if path == "/api/watchlist/series/watch-status":
                 user=self._current_user()
