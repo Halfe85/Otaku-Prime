@@ -296,6 +296,10 @@ class MetadataResolverTests(unittest.TestCase):
         self.assertEqual("Franchise", series_row["metadata_show_name"])
         self.assertEqual(2020, series_row["metadata_show_year"])
 
+        # A restarted pipeline resumes with unresolved/new work instead of
+        # resolving the completed season all over again.
+        self.assertEqual([],self.config.list_resolution_targets())
+
     def test_special_uses_provider_owned_s00_number_not_local_episode_number(self):
         series = self._franchise()
         special = self.media.upsert_season(

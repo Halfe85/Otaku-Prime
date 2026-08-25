@@ -3,6 +3,7 @@ import json
 import sqlite3
 import sys
 import tempfile
+import threading
 import unittest
 
 ROOT=os.path.dirname(os.path.dirname(__file__)); sys.path.insert(0,ROOT)
@@ -65,6 +66,14 @@ class AniListSyncTests(unittest.TestCase):
         with sqlite3.connect(self.path) as db:
             self.assertEqual(1,db.execute(
               "SELECT COUNT(*) FROM provider_list_entries WHERE provider='anilist'").fetchone()[0])
+
+    def test_franchise_resolution_stops_before_touching_replacement_database(self):
+        self.media.replace_anilist_staging([{"anilist_id":1,"english_name":"Show",
+          "list_status":"CURRENT","progress":0}])
+        stop=threading.Event(); stop.set(); self.resolver.bind_stop_event(stop)
+        result=self.resolver.run_once()
+        self.assertTrue(result["cancelled"])
+        self.assertEqual([],self.media.list_media("season"))
 
     def test_relation_discovery_does_not_import_unlisted_sequel(self):
         class ChainRelations:

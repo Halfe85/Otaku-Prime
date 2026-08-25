@@ -174,6 +174,7 @@ class MetadataProviderStore:
               WHERE metadata_provider IS NOT NULL AND metadata_provider<>?""", (provider,))
 
     def list_resolution_targets(self):
+        provider=self.status().get("provider")
         with self._connection() as db:
             return [dict(row) for row in db.execute("""
               SELECT season.*,
@@ -193,8 +194,18 @@ class MetadataProviderStore:
                  SELECT 1 FROM provider_list_entries AS membership
                   WHERE membership.media_type='season'
                     AND membership.media_local_id=season.local_id)
+                 AND (
+                   season.kodi_resolved=0
+                   OR season.metadata_provider IS NULL
+                   OR season.metadata_provider<>?
+                   OR EXISTS(
+                     SELECT 1 FROM episodes AS episode
+                      WHERE episode.related_season_id=season.local_id
+                        AND (episode.metadata_provider IS NULL
+                             OR episode.metadata_provider<>?
+                             OR episode.metadata_episode_id IS NULL)))
                ORDER BY season.related_series_id,season.season_number
-            """)]
+            """, (provider, provider))]
 
     def list_season_episodes(self, season_local_id):
         with self._connection() as db:

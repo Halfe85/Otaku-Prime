@@ -11,6 +11,8 @@ Alpha8b supersedes Alpha8 and includes all Alpha8 work below.
 - Follow chained special PREQUEL links and conservative TV anchors such as OTHER or SEQUEL when AniList does not expose a direct PARENT relation.
 - Treat sequential ONA PREQUEL chains as numbered seasons while keeping side-story ONAs in Kodi Specials.
 - Add shorter TheTVDB discovery queries for long punctuation-heavy titles while retaining strict full-title scoring.
+- Make metadata synchronization resumable by skipping completed seasons while still selecting newly added or unmapped episodes.
+- Cancel AniList franchise traversal and promotion during Kodi shutdown so an old service worker cannot populate a newly reinstalled database.
 
 Kodi database adoption:
 - Make verified TMDB or TheTVDB configuration the mandatory gate before watchlist processing.

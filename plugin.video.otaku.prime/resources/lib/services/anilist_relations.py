@@ -53,14 +53,24 @@ class AniListFranchiseResolverService:
     """Resolve and promote only entries present in the staged user snapshot."""
     def __init__(self,media_store,client=None,max_nodes=100):
         self.media_store=media_store; self.client=client or AniListRelationClient()
-        self.max_nodes=max(1,int(max_nodes)); self._cache={}
+        self.max_nodes=max(1,int(max_nodes)); self._cache={}; self._stop_event=None
+
+    def bind_stop_event(self,stop_event):
+        self._stop_event=stop_event
+
+    def _stopping(self):
+        return self._stop_event is not None and self._stop_event.is_set()
 
     def run_once(self):
         staged=self.media_store.list_anilist_staging(); active=[]; failed=[]
+        if self._stopping():
+            return {"resolved":0,"failed":[],"cancelled":True}
         try: self._load_prequel_graph([entry["anilist_id"] for entry in staged])
         except Exception as exc:
             return {"resolved":0,"failed":[{"anilist_id":None,"error":str(exc)}]}
         for entry in staged:
+            if self._stopping():
+                return {"resolved":len(active),"failed":failed,"cancelled":True}
             try:
                 resolution=self._resolve(entry["anilist_id"])
                 active.append(self.media_store.promote_anilist_season(entry,resolution))
@@ -90,6 +100,7 @@ class AniListFranchiseResolverService:
     def _load_prequel_graph(self,media_ids):
         frontier={str(value) for value in media_ids}; visited=set()
         while frontier and len(visited)<self.max_nodes*max(1,len(media_ids)):
+            if self._stopping(): return
             self._prefetch(frontier); visited.update(frontier)
             following=set()
             for media_id in frontier:
