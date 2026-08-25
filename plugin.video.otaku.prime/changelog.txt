@@ -16,6 +16,7 @@ Otaku Prime 0.1.2 Alpha9
 - Reject and record Simkl parent-title fallbacks when their IDs disagree with the authoritative watchlist item, instead of overwriting or repeatedly retrying them.
 - Retry Simkl parent-title redirects through exact external-ID search and accept only detail records that agree with every authoritative ID Prime already knows.
 - Show catalog-identity conflicts separately from watch-progress conflicts in the series-details modal.
+- Treat missing cross-provider catalog IDs as a valid unavailable/partial state and reserve failures for actual enrichment errors.
 - Use Simkl's current anime watchlist endpoint and report empty or malformed API responses cleanly.
 - Refresh expired MAL and Kitsu access tokens before fetching their lists.
 - Use Simkl activities and delta synchronization during periodic runs instead of skipping Simkl.

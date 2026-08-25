@@ -27,7 +27,7 @@ class WatchlistIdentityTests(unittest.TestCase):
         result=WatchlistIdentityEnrichmentService(
           self.items,client=client,request_delay=0).run_once()
         row=self.items.list_all()[0]
-        self.assertEqual({"resolved":1,"unresolved":0,"failed":0},result)
+        self.assertEqual({"complete":1,"partial":0,"unavailable":0,"failed":0},result)
         self.assertEqual(("1","11","21","31"),tuple(row[name+"_id"] for name in
           ("anilist","mal","kitsu","simkl")))
         self.assertEqual("11",client.seen["mal_id"])
@@ -53,9 +53,20 @@ class WatchlistIdentityTests(unittest.TestCase):
         result=WatchlistIdentityEnrichmentService(
           self.items,client=Client(),request_delay=0).run_once()
         row=self.items.list_all()[0]
-        self.assertEqual(1,result["unresolved"])
+        self.assertEqual(1,result["unavailable"])
         self.assertEqual("CONFLICT_EXACT",row["identity_resolution_status"])
         self.assertEqual([],self.items.list_missing_provider_ids())
+
+    def test_missing_provider_catalog_ids_are_partial_not_failed(self):
+        self.items.replace_provider_snapshot("mal",[{
+          "provider_item_id":"11","ids":{"mal":"11"},"english_name":"Show",
+          "list_status":"CURRENT","provider_status":"watching","progress":1}])
+        class Client:
+            def resolve(self,item): return {"mal":"11","simkl":"31"}
+        result=WatchlistIdentityEnrichmentService(
+          self.items,client=Client(),request_delay=0).run_once()
+        self.assertEqual({"complete":0,"partial":1,"unavailable":0,"failed":0},result)
+        self.assertEqual("PARTIAL",self.items.list_all()[0]["identity_resolution_status"])
 
     def test_simkl_client_rejects_detail_for_a_different_anilist_item(self):
         class Response:

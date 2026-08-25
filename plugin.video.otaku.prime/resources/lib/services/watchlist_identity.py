@@ -127,7 +127,7 @@ class WatchlistIdentityEnrichmentService:
 
     def run_once(self):
         if not self._lock.acquire(blocking=False): return {"scheduled":False,"busy":True}
-        resolved=unresolved=failed=0
+        complete=partial=unavailable=failed=0
         try:
             pending=self.store.list_missing_provider_ids()
             for item in pending:
@@ -135,16 +135,19 @@ class WatchlistIdentityEnrichmentService:
                 try:
                     ids=self.client.resolve(item)
                     if ids:
-                        self.store.apply_resolved_ids(item["local_id"],ids); resolved+=1
-                    else: unresolved+=1
+                        self.store.apply_resolved_ids(item["local_id"],ids)
+                        combined={name:(ids.get(name) or item.get(name+"_id")) for name in PROVIDERS}
+                        if all(combined.values()): complete+=1
+                        else: partial+=1
+                    else: unavailable+=1
                     if not ids:
                         self.store.record_identity_resolution(item["local_id"],"NOT_FOUND",
                                                               "No Simkl anime mapping")
                 except IdentityMappingConflict as exc:
-                    unresolved+=1
+                    unavailable+=1
                     self.store.record_identity_resolution(item["local_id"],"CONFLICT_EXACT",str(exc))
-                    LOGGER.warning("Provider ID mapping conflict for Prime item %s: %s",
-                                   item["local_id"],exc)
+                    LOGGER.info("Some provider IDs are unavailable for Prime item %s: %s",
+                                item["local_id"],exc)
                 except Exception:
                     failed+=1
                     LOGGER.exception("Provider ID enrichment failed for Prime item %s",item["local_id"])
@@ -153,9 +156,9 @@ class WatchlistIdentityEnrichmentService:
             # Newly discovered overlaps may have combined multiple provider
             # snapshots into one item; recalculate its master/conflict state.
             self.store.finalize_merge()
-            LOGGER.info("Provider ID enrichment complete: resolved=%s unresolved=%s failed=%s",
-                        resolved,unresolved,failed)
-            return {"resolved":resolved,"unresolved":unresolved,"failed":failed}
+            LOGGER.info("Provider ID enrichment complete: complete=%s partial=%s unavailable=%s failed=%s",
+                        complete,partial,unavailable,failed)
+            return {"complete":complete,"partial":partial,"unavailable":unavailable,"failed":failed}
         finally: self._lock.release()
 
     def start(self):
