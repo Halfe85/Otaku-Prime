@@ -14,15 +14,16 @@ class Component:
 
 class Mediator:
     def __init__(self,events): self.events=events
-    def start(self): self.events.append("kodi-links"); return {}
+    def inventory(self): self.events.append("kodi-inventory"); return {}
+    def reconcile(self): self.events.append("kodi-reconcile"); return {}
 
 class StartupPipelineTests(unittest.TestCase):
     def test_initial_chain_precedes_periodic_watchdogs(self):
         events=[]; watchlist=Component("watchlist",events); release=Component("release",events)
         pipeline=StartupPipelineService(watchlist,release,Mediator(events))
         pipeline.start(); pipeline._thread.join(timeout=2)
-        self.assertEqual(["watchlist","release","kodi-links",
-          ("watchlist",False),("release",False)],events)
+        self.assertEqual(["kodi-inventory","watchlist","kodi-reconcile",
+          ("watchlist",False)],events)
         pipeline.stop()
 
 if __name__=="__main__": unittest.main()

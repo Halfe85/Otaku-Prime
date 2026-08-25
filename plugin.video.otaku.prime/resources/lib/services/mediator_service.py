@@ -11,11 +11,17 @@ class MediatorService:
         self.metadata_resolver = metadata_resolver
 
     def start(self) -> dict:
-        """Link existing Kodi media without opening Kodi's video DB directly."""
-        result = self.kodi_db.synchronize_links()
+        """Compatibility entry point for reconciliation after inventory."""
+        result = self.reconcile()
         if self.metadata_resolver is not None:
             result["metadata"] = self.metadata_resolver.status()
         return result
+
+    def inventory(self) -> dict:
+        return self.kodi_db.inventory()
+
+    def reconcile(self) -> dict:
+        return self.kodi_db.reconcile()
 
     def metadata_status(self) -> dict:
         if self.metadata_resolver is None:

@@ -11,6 +11,7 @@ import xbmc
 import xbmcgui
 
 from service import WEB_PORT
+from resources.lib.logging_config import configure_logging,get_logger
 
 
 KODI_IP_RETRIES = 8
@@ -56,7 +57,15 @@ def get_server_ip() -> str:
 
 def main() -> None:
     """Show the Otaku Prime web-management address in a modal dialog."""
+    def kodi_writer(level,source,message):
+        kodi_level={"ERROR":xbmc.LOGERROR,"WARNING":xbmc.LOGWARNING}.get(level,xbmc.LOGINFO)
+        xbmc.log("OTAKU PRIME [{}] {}: {}".format(level,source,message),kodi_level)
+    configure_logging(kodi_writer=kodi_writer)
+    logger=get_logger("main")
     server_ip = get_server_ip()
+    logger.info("Opening administration address http://%s:%s",server_ip,WEB_PORT)
+    if server_ip == "127.0.0.1":
+        logger.warning("No LAN address was detected; showing loopback address")
     xbmcgui.Dialog().ok(
         "Otaku Prime",
         "Open Otaku Prime in your browser:\n\n"

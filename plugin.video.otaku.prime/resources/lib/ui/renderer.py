@@ -153,6 +153,7 @@ def _watchlist_content(accounts: dict) -> str:
     mal = accounts.get("mal")
     simkl = accounts.get("simkl")
     metadata = accounts.get("_metadata") or {}
+    kodi = accounts.get("_kodi") or {}
     metadata_message = accounts.get("_metadata_message") or ""
     configured = bool(metadata.get("configured"))
     provider = metadata.get("provider")
@@ -175,6 +176,18 @@ def _watchlist_content(accounts: dict) -> str:
     auth_type = metadata.get("auth_type") or "bearer"
     return _fill(
         _template("components/main-container/watchlist.html"),
+        KODI_LIBRARY_BADGE=(
+            "Unavailable" if not kodi.get("available") else
+            "Empty" if kodi.get("empty") else "Detected"
+        ),
+        KODI_LIBRARY_DESCRIPTION=html.escape(
+            "Kodi video library is unavailable: {}".format(kodi.get("last_error") or "unknown error")
+            if not kodi.get("available") else
+            "Kodi has an empty video database. Prime can add resolved watchlist content."
+            if kodi.get("empty") else
+            "Prime inventoried {} TV shows and {} episodes before watchlist matching.".format(
+                kodi.get("show_count", 0), kodi.get("episode_count", 0))
+        ),
         METADATA_BADGE="Connected" if configured else "Required",
         METADATA_DESCRIPTION=html.escape(metadata_description),
         METADATA_NOTICE=metadata_notice,

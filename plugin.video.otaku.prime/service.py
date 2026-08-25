@@ -16,9 +16,9 @@ from resources.lib.database.watchlist_media import WatchlistMediaStore
 from resources.lib.database.watchlist_accounts import WatchlistAccountStore
 from resources.lib.database.watchlist_preferences import WatchlistPreferenceStore
 from resources.lib.database.metadata_provider import MetadataProviderStore
+from resources.lib.database.kodi_inventory import KodiInventoryStore
 from resources.lib.database.app_logs import AppLogStore
 from resources.lib.services.kodi_db_middleware import KodiDbMiddleware
-from resources.lib.services.kodi_source_setup import KodiSourceSetupService
 from resources.lib.services.anilist_release_schedule import AniListReleaseScheduleService
 from resources.lib.services.anilist_relations import AniListFranchiseResolverService
 from resources.lib.services.metadata_resolver import MetadataResolverService
@@ -29,6 +29,7 @@ from resources.lib.services.startup_pipeline import StartupPipelineService
 from resources.lib.services.watchlist_sync import WatchlistSyncService
 from resources.lib.watchlist.anilist_sync import AniListWatchlistImportService
 from resources.lib.web import create_server
+from resources.lib.logging_config import configure_logging,get_logger
 
 
 WEB_HOST = "0.0.0.0"
@@ -71,11 +72,17 @@ def main() -> None:
     app_logs.initialize()
     metadata_store = MetadataProviderStore(users_db)
     metadata_store.initialize()
+    kodi_inventory = KodiInventoryStore(users_db)
+    kodi_inventory.initialize()
+
+    def kodi_log(level,source,message):
+        kodi_level={"ERROR":xbmc.LOGERROR,"WARNING":xbmc.LOGWARNING}.get(level,xbmc.LOGINFO)
+        xbmc.log("OTAKU PRIME [{}] {}: {}".format(level,source,message),kodi_level)
+    configure_logging(app_logs,kodi_log)
 
     def log(level, source, message):
-        kodi_level = xbmc.LOGERROR if level == "ERROR" else xbmc.LOGINFO
-        xbmc.log("OTAKU PRIME: {}".format(message), kodi_level)
-        app_logs.write(level, source, message)
+        logger=get_logger(source)
+        getattr(logger,{"ERROR":"error","WARNING":"warning"}.get(level,"info"))(message)
 
     def scraper_installed(addon_id):
         return bool(xbmc.getCondVisibility("System.HasAddon({})".format(addon_id)))
@@ -102,25 +109,9 @@ def main() -> None:
     mediator = MediatorService(
         media_store,
         StreamLibraryService(os.path.join(kodi_profile, LIBRARY_DIR_NAME)),
-        KodiDbMiddleware(media_store),
+        KodiDbMiddleware(media_store, inventory_store=kodi_inventory),
         metadata_resolver=metadata_resolver,
     )
-    mediator.stream_library.initialize()
-    source_setup = KodiSourceSetupService(kodi_profile, mediator.stream_library)
-    try:
-        source_result = source_setup.ensure_sources()
-    except Exception as exc:
-        log("ERROR", "kodi-library", "Kodi source registration failed: {}".format(exc))
-    else:
-        if source_result["added"]:
-            log("INFO", "kodi-library",
-                "Registered {}; restart Kodi, then assign TV Shows content once"
-                .format(", ".join(source_result["added"])))
-        if source_result["removed"]:
-            log("INFO", "kodi-library",
-                "Retired {}; restart Kodi to unload the old source"
-                .format(", ".join(source_result["removed"])))
-
     if metadata_resolver.is_configured():
         scraper = metadata_resolver.ensure_kodi_scraper()
         log(
@@ -176,6 +167,7 @@ def main() -> None:
             app_logs,
             metadata_resolver=metadata_resolver,
             on_metadata_configured=watchlist_sync.run_once,
+            kodi_inventory_store=kodi_inventory,
         )
     except OSError as exc:
         xbmc.log(
@@ -194,7 +186,7 @@ def main() -> None:
     background.start()
     log("INFO","service","Web service started on {}:{}".format(WEB_HOST,WEB_PORT))
     log("INFO","kodi-library","Using Kodi's existing video database; advancedsettings.xml is unchanged")
-    log("INFO","kodi-library","TV scan source: {}".format(mediator.stream_library.tv_series_root))
+    log("INFO","kodi-library","Prime direct library projection enabled; .strm publication is disabled")
 
     xbmc.log(
         f"OTAKU PRIME: web service started on {WEB_HOST}:{WEB_PORT}",

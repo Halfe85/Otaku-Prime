@@ -1,5 +1,23 @@
-Otaku Prime 0.1.2 Alpha8
-========================
+Otaku Prime 0.1.2 Alpha8b
+=========================
+
+Alpha8b supersedes Alpha8 and includes all Alpha8 work below.
+
+Kodi database adoption:
+- Make verified TMDB or TheTVDB configuration the mandatory gate before watchlist processing.
+- Inventory Kodi TV shows and episodes before importing or resolving watchlist content.
+- Treat an available but empty Kodi video library as a valid database ready for Prime content.
+- Persist Kodi inventory state, provider IDs, playback paths, and local-versus-plugin origin.
+- Add a Prime/Kodi ownership registry with local, external, pending, and Prime ownership states.
+- Match resolved episodes by provider episode ID, then provider show ID plus season/episode number.
+- Give existing local files unconditional priority over Prime streaming projections.
+- Mark missing episodes as pending Prime projections and expose Kodi status/ownership through the authenticated admin API.
+- Disable legacy source registration, `.strm` publication, and library scanning while direct `plugin://` projection replaces them.
+
+Application logging:
+- Centralize INFO, WARNING, and ERROR logging for Kodi and Prime's SQLite-backed admin log window.
+- Capture unhandled main-thread and background-thread exceptions with tracebacks.
+- Log startup stages, watchlist gates/importers/processors, metadata resolution, Kodi inventory, ownership reconciliation, and web configuration failures.
 
 Metadata authority:
 - Add mandatory TMDB and TheTVDB v4 resolver connections using credentials supplied by each Prime installation.

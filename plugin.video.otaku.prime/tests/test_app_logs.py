@@ -7,6 +7,7 @@ ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, ROOT)
 
 from resources.lib.database.app_logs import AppLogStore
+from resources.lib.logging_config import configure_logging,get_logger
 
 
 class AppLogStoreTests(unittest.TestCase):
@@ -23,6 +24,16 @@ class AppLogStoreTests(unittest.TestCase):
                 ["message 104"],
                 [row["message"] for row in store.list(after_id=entries[-2]["id"])],
             )
+
+    def test_central_logger_persists_info_warning_and_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store=AppLogStore(os.path.join(directory,"db.sqlite")); store.initialize()
+            configure_logging(app_log_store=store)
+            logger=get_logger("test-levels")
+            logger.info("information"); logger.warning("warning"); logger.error("failure")
+            self.assertEqual(["INFO","WARNING","ERROR"],
+              [row["level"] for row in store.list()])
+            configure_logging()
 
 
 if __name__ == "__main__":

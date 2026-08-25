@@ -9,21 +9,37 @@ from typing import Callable, Optional
 
 from resources.lib.connectors.kodi_library import (
     KodiLibraryConnector,
-    KodiLibrarySynchronizer,
+    KodiLibraryInventoryService,
+    KodiOwnershipReconciler,
 )
 
 
 class KodiDbMiddleware:
     """Use JSON-RPC to read/change Kodi state; never open MyVideos*.db."""
 
-    def __init__(self, media_store, execute_json_rpc: Optional[Callable[[str], str]] = None):
+    def __init__(self, media_store, execute_json_rpc: Optional[Callable[[str], str]] = None,
+                 inventory_store=None):
         self.media_store = media_store
         self.library = KodiLibraryConnector(execute_json_rpc)
         self._execute = self.library._execute
         self._request_id = 1000
+        self.inventory_service=(KodiLibraryInventoryService(self.library,inventory_store)
+                                if inventory_store is not None else None)
+        self.reconciler=(KodiOwnershipReconciler(inventory_store)
+                         if inventory_store is not None else None)
 
     def synchronize_links(self) -> dict:
-        return KodiLibrarySynchronizer(self.library, self.media_store).sync()
+        return self.reconcile()
+
+    def inventory(self) -> dict:
+        if self.inventory_service is None:
+            return {"available":False,"empty":True,"show_count":0,"episode_count":0}
+        return self.inventory_service.run_once()
+
+    def reconcile(self) -> dict:
+        if self.reconciler is None:
+            return {"local":0,"plugin":0,"missing":0,"ambiguous":0}
+        return self.reconciler.run_once()
 
     def scan(self, directory: str) -> None:
         if not self.is_video_source(directory):

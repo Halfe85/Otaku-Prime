@@ -16,12 +16,15 @@ from resources.lib.database.watchlist_accounts import WatchlistAccountStore
 from resources.lib.database.watchlist_preferences import WatchlistPreferenceStore
 from resources.lib.database.watchlist_media import WatchlistMediaStore
 from resources.lib.database.metadata_provider import MetadataProviderStore
+from resources.lib.database.kodi_inventory import KodiInventoryStore
 from resources.lib.database.app_logs import AppLogStore
 from resources.lib.endpoints.auth_service import AuthenticatorAPI, AuthenticatorAPIError
 from resources.lib.services.metadata_resolver import (
     MetadataProviderError,
     MetadataResolverService,
 )
+from resources.lib.logging_config import get_logger
+LOGGER=get_logger(__name__)
 from resources.lib.ui import (
     read_static_asset,
     render_anilist_auth,
@@ -38,7 +41,7 @@ MAX_FORM_BYTES = 16 * 1024
 
 def create_server(host: str, port: int, user_store, media_store=None,
                   app_log_store=None, metadata_resolver=None,
-                  on_metadata_configured=None) -> ThreadingHTTPServer:
+                  on_metadata_configured=None,kodi_inventory_store=None) -> ThreadingHTTPServer:
     auth = AuthService(user_store)
     authenticator_api = AuthenticatorAPI()
     watchlist_accounts = WatchlistAccountStore(user_store.db_path)
@@ -49,6 +52,8 @@ def create_server(host: str, port: int, user_store, media_store=None,
     media_store.initialize()
     app_log_store = app_log_store or AppLogStore(user_store.db_path)
     app_log_store.initialize()
+    kodi_inventory_store=kodi_inventory_store or KodiInventoryStore(user_store.db_path)
+    kodi_inventory_store.initialize()
     if metadata_resolver is None:
         metadata_store = MetadataProviderStore(user_store.db_path)
         metadata_store.initialize()
@@ -61,6 +66,9 @@ def create_server(host: str, port: int, user_store, media_store=None,
 
         def log_message(self, format, *args):
             return
+
+        def log_error(self, format, *args):
+            LOGGER.error("HTTP server: "+format,*args)
 
         def _cookie_value(self, name: str) -> str:
             raw_cookie = self.headers.get("Cookie", "")
@@ -134,13 +142,16 @@ def create_server(host: str, port: int, user_store, media_store=None,
             if content_type == "application/json":
                 try:
                     payload = json.loads(raw.decode("utf-8"))
-                except (UnicodeDecodeError, json.JSONDecodeError):
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    LOGGER.warning("Rejected malformed API request on %s: %s",self.path,exc)
                     return {}
                 return payload if isinstance(payload, dict) else {}
             form = raw.decode("utf-8", errors="replace")
             return {key: values[0] for key, values in parse_qs(form).items() if values}
 
         def _send_auth_api_error(self, exc: AuthenticatorAPIError) -> None:
+            level=LOGGER.error if int(exc.status)>=500 else LOGGER.warning
+            level("Authentication API error %s on %s: %s",exc.code,self.path,exc.message)
             self._send_json(exc.status, {"ok": False, "error": exc.code, "message": exc.message})
 
         def _require_user(self):
@@ -155,6 +166,7 @@ def create_server(host: str, port: int, user_store, media_store=None,
             try:
                 authorize_url = authenticator_api.authorization_url("anilist")
             except AuthenticatorAPIError as exc:
+                LOGGER.warning("AniList authorization page unavailable: %s",exc.message)
                 authorize_url = "#"
                 if not message:
                     message = exc.message
@@ -173,6 +185,7 @@ def create_server(host: str, port: int, user_store, media_store=None,
             try:
                 authorize_url = authenticator_api.authorization_url("mal")
             except AuthenticatorAPIError as exc:
+                LOGGER.warning("MAL authorization page unavailable: %s",exc.message)
                 authorize_url = "#"
                 if not message:
                     message = exc.message
@@ -216,6 +229,7 @@ def create_server(host: str, port: int, user_store, media_store=None,
                 "mal": watchlist_accounts.get(user["id"], "mal"),
                 "simkl": watchlist_accounts.get(user["id"], "simkl"),
                 "_metadata": metadata_resolver.status(),
+                "_kodi": kodi_inventory_store.status(),
                 "_metadata_message": message if active_tab == "watchlist" else "",
             }
             return render_home(
@@ -251,6 +265,13 @@ def create_server(host: str, port: int, user_store, media_store=None,
                     self._send_json(401, {"ok": False, "message": "Sign in again."})
                     return
                 self._send_json(200, {"ok": True, "resolver": metadata_resolver.status()})
+                return
+
+            if path == "/api/kodi-library":
+                if not self._current_user():
+                    self._send_json(401,{"ok":False,"message":"Sign in again."}); return
+                self._send_json(200,{"ok":True,"library":kodi_inventory_store.status(),
+                  "ownership":kodi_inventory_store.list_ownership()})
                 return
 
             if path == "/api/logs":
@@ -437,6 +458,7 @@ def create_server(host: str, port: int, user_store, media_store=None,
                         raise MetadataProviderError("Choose TMDB or TheTVDB")
                     scraper = metadata_resolver.ensure_kodi_scraper()
                 except (MetadataProviderError, ValueError) as exc:
+                    LOGGER.warning("Metadata provider configuration rejected: %s",exc)
                     self._send_html(400, self._home_page(user, str(exc), "watchlist"))
                     return
                 app_log_store.write(
@@ -446,6 +468,7 @@ def create_server(host: str, port: int, user_store, media_store=None,
                         status.get("provider"), scraper.get("required")
                     ),
                 )
+                LOGGER.info("Metadata provider configured through admin UI: %s",status.get("provider"))
                 if on_metadata_configured:
                     threading.Thread(
                         target=on_metadata_configured,

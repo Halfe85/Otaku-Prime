@@ -6,6 +6,8 @@ import datetime
 import json
 import re
 import time
+from resources.lib.logging_config import get_logger
+LOGGER=get_logger(__name__)
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -422,6 +424,9 @@ class MetadataResolverService:
             )
         if changed:
             self.config_store.invalidate_mappings()
+            LOGGER.warning("Metadata authority changed to %s; cached mappings were invalidated",provider)
+        else:
+            LOGGER.info("Metadata authority %s credentials verified",provider)
         self._show_cache.clear()
         return self.status()
 
@@ -454,6 +459,7 @@ class MetadataResolverService:
     def run_once(self):
         status = self.status()
         if not status.get("configured"):
+            LOGGER.warning("Metadata resolution skipped: provider is not configured")
             return {
                 "configured": False,
                 "provider": None,
@@ -470,6 +476,7 @@ class MetadataResolverService:
             try:
                 resolved = self._resolve_target(client, provider, season)
             except Exception as exc:
+                LOGGER.exception("Metadata resolution failed for AniList ID %s",season.get("anilist_id"))
                 results["unresolved"] += 1
                 results["failed"].append({
                     "season_id": season["local_id"],
@@ -478,6 +485,10 @@ class MetadataResolverService:
                 })
                 continue
             results["resolved" if resolved else "unresolved"] += 1
+        LOGGER.info("Metadata resolution complete: provider=%s resolved=%s unresolved=%s",
+          provider,results["resolved"],results["unresolved"])
+        if results["unresolved"]:
+            LOGGER.warning("Metadata resolution left %s entries unresolved",results["unresolved"])
         return results
 
     def _resolve_target(self, client, provider, season):

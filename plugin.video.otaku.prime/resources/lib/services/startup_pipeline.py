@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """Start Prime's dependent background services in a deterministic order."""
 import threading
+from resources.lib.logging_config import get_logger
+LOGGER=get_logger(__name__)
 
 
 class StartupPipelineService:
@@ -27,21 +29,23 @@ class StartupPipelineService:
         if self._stop.is_set():
             return
         try:
+            LOGGER.info("Starting pipeline step: %s",name)
             self.result_handler(name, function())
         except Exception as exc:
+            LOGGER.exception("Pipeline step failed: %s",name)
             self.error_handler(name, exc)
 
     def _run(self):
+        self._step("kodi-inventory", self.mediator.inventory)
         self._step("watchlist", self.watchlist_sync.run_once)
-        self._step("release", self.release_watchdog.run_once)
-        self._step("kodi-links", self.mediator.start)
+        self._step("kodi-reconcile", self.mediator.reconcile)
         if not self._stop.is_set():
             self.watchlist_sync.start(run_immediately=False)
-            self.release_watchdog.start(run_immediately=False)
 
     def stop(self, timeout=5):
         self._stop.set()
         self.watchlist_sync.stop(timeout=timeout)
-        self.release_watchdog.stop(timeout=timeout)
+        # The legacy .strm release watchdog remains stopped while Alpha8b uses
+        # direct Kodi database projection.
         if self._thread:
             self._thread.join(timeout=timeout)

@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """Periodically synchronize connected watchlists into Prime SQLite."""
 import threading
+from resources.lib.logging_config import get_logger
+LOGGER=get_logger(__name__)
 
 
 class WatchlistSyncService:
@@ -17,6 +19,7 @@ class WatchlistSyncService:
     def run_once(self):
         if self.gate is not None and not self.gate.is_configured():
             status = self.gate.status()
+            LOGGER.warning("Watchlist synchronization blocked: metadata provider is required")
             return [{
                 "blocked": "metadata_provider_required",
                 "configured": False,
@@ -26,14 +29,18 @@ class WatchlistSyncService:
         results = []
         for importer in self.importers:
             try:
+                LOGGER.info("Running watchlist importer %s",importer.__class__.__name__)
                 results.append(importer.sync())
             except Exception as exc:
+                LOGGER.exception("Watchlist importer %s failed",importer.__class__.__name__)
                 self.error_handler(exc)
                 results.append({"error": str(exc)})
         for processor in self.processors:
             try:
+                LOGGER.info("Running watchlist processor %s",processor.__class__.__name__)
                 results.append(processor.run_once())
             except Exception as exc:
+                LOGGER.exception("Watchlist processor %s failed",processor.__class__.__name__)
                 self.error_handler(exc)
                 results.append({"error": str(exc)})
         return results
