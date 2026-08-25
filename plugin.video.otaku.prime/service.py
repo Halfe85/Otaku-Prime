@@ -21,7 +21,7 @@ from resources.lib.database.kodi_inventory import KodiInventoryStore
 from resources.lib.database.app_logs import AppLogStore
 from resources.lib.services.kodi_db_middleware import KodiDbMiddleware
 from resources.lib.services.anilist_release_schedule import AniListReleaseScheduleService
-from resources.lib.services.watchlist_franchise_resolver import UnifiedAniListFranchiseResolverService
+from resources.lib.services.watchlist_franchise_resolver import UnifiedWatchlistFranchiseResolverService
 from resources.lib.services.metadata_structure_resolver import MetadataStructureResolverService
 from resources.lib.services.mediator_service import MediatorService
 from resources.lib.services.release_watchdog import ReleaseWatchdogService
@@ -29,6 +29,11 @@ from resources.lib.services.stream_library import StreamLibraryService
 from resources.lib.services.startup_pipeline import StartupPipelineService
 from resources.lib.services.watchlist_sync import WatchlistSyncService
 from resources.lib.watchlist.anilist_sync import AniListWatchlistImportService
+from resources.lib.watchlist.provider_importers import (
+    MALWatchlistImportService,
+    KitsuWatchlistImportService,
+    SimklWatchlistImportService,
+)
 from resources.lib.web import create_server
 from resources.lib.logging_config import configure_logging,get_logger
 
@@ -143,15 +148,25 @@ def main() -> None:
         schedule_service=AniListReleaseScheduleService(media_store),
         metadata_resolver=metadata_resolver,
     )
-    watchlist_sync = WatchlistSyncService(
-        [AniListWatchlistImportService(
+
+    # Every connected tracker writes its provider-native records into the same
+    # raw watchlist_items table. Relation and metadata placement run only after
+    # all snapshots have been refreshed.
+    watchlist_importers = [
+        AniListWatchlistImportService(
             watchlist_accounts,
             watchlist_preferences,
             media_store,
             watchlist_store=watchlist_items,
-        )],
+        ),
+        MALWatchlistImportService(watchlist_accounts, watchlist_items),
+        KitsuWatchlistImportService(watchlist_accounts, watchlist_items),
+        SimklWatchlistImportService(watchlist_accounts, watchlist_items),
+    ]
+    watchlist_sync = WatchlistSyncService(
+        watchlist_importers,
         processors=[
-            UnifiedAniListFranchiseResolverService(media_store, watchlist_items),
+            UnifiedWatchlistFranchiseResolverService(media_store, watchlist_items),
             metadata_resolver,
         ],
         gate=metadata_resolver,
