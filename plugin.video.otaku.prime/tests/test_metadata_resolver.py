@@ -1,16 +1,22 @@
 import datetime
+import json
 import os
 import sqlite3
 import sys
 import tempfile
 import unittest
+from urllib.parse import parse_qs, urlsplit
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, ROOT)
 
 from resources.lib.database.metadata_provider import MetadataProviderStore
 from resources.lib.database.watchlist_media import WatchlistMediaStore
-from resources.lib.services.metadata_resolver import MetadataResolverService
+from resources.lib.services.metadata_resolver import (
+    MetadataResolverService,
+    TMDBMetadataClient,
+    TVDBMetadataClient,
+)
 from resources.lib.services.watchlist_sync import WatchlistSyncService
 from resources.lib.users import UserStore
 
@@ -19,6 +25,20 @@ def stamp(year, month, day):
     return int(datetime.datetime(
         year, month, day, tzinfo=datetime.timezone.utc
     ).timestamp())
+
+
+class Response:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return False
+
+    def read(self):
+        return json.dumps(self.payload).encode("utf-8")
 
 
 class FakeMetadataClient:
@@ -76,6 +96,55 @@ class FakeMetadataClient:
     def _check_show(show_id):
         if int(show_id) != 100:
             raise AssertionError("unexpected show {}".format(show_id))
+
+
+class MetadataAuthenticationTests(unittest.TestCase):
+    def test_tmdb_bearer_connection_uses_authorization_header(self):
+        requests = []
+
+        def opener(request, timeout):
+            requests.append(request)
+            return Response({"images": {}})
+
+        TMDBMetadataClient(
+            "bearer", "read-token", opener=opener
+        ).test_connection()
+
+        self.assertEqual(1, len(requests))
+        self.assertEqual("Bearer read-token", requests[0].get_header("Authorization"))
+        self.assertNotIn("api_key", parse_qs(urlsplit(requests[0].full_url).query))
+
+    def test_tmdb_v3_api_key_connection_uses_query_parameter(self):
+        requests = []
+
+        def opener(request, timeout):
+            requests.append(request)
+            return Response({"images": {}})
+
+        TMDBMetadataClient(
+            "api_key", "v3-key", opener=opener
+        ).test_connection()
+
+        query = parse_qs(urlsplit(requests[0].full_url).query)
+        self.assertEqual(["v3-key"], query["api_key"])
+        self.assertIsNone(requests[0].get_header("Authorization"))
+
+    def test_tvdb_login_posts_project_key_and_optional_subscriber_pin(self):
+        requests = []
+
+        def opener(request, timeout):
+            requests.append(request)
+            return Response({"data": {"token": "tvdb-token"}})
+
+        client = TVDBMetadataClient(
+            "project-key", "subscriber-pin", opener=opener
+        )
+        self.assertEqual("tvdb-token", client.login())
+
+        body = json.loads(requests[0].data.decode("utf-8"))
+        self.assertEqual("project-key", body["apikey"])
+        self.assertEqual("subscriber-pin", body["pin"])
+        self.assertTrue(requests[0].full_url.endswith("/v4/login"))
 
 
 class MetadataResolverTests(unittest.TestCase):
