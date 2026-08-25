@@ -13,6 +13,9 @@ Otaku Prime 0.1.2 Alpha9
 - Fetch AniList's native MAL mapping and Kitsu's AniList/MAL mappings.
 - Retain every AniList/MAL/Kitsu/Simkl ID returned by Simkl watchlist records.
 - Resolve missing AniList, MAL, Kitsu, and Simkl catalog IDs for every Prime watchlist item, regardless of which tracker accounts are connected.
+- Reject and record Simkl parent-title fallbacks when their IDs disagree with the authoritative watchlist item, instead of overwriting or repeatedly retrying them.
+- Show catalog-identity conflicts separately from watch-progress conflicts in the series-details modal.
+- Use Simkl's current anime watchlist endpoint and report empty or malformed API responses cleanly.
 - Refresh expired MAL and Kitsu access tokens before fetching their lists.
 - Use Simkl activities and delta synchronization during periodic runs instead of skipping Simkl.
 - Update Watchlist Management to show one row with all known IDs, Prime state, and connected sources.

@@ -286,8 +286,14 @@ class SimklWatchlistClient(_JsonClient):
             params["date_from"] = date_from
         if ids_only:
             params["extended"] = "simkl_ids_only"
-        url = SIMKL_API_URL + "/sync/all-items/anime/all?" + urlencode(params)
+        url = SIMKL_API_URL + "/sync/all-items/anime?" + urlencode(params)
         payload = self._request(url, self._headers(access_token))
+        if payload is None:
+            raise RuntimeError("Simkl returned an empty anime watchlist response")
+        if isinstance(payload,list):
+            return payload
+        if not isinstance(payload,dict):
+            raise RuntimeError("Simkl returned an invalid anime watchlist response")
         return payload.get("anime") or []
 
 

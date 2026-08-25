@@ -6,6 +6,7 @@ import unittest
 ROOT=os.path.dirname(os.path.dirname(__file__)); sys.path.insert(0,ROOT)
 from resources.lib.database.watchlist_items import WatchlistItemStore
 from resources.lib.services.watchlist_identity import WatchlistIdentityEnrichmentService
+from resources.lib.services.watchlist_identity import IdentityMappingConflict,SimklIdentityClient
 
 
 class WatchlistIdentityTests(unittest.TestCase):
@@ -40,6 +41,30 @@ class WatchlistIdentityTests(unittest.TestCase):
         result=self.items.list_all()
         self.assertEqual(1,len(result))
         self.assertEqual("anilist,mal",result[0]["connected_providers"])
+
+    def test_parent_fallback_conflict_is_persisted_and_not_retried(self):
+        self.items.replace_provider_snapshot("anilist",[{
+          "provider_item_id":"5978","ids":{"anilist":"5978","mal":"5978"},
+          "english_name":"Kannagi Special","list_status":"PLANNING",
+          "provider_status":"PLANNING","progress":0}])
+        class Client:
+            def resolve(self,item):
+                raise IdentityMappingConflict("Simkl resolved parent AniList 3958")
+        result=WatchlistIdentityEnrichmentService(
+          self.items,client=Client(),request_delay=0).run_once()
+        row=self.items.list_all()[0]
+        self.assertEqual(1,result["unresolved"])
+        self.assertEqual("CONFLICT",row["identity_resolution_status"])
+        self.assertEqual([],self.items.list_missing_provider_ids())
+
+    def test_simkl_client_rejects_detail_for_a_different_anilist_item(self):
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self,*_): return False
+            def read(self): return b'{"ids":{"simkl":31,"anilist":3958,"mal":5978}}'
+        client=SimklIdentityClient(opener=lambda request,timeout:Response())
+        with self.assertRaises(IdentityMappingConflict):
+            client.resolve({"anilist_id":"5978","mal_id":"5978","simkl_id":"31"})
 
 
 if __name__=="__main__": unittest.main()

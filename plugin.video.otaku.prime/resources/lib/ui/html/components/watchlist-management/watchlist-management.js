@@ -87,6 +87,12 @@
     setText("series-modal-sources", value(entry.connected_providers, "No connected sources").split(",").filter(Boolean).length + " connected");
     setText("series-modal-local-id", "Prime ID  " + entry.local_id);
     document.getElementById("series-modal-conflict").hidden = !entry.has_conflict;
+    var identityConflict = document.getElementById("series-modal-identity-conflict");
+    identityConflict.hidden = entry.identity_resolution_status !== "CONFLICT";
+    identityConflict.textContent = entry.identity_resolution_status === "CONFLICT"
+      ? "Catalog identity conflict: " + value(entry.identity_resolution_error,
+        "Simkl pointed to a different anime, so Prime kept the watchlist provider identity.")
+      : "";
     var links = document.getElementById("series-modal-provider-links");
     links.textContent = "";
     providers.forEach(function (provider) { links.appendChild(providerLink(provider, entry)); });

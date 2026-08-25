@@ -40,6 +40,9 @@ class WatchlistItemStore:
           progress INTEGER NOT NULL DEFAULT 0,
           episode_count INTEGER, media_format TEXT, release_date TEXT,
           is_adult INTEGER NOT NULL DEFAULT 0 CHECK(is_adult IN(0,1)),
+          identity_resolution_status TEXT,
+          identity_resolution_error TEXT,
+          identity_checked_at TEXT,
           master_initialized INTEGER NOT NULL DEFAULT 0 CHECK(master_initialized IN(0,1)),
           has_conflict INTEGER NOT NULL DEFAULT 0 CHECK(has_conflict IN(0,1)),
           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -70,6 +73,14 @@ class WatchlistItemStore:
             if legacy:
                 db.execute("ALTER TABLE watchlist_items RENAME TO watchlist_items_alpha8")
             self._create_schema(db)
+            columns={row[1] for row in db.execute("PRAGMA table_info(watchlist_items)")}
+            for column,declaration in (
+                ("identity_resolution_status","TEXT"),
+                ("identity_resolution_error","TEXT"),
+                ("identity_checked_at","TEXT"),
+            ):
+                if column not in columns:
+                    db.execute("ALTER TABLE watchlist_items ADD COLUMN {} {}".format(column,declaration))
             if legacy:
                 rows=db.execute("SELECT * FROM watchlist_items_alpha8").fetchall()
                 for row in rows:
@@ -202,8 +213,17 @@ class WatchlistItemStore:
         """Return canonical items whose provider identity set is incomplete."""
         with self._connection() as db:
             return [dict(row) for row in db.execute("""SELECT * FROM watchlist_items
-              WHERE anilist_id IS NULL OR mal_id IS NULL OR kitsu_id IS NULL OR simkl_id IS NULL
+              WHERE (anilist_id IS NULL OR mal_id IS NULL OR kitsu_id IS NULL OR simkl_id IS NULL)
+              AND COALESCE(identity_resolution_status,'PENDING')='PENDING'
               ORDER BY created_at,local_id""")]
+
+    def record_identity_resolution(self,local_id,status,error=None):
+        with self._connection() as db:
+            cursor=db.execute("""UPDATE watchlist_items SET identity_resolution_status=?,
+              identity_resolution_error=?,identity_checked_at=CURRENT_TIMESTAMP,
+              updated_at=CURRENT_TIMESTAMP WHERE local_id=?""",
+              (str(status),str(error) if error else None,local_id))
+            if cursor.rowcount!=1: raise KeyError("watchlist item not found")
 
     def apply_resolved_ids(self,local_id,ids):
         """Attach verified catalog IDs and merge rows they prove are identical."""
@@ -229,6 +249,13 @@ class WatchlistItemStore:
             assignments.append("updated_at=CURRENT_TIMESTAMP")
             db.execute("UPDATE watchlist_items SET {} WHERE local_id=?".format(
                 ",".join(assignments)),tuple(values)+(local_id,))
+            row=db.execute("SELECT anilist_id,mal_id,kitsu_id,simkl_id FROM watchlist_items WHERE local_id=?",
+                           (local_id,)).fetchone()
+            status="RESOLVED" if all(row[column] for column in
+                     ("anilist_id","mal_id","kitsu_id","simkl_id")) else "PARTIAL"
+            db.execute("""UPDATE watchlist_items SET identity_resolution_status=?,
+              identity_resolution_error=NULL,identity_checked_at=CURRENT_TIMESTAMP WHERE local_id=?""",
+              (status,local_id))
         return local_id
 
     def set_master_state(self,local_id,status,progress):

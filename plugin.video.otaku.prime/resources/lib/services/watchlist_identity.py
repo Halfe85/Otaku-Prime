@@ -17,6 +17,10 @@ LOGGER=get_logger(__name__)
 PROVIDERS=("anilist","mal","kitsu","simkl")
 
 
+class IdentityMappingConflict(ValueError):
+    pass
+
+
 class _StopRedirect(HTTPRedirectHandler):
     def redirect_request(self,req,fp,code,msg,headers,newurl):
         return None
@@ -71,7 +75,14 @@ class SimklIdentityClient:
             raise RuntimeError("Simkl identity request failed: {}".format(exc)) from exc
         ids=payload.get("ids") or {}
         ids["simkl"]=ids.get("simkl") or simkl_id
-        return {name:ids.get(name) for name in PROVIDERS if ids.get(name) not in (None,"")}
+        resolved={name:str(ids[name]) for name in PROVIDERS if ids.get(name) not in (None,"")}
+        disagreements={name:(str(known[name]),resolved[name]) for name in PROVIDERS
+                       if known.get(name) and resolved.get(name) and str(known[name])!=resolved[name]}
+        if disagreements:
+            details=", ".join("{} {} != {}".format(name,*values)
+                              for name,values in sorted(disagreements.items()))
+            raise IdentityMappingConflict("Simkl resolved a different anime item: "+details)
+        return resolved
 
 
 class WatchlistIdentityEnrichmentService:
@@ -93,6 +104,14 @@ class WatchlistIdentityEnrichmentService:
                     if ids:
                         self.store.apply_resolved_ids(item["local_id"],ids); resolved+=1
                     else: unresolved+=1
+                    if not ids:
+                        self.store.record_identity_resolution(item["local_id"],"NOT_FOUND",
+                                                              "No Simkl anime mapping")
+                except IdentityMappingConflict as exc:
+                    unresolved+=1
+                    self.store.record_identity_resolution(item["local_id"],"CONFLICT",str(exc))
+                    LOGGER.warning("Provider ID mapping conflict for Prime item %s: %s",
+                                   item["local_id"],exc)
                 except Exception:
                     failed+=1
                     LOGGER.exception("Provider ID enrichment failed for Prime item %s",item["local_id"])

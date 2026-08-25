@@ -58,5 +58,11 @@ class ProviderImporterTests(unittest.TestCase):
         self.assertEqual(("1","11","21","31"),tuple(row[key] for key in
           ("anilist_id","mal_id","kitsu_id","simkl_id")))
 
+    def test_simkl_current_anime_response_object_is_supported(self):
+        rows=SimklWatchlistImportService._normalize([{"status":"watching",
+          "anime":{"title":"Show","ids":{"simkl":31,"anilist":1,"mal":11,"kitsu":21}}}])
+        self.assertEqual("31",rows[0]["provider_item_id"])
+        self.assertEqual(1,rows[0]["ids"]["anilist"])
+
 
 if __name__=="__main__": unittest.main()
