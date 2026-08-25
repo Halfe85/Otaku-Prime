@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import contextmanager
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -61,7 +62,9 @@ class _JsonClient:
         except HTTPError as exc:
             if exc.code == 401:
                 raise RuntimeError("watchlist provider rejected the access token") from exc
-            raise RuntimeError("watchlist provider request failed with HTTP {}".format(exc.code)) from exc
+            raise RuntimeError(
+                "watchlist provider request failed with HTTP {}".format(exc.code)
+            ) from exc
         except (URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
             raise RuntimeError("watchlist provider request failed: {}".format(exc)) from exc
 
@@ -89,6 +92,7 @@ class MALWatchlistClient(_JsonClient):
 
 
 class MALWatchlistImportService:
+    provider = "mal"
     allow_periodic = True
 
     def __init__(self, accounts, watchlist_store, client=None, user_id=1):
@@ -98,9 +102,10 @@ class MALWatchlistImportService:
         self.user_id = user_id
 
     def sync(self):
-        account = self.accounts.get_credentials(self.user_id, "mal")
+        account = self.accounts.get_credentials(self.user_id, self.provider)
         if not account:
-            return {"provider": "mal", "connected": False, "imported": 0}
+            self.store.replace_provider_snapshot(self.provider, [])
+            return {"provider": self.provider, "connected": False, "imported": 0}
         rows = self.client.fetch(account["access_token"])
         normalized = []
         for row in rows:
@@ -123,8 +128,12 @@ class MALWatchlistImportService:
                 "is_adult": str(node.get("nsfw") or "").lower() == "black",
                 "raw": row,
             })
-        self.store.replace_provider_snapshot("mal", normalized)
-        return {"provider": "mal", "connected": True, "imported": len(normalized)}
+        self.store.replace_provider_snapshot(self.provider, normalized)
+        return {
+            "provider": self.provider,
+            "connected": True,
+            "imported": len(normalized),
+        }
 
 
 class KitsuWatchlistClient(_JsonClient):
@@ -156,6 +165,7 @@ class KitsuWatchlistClient(_JsonClient):
 
 
 class KitsuWatchlistImportService:
+    provider = "kitsu"
     allow_periodic = True
 
     def __init__(self, accounts, watchlist_store, client=None, user_id=1):
@@ -165,9 +175,10 @@ class KitsuWatchlistImportService:
         self.user_id = user_id
 
     def sync(self):
-        account = self.accounts.get_credentials(self.user_id, "kitsu")
+        account = self.accounts.get_credentials(self.user_id, self.provider)
         if not account:
-            return {"provider": "kitsu", "connected": False, "imported": 0}
+            self.store.replace_provider_snapshot(self.provider, [])
+            return {"provider": self.provider, "connected": False, "imported": 0}
         entries, anime_by_id = self.client.fetch(
             account["external_user_id"], account["access_token"]
         )
@@ -199,8 +210,12 @@ class KitsuWatchlistImportService:
                 "is_adult": str(attrs.get("ageRating") or "").upper() == "R18",
                 "raw": {"library_entry": entry, "anime": anime},
             })
-        self.store.replace_provider_snapshot("kitsu", normalized)
-        return {"provider": "kitsu", "connected": True, "imported": len(normalized)}
+        self.store.replace_provider_snapshot(self.provider, normalized)
+        return {
+            "provider": self.provider,
+            "connected": True,
+            "imported": len(normalized),
+        }
 
 
 class SimklWatchlistClient(_JsonClient):
@@ -243,7 +258,9 @@ class SimklWatchlistClient(_JsonClient):
 
 class SimklWatchlistImportService:
     # Simkl explicitly forbids unconditional background polling. WatchlistSync
-    # skips this importer on its periodic timer; startup/manual runs remain safe.
+    # skips this importer on its periodic timer; startup/manual runs use
+    # activities + delta after the initial baseline.
+    provider = "simkl"
     allow_periodic = False
 
     def __init__(self, accounts, watchlist_store, client=None, user_id=1):
@@ -253,11 +270,16 @@ class SimklWatchlistImportService:
         self.user_id = user_id
         self._initialize_state()
 
+    @contextmanager
     def _connection(self):
         db = sqlite3.connect(self.store.db_path, timeout=10)
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA journal_mode=WAL")
-        return db
+        try:
+            with db:
+                yield db
+        finally:
+            db.close()
 
     def _initialize_state(self):
         with self._connection() as db:
@@ -269,7 +291,8 @@ class SimklWatchlistImportService:
     def _state(self, key):
         with self._connection() as db:
             row = db.execute(
-                "SELECT state_value FROM watchlist_sync_state WHERE provider='simkl' AND state_key=?",
+                "SELECT state_value FROM watchlist_sync_state "
+                "WHERE provider='simkl' AND state_key=?",
                 (key,),
             ).fetchone()
             return row[0] if row else None
@@ -279,6 +302,10 @@ class SimklWatchlistImportService:
             db.execute("""INSERT INTO watchlist_sync_state(provider,state_key,state_value)
               VALUES('simkl',?,?) ON CONFLICT(provider,state_key) DO UPDATE SET
               state_value=excluded.state_value,updated_at=CURRENT_TIMESTAMP""", (key, value))
+
+    def _clear_state(self):
+        with self._connection() as db:
+            db.execute("DELETE FROM watchlist_sync_state WHERE provider='simkl'")
 
     @staticmethod
     def _normalize(rows):
@@ -310,7 +337,10 @@ class SimklWatchlistImportService:
         # Preserve unchanged rows: date_from returns only changed items.
         if not normalized:
             return 0
-        existing = {row["provider_item_id"]: row for row in self.store.list_provider("simkl")}
+        existing = {
+            row["provider_item_id"]: row
+            for row in self.store.list_provider(self.provider)
+        }
         for entry in normalized:
             existing[str(entry["provider_item_id"])] = entry
         merged = []
@@ -335,7 +365,7 @@ class SimklWatchlistImportService:
                 "is_adult": bool(row.get("is_adult")),
                 "raw": raw,
             })
-        self.store.replace_provider_snapshot("simkl", merged)
+        self.store.replace_provider_snapshot(self.provider, merged)
         return len(normalized)
 
     def _reconcile_ids(self, current_ids):
@@ -347,34 +377,49 @@ class SimklWatchlistImportService:
             for row in rows:
                 if str(row[0]) not in current_ids:
                     db.execute(
-                        "DELETE FROM watchlist_items WHERE provider='simkl' AND provider_item_id=?",
+                        "DELETE FROM watchlist_items "
+                        "WHERE provider='simkl' AND provider_item_id=?",
                         (str(row[0]),),
                     )
 
     def sync(self):
-        account = self.accounts.get_credentials(self.user_id, "simkl")
+        account = self.accounts.get_credentials(self.user_id, self.provider)
         if not account:
-            return {"provider": "simkl", "connected": False, "imported": 0}
+            self.store.replace_provider_snapshot(self.provider, [])
+            self._clear_state()
+            return {"provider": self.provider, "connected": False, "imported": 0}
+
         token = account["access_token"]
         activities = self.client.activities(token)
-        anime_activity = (activities.get("anime") or {})
+        anime_activity = activities.get("anime") or {}
         current = anime_activity.get("all") or activities.get("all")
         removed = anime_activity.get("removed_from_list")
         previous = self._state("anime_all")
         previous_removed = self._state("anime_removed")
+        has_local_baseline = bool(self.store.list_provider(self.provider))
 
-        if not previous:
+        # Rebuild a full baseline when this is a new connection or local raw
+        # state was cleared/recreated while the timestamp survived.
+        if not previous or not has_local_baseline:
             rows = self.client.anime(token)
             normalized = self._normalize(rows)
-            self.store.replace_provider_snapshot("simkl", normalized)
+            self.store.replace_provider_snapshot(self.provider, normalized)
             self._save_state("anime_all", current or "")
             self._save_state("anime_removed", removed or "")
-            return {"provider": "simkl", "connected": True,
-                    "imported": len(normalized), "mode": "initial"}
+            return {
+                "provider": self.provider,
+                "connected": True,
+                "imported": len(normalized),
+                "mode": "initial",
+            }
 
         if current and current == previous:
-            return {"provider": "simkl", "connected": True,
-                    "imported": 0, "mode": "unchanged"}
+            return {
+                "provider": self.provider,
+                "connected": True,
+                "imported": 0,
+                "mode": "unchanged",
+            }
 
         changed = self._normalize(self.client.anime(token, date_from=previous))
         count = self._merge_delta(changed)
@@ -385,7 +430,12 @@ class SimklWatchlistImportService:
                 if simkl_id is not None:
                     ids.append(simkl_id)
             self._reconcile_ids(ids)
+
         self._save_state("anime_all", current or previous)
         self._save_state("anime_removed", removed or previous_removed or "")
-        return {"provider": "simkl", "connected": True,
-                "imported": count, "mode": "delta"}
+        return {
+            "provider": self.provider,
+            "connected": True,
+            "imported": count,
+            "mode": "delta",
+        }
