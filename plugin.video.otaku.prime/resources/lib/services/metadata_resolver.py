@@ -26,6 +26,32 @@ def _normalize(value):
     return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
 
 
+def _title_variants(value):
+    """Return the original title plus safe provider-search base variants."""
+    title = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not title:
+        return []
+    variants = [title]
+    base = title
+    suffixes = (
+        r"\s*(?:[-:–—]\s*)?(?:part|cour)\s*\d+\s*$",
+        r"\s*(?:[-:–—]\s*)?(?:season\s*\d+|\d+(?:st|nd|rd|th)\s+season)\s*$",
+    )
+    while True:
+        reduced = base
+        for pattern in suffixes:
+            candidate = re.sub(pattern, "", base, flags=re.IGNORECASE).strip()
+            if candidate != base:
+                reduced = candidate
+                break
+        if not reduced or reduced == base:
+            break
+        base = reduced
+        if base not in variants:
+            variants.append(base)
+    return variants
+
+
 def _year(value):
     try:
         return int(str(value or "")[:4])
@@ -254,7 +280,9 @@ class TVDBMetadataClient:
     @staticmethod
     def _aliases(item):
         values=[]
-        for key in ("aliases","translations","overviews"):
+        # Overviews are descriptions, not searchable titles. Including them can
+        # create accidental substring matches against unrelated shows.
+        for key in ("aliases","translations"):
             raw=item.get(key) or []
             if isinstance(raw,dict): raw=list(raw.values())
             if not isinstance(raw,list): raw=[raw]
@@ -538,11 +566,17 @@ class MetadataResolverService:
             self._show_cache[series_id] = show
             return show
 
-        names = [
+        source_names = [
             season.get("franchise_english_name"),
             season.get("franchise_romaji_name"),
+            season.get("english_name"),
+            season.get("romaji_name"),
         ]
-        names = [name for name in names if name]
+        names = []
+        for source_name in source_names:
+            for name in _title_variants(source_name):
+                if name not in names:
+                    names.append(name)
         if not names:
             raise MetadataProviderError("Franchise has no title to search")
         target_year = _year(season.get("franchise_release_date"))

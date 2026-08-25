@@ -3,6 +3,9 @@ Otaku Prime 0.1.2 Alpha8b
 
 Alpha8b supersedes Alpha8 and includes all Alpha8 work below.
 
+- Improve TheTVDB matching for anime with non-Latin primary titles by using title aliases without treating plot overviews as aliases.
+- Search conservative base-title variants when AniList franchise or season names end in numbered season, part, or cour suffixes.
+
 Kodi database adoption:
 - Make verified TMDB or TheTVDB configuration the mandatory gate before watchlist processing.
 - Inventory Kodi TV shows and episodes before importing or resolving watchlist content.

@@ -16,6 +16,7 @@ from resources.lib.services.metadata_resolver import (
     MetadataResolverService,
     TMDBMetadataClient,
     TVDBMetadataClient,
+    _title_variants,
 )
 from resources.lib.services.watchlist_sync import WatchlistSyncService
 from resources.lib.users import UserStore
@@ -156,12 +157,54 @@ class MetadataAuthenticationTests(unittest.TestCase):
         result=client.search_series("Dragon Raja -The Blazing Dawn-",2022)[0]
         self.assertEqual(["Long Zu","Dragon Raja -The Blazing Dawn-"],result["aliases"])
 
+    def test_tvdb_search_does_not_treat_overview_as_title_alias(self):
+        def opener(request, timeout):
+            return Response({"data":[{"tvdb_id":"1","name":"本題",
+              "aliases":["Real Alias"],"overviews":{"eng":"A long plot description"},
+              "first_air_time":"2024-01-01"}]})
+        client=TVDBMetadataClient("key",bearer_token="token",
+          bearer_expires_at=9999999999,opener=opener)
+        result=client.search_series("Real Alias",2024)[0]
+        self.assertEqual(["Real Alias"],result["aliases"])
+
+    def test_title_variants_remove_numbered_season_and_part_suffixes(self):
+        self.assertEqual(
+          ["That Time I Got Reincarnated as a Slime Season 2 Part 2",
+           "That Time I Got Reincarnated as a Slime Season 2",
+           "That Time I Got Reincarnated as a Slime"],
+          _title_variants("That Time I Got Reincarnated as a Slime Season 2 Part 2"))
+        self.assertIn("Tensei Shitara Slime Datta Ken",
+          _title_variants("Tensei Shitara Slime Datta Ken 2nd Season Part 2"))
+
     def test_show_matching_uses_aliases(self):
         match=MetadataResolverService._best_show(
           ["Dragon Raja -The Blazing Dawn-","Long Zu"],2022,
           [{"id":"423688","name":"龙族","original_name":"龙族","year":2022,
             "aliases":["Long Zu","Dragon Raja -The Blazing Dawn-"]}])
         self.assertEqual("423688",match["id"])
+
+    def test_show_resolution_searches_base_title_when_franchise_is_a_season(self):
+        class Client:
+            queries = []
+            def search_series(self, title, year=None):
+                self.queries.append(title)
+                if title == "That Time I Got Reincarnated as a Slime":
+                    return [{"id":"295068","name":title,"year":2018}]
+                return []
+            def get_show(self, show_id):
+                return {"id":show_id,"name":"Slime","seasons":[]}
+
+        resolver=MetadataResolverService.__new__(MetadataResolverService)
+        resolver._show_cache={}
+        resolver.status=lambda: {"provider":"thetvdb"}
+        client=Client()
+        show=resolver._resolve_show(client,{
+          "related_series_id":"series-1",
+          "franchise_english_name":"That Time I Got Reincarnated as a Slime Season 2",
+          "franchise_romaji_name":"Tensei Shitara Slime Datta Ken 2nd Season",
+          "franchise_release_date":"2021-01-12"})
+        self.assertEqual("295068",show["id"])
+        self.assertIn("That Time I Got Reincarnated as a Slime",client.queries)
 
     def test_main_series_ona_is_numbered_but_side_story_ona_is_special(self):
         resolver=MetadataResolverService.__new__(MetadataResolverService)
