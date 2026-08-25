@@ -7,7 +7,7 @@ from urllib.error import HTTPError
 
 from resources.lib.services.anilist_rate_limit import ANILIST_RATE_LIMITER
 
-STATUSES=("CURRENT","COMPLETED","PAUSED","DROPPED","PLANNING")
+STATUSES=("CURRENT","COMPLETED","PAUSED","DROPPED","PLANNING","REPEATING")
 ANILIST_HEADERS={"Content-Type":"application/json","Accept":"application/json",
                  "User-Agent":"Otaku-Prime/0.1.2"}
 
@@ -20,7 +20,7 @@ class AniListWatchlistClient:
 
     def fetch(self,user_id,access_token):
         query="""query($userId:Int!){MediaListCollection(userId:$userId,type:ANIME){
-          lists{status entries{status progress media{id isAdult format episodes
+          lists{status entries{status progress updatedAt media{id idMal isAdult format episodes
             startDate{year month day} title{english romaji native}}}}}}"""
         body=json.dumps({"query":query,"variables":{"userId":int(user_id)}}).encode("utf-8")
         headers=dict(ANILIST_HEADERS); headers["Authorization"]="Bearer "+access_token
@@ -67,7 +67,8 @@ class AniListWatchlistImportService:
             title=titles.get("english") or titles.get("romaji") or titles.get("native")
             if not media.get("id") or not title:
                 continue
-            status=entry.get("status")
+            provider_status=entry.get("status")
+            status="CURRENT" if provider_status=="REPEATING" else provider_status
             progress=max(0,int(entry.get("progress") or 0))
             release_date=self._date(media.get("startDate"))
             is_adult=bool(media.get("isAdult"))
@@ -75,15 +76,18 @@ class AniListWatchlistImportService:
             # Preserve the provider snapshot exactly at the ingestion boundary.
             canonical.append({
                 "provider_item_id":str(media["id"]),
+                "ids":{"anilist":media["id"],"mal":media.get("idMal")},
                 "english_name":titles.get("english"),
                 "romaji_name":titles.get("romaji"),
                 "native_name":titles.get("native"),
                 "list_status":status,
+                "provider_status":provider_status,
                 "progress":progress,
                 "episode_count":media.get("episodes"),
                 "is_adult":is_adult,
                 "media_format":media.get("format"),
                 "release_date":release_date,
+                "provider_updated_at":entry.get("updatedAt"),
                 "raw":entry,
             })
 

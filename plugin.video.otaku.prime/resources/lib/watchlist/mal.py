@@ -128,3 +128,23 @@ class MALAuthenticator:
             refresh_token=refresh_token,
             expires_at=int(time.time()) + expires_in,
         )
+
+    def refresh(self, refresh_token: str) -> tuple[str, str, int]:
+        token_request=Request(MAL_TOKEN_URL,data=urlencode({
+          "client_id":MAL_CLIENT_ID,"grant_type":"refresh_token",
+          "refresh_token":refresh_token}).encode("utf-8"),method="POST",headers={
+          "Content-Type":"application/x-www-form-urlencoded","Accept":"application/json",
+          "User-Agent":"Otaku-Prime/0.1.2"})
+        try:
+            with urlopen(token_request,timeout=self.timeout) as response:
+                data=self._json(response.read(),"MyAnimeList")
+        except HTTPError as exc:
+            raise MALAuthError("MyAnimeList rejected the refresh token.") from exc
+        except (URLError,TimeoutError,OSError) as exc:
+            raise MALAuthError("Unable to refresh MyAnimeList authorization.") from exc
+        access=str(data.get("access_token") or "").strip()
+        refreshed=str(data.get("refresh_token") or refresh_token).strip()
+        expires=int(data.get("expires_in") or 0)
+        if not access or not refreshed or expires<=0:
+            raise MALAuthError("MyAnimeList returned incomplete refreshed credentials.")
+        return access,refreshed,int(time.time())+expires

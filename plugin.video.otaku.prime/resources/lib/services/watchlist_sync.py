@@ -11,8 +11,9 @@ _PIPELINE_LOCK = threading.Lock()
 
 
 class WatchlistSyncService:
-    def __init__(self, importers, interval_seconds=900, error_handler=None):
+    def __init__(self, importers, watchlist_store, interval_seconds=900, error_handler=None):
         self.importers = list(importers)
+        self.watchlist_store = watchlist_store
         self.interval_seconds = max(60, int(interval_seconds))
         self.error_handler = error_handler or (lambda error: None)
         self._stop = threading.Event()
@@ -40,15 +41,6 @@ class WatchlistSyncService:
         for importer in self.importers:
             if self._stop.is_set():
                 return results + [{"cancelled": True, "reason": "pipeline_stopping"}]
-            # Some providers (currently Simkl) explicitly disallow unconditional
-            # timer polling. They still run on startup/manual/user-visible syncs.
-            if periodic and getattr(importer, "allow_periodic", True) is False:
-                results.append({
-                    "provider": getattr(importer, "provider", importer.__class__.__name__),
-                    "skipped": True,
-                    "reason": "provider_disallows_periodic_polling",
-                })
-                continue
             try:
                 LOGGER.info("Running watchlist importer %s",importer.__class__.__name__)
                 results.append(importer.sync())
@@ -57,6 +49,10 @@ class WatchlistSyncService:
                 self.error_handler(exc)
                 results.append({"error": str(exc)})
 
+        merge=self.watchlist_store.finalize_merge()
+        LOGGER.info("Prime watchlist merge complete: items=%s initialized=%s conflicts=%s",
+                    merge["items"],merge["initialized"],merge["conflicts"])
+        results.append({"prime_watchlist":merge})
         return results
 
     def start(self, run_immediately=True):

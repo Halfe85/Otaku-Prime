@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 from contextlib import contextmanager
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from resources.lib.watchlist.mal import MAL_API_URL
+from resources.lib.watchlist.mal import MAL_API_URL, MALAuthenticator
+from resources.lib.watchlist.kitsu import KitsuAuthenticator
 from resources.lib.watchlist.simkl import PACKAGED_CLIENT_ID, SIMKL_API_URL
 
 
@@ -95,17 +97,24 @@ class MALWatchlistImportService:
     provider = "mal"
     allow_periodic = True
 
-    def __init__(self, accounts, watchlist_store, client=None, user_id=1):
+    def __init__(self, accounts, watchlist_store, client=None, user_id=1, authenticator=None):
         self.accounts = accounts
         self.store = watchlist_store
         self.client = client or MALWatchlistClient()
         self.user_id = user_id
+        self.authenticator=authenticator or MALAuthenticator()
 
     def sync(self):
         account = self.accounts.get_credentials(self.user_id, self.provider)
         if not account:
             self.store.replace_provider_snapshot(self.provider, [])
             return {"provider": self.provider, "connected": False, "imported": 0}
+        if account.get("token_expires_at") and int(account["token_expires_at"])<=int(time.time())+60:
+            access,refresh,expires=self.authenticator.refresh(account.get("refresh_token") or "")
+            self.accounts.save(user_id=self.user_id,provider=self.provider,
+              external_user_id=account["external_user_id"],external_username=account["external_username"],
+              access_token=access,refresh_token=refresh,token_expires_at=expires)
+            account["access_token"]=access
         rows = self.client.fetch(account["access_token"])
         normalized = []
         for row in rows:
@@ -117,14 +126,17 @@ class MALWatchlistImportService:
             titles = node.get("alternative_titles") or {}
             normalized.append({
                 "provider_item_id": str(node["id"]),
+                "ids": {"mal": node["id"]},
                 "english_name": titles.get("en") or node.get("title"),
                 "romaji_name": node.get("title"),
                 "native_name": titles.get("ja"),
                 "list_status": status,
+                "provider_status": list_state.get("status"),
                 "progress": int(list_state.get("num_episodes_watched") or 0),
                 "episode_count": node.get("num_episodes"),
                 "media_format": _format(node.get("media_type")),
                 "release_date": node.get("start_date"),
+                "provider_updated_at": list_state.get("updated_at"),
                 "is_adult": str(node.get("nsfw") or "").lower() == "black",
                 "raw": row,
             })
@@ -143,7 +155,7 @@ class KitsuWatchlistClient(_JsonClient):
 
     def fetch(self, user_id, access_token):
         url = self.BASE_URL + "/users/{}/library-entries?".format(user_id) + urlencode({
-            "include": "anime",
+            "include": "anime,anime.mappings",
             "page[limit]": 500,
         })
         headers = {
@@ -154,32 +166,42 @@ class KitsuWatchlistClient(_JsonClient):
         }
         entries = []
         anime = {}
+        mappings = {}
         while url:
             payload = self._request(url, headers)
             entries.extend(payload.get("data") or [])
             for included in payload.get("included") or []:
                 if included.get("type") == "anime" and included.get("id") is not None:
                     anime[str(included["id"])] = included
+                elif included.get("type") == "mappings" and included.get("id") is not None:
+                    mappings[str(included["id"])] = included
             url = ((payload.get("links") or {}).get("next") or "").strip() or None
-        return entries, anime
+        return entries, anime, mappings
 
 
 class KitsuWatchlistImportService:
     provider = "kitsu"
     allow_periodic = True
 
-    def __init__(self, accounts, watchlist_store, client=None, user_id=1):
+    def __init__(self, accounts, watchlist_store, client=None, user_id=1, authenticator=None):
         self.accounts = accounts
         self.store = watchlist_store
         self.client = client or KitsuWatchlistClient()
         self.user_id = user_id
+        self.authenticator=authenticator or KitsuAuthenticator()
 
     def sync(self):
         account = self.accounts.get_credentials(self.user_id, self.provider)
         if not account:
             self.store.replace_provider_snapshot(self.provider, [])
             return {"provider": self.provider, "connected": False, "imported": 0}
-        entries, anime_by_id = self.client.fetch(
+        if account.get("token_expires_at") and int(account["token_expires_at"])<=int(time.time())+60:
+            access,refresh,expires=self.authenticator.refresh(account.get("refresh_token") or "")
+            self.accounts.save(user_id=self.user_id,provider=self.provider,
+              external_user_id=account["external_user_id"],external_username=account["external_username"],
+              access_token=access,refresh_token=refresh,token_expires_at=expires)
+            account["access_token"]=access
+        entries, anime_by_id, mappings_by_id = self.client.fetch(
             account["external_user_id"], account["access_token"]
         )
         normalized = []
@@ -197,16 +219,29 @@ class KitsuWatchlistImportService:
             if not status:
                 continue
             titles = attrs.get("titles") or {}
+            ids={"kitsu":anime["id"]}
+            mapping_refs=(((anime.get("relationships") or {}).get("mappings") or {}).get("data") or [])
+            for ref in mapping_refs:
+                mapping=mappings_by_id.get(str(ref.get("id"))) or {}
+                mapping_attrs=mapping.get("attributes") or {}
+                site=str(mapping_attrs.get("externalSite") or "").upper()
+                external_id=mapping_attrs.get("externalId")
+                if external_id not in (None,""):
+                    if site=="ANILIST_ANIME": ids["anilist"]=external_id
+                    elif site=="MYANIMELIST_ANIME": ids["mal"]=external_id
             normalized.append({
                 "provider_item_id": str(anime["id"]),
+                "ids":ids,
                 "english_name": titles.get("en") or attrs.get("canonicalTitle"),
                 "romaji_name": titles.get("en_jp") or attrs.get("canonicalTitle"),
                 "native_name": titles.get("ja_jp"),
                 "list_status": status,
+                "provider_status": entry_attrs.get("status"),
                 "progress": int(entry_attrs.get("progress") or 0),
                 "episode_count": attrs.get("episodeCount"),
                 "media_format": _format(attrs.get("subtype")),
                 "release_date": attrs.get("startDate"),
+                "provider_updated_at": entry_attrs.get("updatedAt"),
                 "is_adult": str(attrs.get("ageRating") or "").upper() == "R18",
                 "raw": {"library_entry": entry, "anime": anime},
             })
@@ -257,9 +292,8 @@ class SimklWatchlistClient(_JsonClient):
 
 
 class SimklWatchlistImportService:
-    # Simkl explicitly forbids unconditional background polling. WatchlistSync
-    # skips this importer on its periodic timer; startup/manual runs use
-    # activities + delta after the initial baseline.
+    # Periodic runs only call the cheap activities endpoint first. Full data is
+    # fetched when Simkl reports a changed anime timestamp.
     provider = "simkl"
     allow_periodic = False
 
@@ -318,16 +352,19 @@ class SimklWatchlistImportService:
                 continue
             normalized.append({
                 "provider_item_id": str(ids["simkl"]),
+                "ids":{name:ids.get(name) for name in ("anilist","mal","kitsu","simkl")},
                 "english_name": show.get("title"),
                 "romaji_name": show.get("title"),
                 "native_name": None,
                 "list_status": status,
+                "provider_status": row.get("status"),
                 "progress": int(row.get("watched_episodes_count") or 0),
                 "episode_count": row.get("total_episodes_count"),
                 "media_format": _format(row.get("anime_type")),
                 # Simkl summary data gives a year but not an exact first-air date;
                 # Preserve an unknown release date instead of manufacturing one.
                 "release_date": None,
+                "provider_updated_at": row.get("last_watched_at") or row.get("added_to_watchlist_at"),
                 "is_adult": False,
                 "raw": row,
             })
@@ -354,33 +391,22 @@ class SimklWatchlistImportService:
                 raw = {}
             merged.append({
                 "provider_item_id": item_id,
+                "ids":{name:row.get(name+"_id") for name in ("anilist","mal","kitsu","simkl")},
                 "english_name": row.get("english_name"),
                 "romaji_name": row.get("romaji_name"),
                 "native_name": row.get("native_name"),
                 "list_status": row.get("list_status"),
+                "provider_status":row.get("provider_status") or row.get("status"),
                 "progress": row.get("progress"),
                 "episode_count": row.get("episode_count"),
                 "media_format": row.get("media_format"),
                 "release_date": row.get("release_date"),
+                "provider_updated_at":row.get("provider_updated_at"),
                 "is_adult": bool(row.get("is_adult")),
                 "raw": raw,
             })
         self.store.replace_provider_snapshot(self.provider, merged)
         return len(normalized)
-
-    def _reconcile_ids(self, current_ids):
-        current_ids = {str(value) for value in current_ids}
-        with self._connection() as db:
-            rows = db.execute(
-                "SELECT provider_item_id FROM watchlist_items WHERE provider='simkl'"
-            ).fetchall()
-            for row in rows:
-                if str(row[0]) not in current_ids:
-                    db.execute(
-                        "DELETE FROM watchlist_items "
-                        "WHERE provider='simkl' AND provider_item_id=?",
-                        (str(row[0]),),
-                    )
 
     def sync(self):
         account = self.accounts.get_credentials(self.user_id, self.provider)
@@ -424,12 +450,9 @@ class SimklWatchlistImportService:
         changed = self._normalize(self.client.anime(token, date_from=previous))
         count = self._merge_delta(changed)
         if removed and removed != previous_removed:
-            ids = []
-            for row in self.client.anime(token, ids_only=True):
-                simkl_id = ((row.get("show") or {}).get("ids") or {}).get("simkl")
-                if simkl_id is not None:
-                    ids.append(simkl_id)
-            self._reconcile_ids(ids)
+            normalized=self._normalize(self.client.anime(token))
+            self.store.replace_provider_snapshot(self.provider,normalized)
+            count=len(normalized)
 
         self._save_state("anime_all", current or previous)
         self._save_state("anime_removed", removed or previous_removed or "")

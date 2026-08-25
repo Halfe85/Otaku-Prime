@@ -7,7 +7,7 @@ import unittest
 
 ROOT=os.path.dirname(os.path.dirname(__file__)); sys.path.insert(0,ROOT)
 from resources.lib.database.watchlist_accounts import WatchlistAccountStore
-from resources.lib.database.watchlist_items import RAW_COLUMNS, WatchlistItemStore
+from resources.lib.database.watchlist_items import WatchlistItemStore
 from resources.lib.users import UserStore
 from resources.lib.watchlist.anilist_sync import AniListWatchlistClient, AniListWatchlistImportService
 
@@ -15,7 +15,7 @@ from resources.lib.watchlist.anilist_sync import AniListWatchlistClient, AniList
 class Client:
     def fetch(self,user_id,token):
         return [
-          {"status":"CURRENT","progress":2,"media":{"id":1,"isAdult":False,
+          {"status":"CURRENT","progress":2,"updatedAt":100,"media":{"id":1,"idMal":11,"isAdult":False,
            "format":"TV","episodes":12,"startDate":{"year":2020,"month":1,"day":2},
            "title":{"english":"Show","romaji":"Show"}}},
           {"status":"PLANNING","progress":0,"media":{"id":2,"isAdult":True,
@@ -61,16 +61,21 @@ class AniListSyncTests(unittest.TestCase):
         self.assertFalse(self.importer.sync()["connected"])
         self.assertEqual([],self.items.list_provider("anilist"))
 
-    def test_legacy_processed_columns_are_removed_without_losing_raw_rows(self):
-        self.importer.sync()
-        with sqlite3.connect(self.path) as db:
-            db.execute("ALTER TABLE watchlist_items ADD COLUMN franchise_local_id TEXT")
-            db.execute("UPDATE watchlist_items SET franchise_local_id='legacy'")
-        self.items.initialize()
-        with sqlite3.connect(self.path) as db:
-            columns={row[1] for row in db.execute("PRAGMA table_info(watchlist_items)")}
-        self.assertEqual(set(RAW_COLUMNS),columns)
-        self.assertEqual(2,len(self.items.list_provider("anilist")))
+    def test_native_cross_ids_are_saved_on_canonical_item(self):
+        self.importer.sync(); self.items.finalize_merge()
+        row={item["anilist_id"]:item for item in self.items.list_all()}["1"]
+        self.assertEqual("11",row["mal_id"])
+        self.assertEqual("CURRENT",row["status"])
+
+    def test_repeating_is_preserved_but_normalized_to_watching(self):
+        class RepeatingClient:
+            def fetch(self,user_id,token):
+                return [{"status":"REPEATING","progress":3,"media":{"id":9,
+                  "title":{"english":"Again"}}}]
+        AniListWatchlistImportService(self.accounts,self.items,client=RepeatingClient()).sync()
+        row=self.items.list_provider("anilist")[0]
+        self.assertEqual("REPEATING",row["provider_status"])
+        self.assertEqual("CURRENT",row["status"])
 
     def test_http_client_identifies_addon_to_anilist(self):
         captured=[]

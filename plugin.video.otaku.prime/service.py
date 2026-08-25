@@ -73,6 +73,7 @@ def main() -> None:
     ]
     watchlist_sync = WatchlistSyncService(
         watchlist_importers,
+        watchlist_items,
         error_handler=lambda exc: log("ERROR","watchlist","Watchlist sync failed: {}".format(exc)),
     )
 
@@ -100,7 +101,7 @@ def main() -> None:
     server_thread.start()
     watchlist_sync.start(run_immediately=True)
     log("INFO","service","Web service started on {}:{}".format(WEB_HOST,WEB_PORT))
-    log("INFO","watchlist","Raw watchlist ingestion enabled; no post-fetch processing is active")
+    log("INFO","watchlist","Alpha9 canonical Prime watchlist synchronization is active")
 
     xbmc.log(
         f"OTAKU PRIME: web service started on {WEB_HOST}:{WEB_PORT}",

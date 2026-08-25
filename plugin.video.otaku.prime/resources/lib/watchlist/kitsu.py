@@ -8,6 +8,7 @@ import json
 import time
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+from urllib.parse import urlencode
 
 
 KITSU_API_URL = "https://kitsu.io/api"
@@ -118,3 +119,21 @@ class KitsuAuthenticator:
             refresh_token=refresh_token,
             expires_at=int(time.time()) + expires_in,
         )
+
+    def refresh(self, refresh_token: str) -> tuple[str, str, int]:
+        request=Request(KITSU_API_URL+"/oauth/token",data=urlencode({
+          "grant_type":"refresh_token","refresh_token":refresh_token}).encode("utf-8"),
+          method="POST",headers={"Content-Type":"application/x-www-form-urlencoded",
+          "Accept":"application/json","User-Agent":"Otaku-Prime/0.1.2"})
+        try:
+            with urlopen(request,timeout=self.timeout) as response: data=self._json(response.read())
+        except HTTPError as exc:
+            raise KitsuAuthError("Kitsu rejected the refresh token.") from exc
+        except (URLError,TimeoutError,OSError) as exc:
+            raise KitsuAuthError("Unable to refresh Kitsu authorization.") from exc
+        access=str(data.get("access_token") or "").strip()
+        refreshed=str(data.get("refresh_token") or refresh_token).strip()
+        expires=int(data.get("expires_in") or 0)
+        if not access or not refreshed or expires<=0:
+            raise KitsuAuthError("Kitsu returned incomplete refreshed credentials.")
+        return access,refreshed,int(time.time())+expires

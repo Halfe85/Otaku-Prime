@@ -1,16 +1,18 @@
-Otaku Prime 0.1.2 Alpha8b
-=========================
+Otaku Prime 0.1.2 Alpha9
+========================
 
-Alpha8b supersedes the abandoned resolver/library direction from Alpha8.
-
-- Define raw watchlist ingestion as Prime's current application boundary.
-- Keep local administrator login and forced first-password replacement.
-- Keep AniList, MyAnimeList, Kitsu, and Simkl account connection flows.
-- Fetch each connected provider into the canonical provider-tagged `watchlist_items` table.
-- Preserve provider IDs, titles, list status, progress, episode count, format, release date, adult flag, and original provider JSON.
-- Show the raw multi-provider table in Watchlist Management with responsive paging, search, and status filtering.
-- Refresh raw snapshots at startup, on supported periodic intervals, and after account connection changes.
-- Remove the TMDB and TheTVDB configuration dependency and mandatory metadata gate.
-- Remove franchise/relation resolution, metadata structure resolution, catalogue promotion, and watchlist mediation.
-- Remove Kodi inventory, ownership reconciliation, direct database projection, and watch-status projection.
-- Transactionally remove obsolete resolver/placement columns from existing `watchlist_items` tables while preserving raw fetched rows.
+- Replace provider-separated watchlist rows with one canonical Prime watchlist item per verified anime identity.
+- Add AniList, MyAnimeList, Kitsu, and Simkl ID columns to every canonical item.
+- Keep provider snapshots as connector state rather than separate user-facing watchlists.
+- Merge provider entries only through verified overlapping IDs; never merge by title guessing.
+- Preserve each provider's original status, normalized status, progress, update time, and raw response.
+- Normalize watching, completed, paused/on-hold, dropped, and planning states across all four trackers.
+- Preserve AniList REPEATING and normalize it to Prime's watching state.
+- Make Prime's canonical status and progress authoritative after the initial merge.
+- Detect provider disagreements without overwriting Prime's master state.
+- Fetch AniList's native MAL mapping and Kitsu's AniList/MAL mappings.
+- Retain every AniList/MAL/Kitsu/Simkl ID returned by Simkl watchlist records.
+- Refresh expired MAL and Kitsu access tokens before fetching their lists.
+- Use Simkl activities and delta synchronization during periodic runs instead of skipping Simkl.
+- Update Watchlist Management to show one row with all known IDs, Prime state, and connected sources.
+- Migrate Alpha8b provider rows into the Alpha9 canonical schema without losing fetched entries.
