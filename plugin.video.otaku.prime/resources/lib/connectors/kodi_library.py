@@ -39,12 +39,6 @@ class KodiLibraryConnector:
         )
         return result.get("tvshows", [])
 
-    def get_movies(self) -> Iterable[dict]:
-        result = self._call(
-            "VideoLibrary.GetMovies", ("title", "originaltitle", "year", "file", "uniqueid")
-        )
-        return result.get("movies", [])
-
     def get_episodes(self) -> Iterable[dict]:
         result = self._call(
             "VideoLibrary.GetEpisodes",
@@ -84,7 +78,7 @@ class KodiLibrarySynchronizer:
         }
 
     def sync(self) -> Dict[str, int]:
-        counts = {"series": 0, "movies": 0, "skipped": 0}
+        counts = {"series": 0, "skipped": 0}
         for item in self.library.get_tvshows():
             ids = self._provider_ids(item)
             if not ids:
@@ -108,21 +102,4 @@ class KodiLibrarySynchronizer:
             )
             counts["series"] += 1
 
-        for item in self.library.get_movies():
-            ids = self._provider_ids(item)
-            if not ids:
-                counts["skipped"] += 1
-                continue
-            local_id = self.media_store.upsert_movie(
-                english_name=item.get("title"),
-                romaji_name=item.get("originaltitle"),
-                **ids
-            )
-            self.media_store.link_kodi(
-                "movie",
-                local_id,
-                item["movieid"],
-                kodi_path=item.get("file"),
-            )
-            counts["movies"] += 1
         return counts

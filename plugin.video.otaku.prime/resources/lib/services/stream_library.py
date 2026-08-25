@@ -22,15 +22,10 @@ class StreamLibraryService:
         self.addon_id = addon_id
 
     @property
-    def movies_root(self) -> str:
-        return os.path.join(self.library_root, "movies")
-
-    @property
     def tv_series_root(self) -> str:
         return os.path.join(self.library_root, "tv-series")
 
     def initialize(self) -> None:
-        os.makedirs(self.movies_root, exist_ok=True)
         os.makedirs(self.tv_series_root, exist_ok=True)
 
     def episode_path(self, series: dict, episode: dict) -> str:
@@ -57,28 +52,6 @@ class StreamLibraryService:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         stream_url = "plugin://{}/play/episode/{}\n".format(
             self.addon_id, episode.get("local_id", episode.get("local_episode_id"))
-        )
-        if not os.path.exists(path) or self._read(path) != stream_url:
-            temporary = path + ".tmp"
-            with open(temporary, "w", encoding="utf-8", newline="\n") as handle:
-                handle.write(stream_url)
-            os.replace(temporary, path)
-        return path
-
-    def movie_path(self, movie: dict) -> str:
-        title = safe_name(
-            movie.get("english_name") or movie.get("romaji_name"),
-            "Movie {}".format(movie["local_id"]),
-        )
-        year = movie.get("year") or movie.get("release_year")
-        filename = "{}{}.strm".format(title, " {}".format(int(year)) if year else "")
-        return os.path.join(self.movies_root, filename)
-
-    def write_movie(self, movie: dict) -> str:
-        path = self.movie_path(movie)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        stream_url = "plugin://{}/play/movie/{}\n".format(
-            self.addon_id, movie["local_id"]
         )
         if not os.path.exists(path) or self._read(path) != stream_url:
             temporary = path + ".tmp"

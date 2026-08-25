@@ -14,8 +14,8 @@ class KodiSourceSetupService:
     its existing video database. This service deliberately never opens that DB.
     """
 
-    SOURCES = (("Otaku Prime Movies", "movies_root"),
-               ("Otaku Prime TV Shows", "tv_series_root"))
+    SOURCES = (("Otaku Prime TV Shows", "tv_series_root"),)
+    RETIRED_SOURCE_NAMES = ("Otaku Prime Movies",)
 
     def __init__(self, kodi_profile, stream_library):
         self.path = os.path.join(kodi_profile, "sources.xml")
@@ -26,6 +26,12 @@ class KodiSourceSetupService:
         video = root.find("video")
         if video is None:
             video = ET.SubElement(root, "video")
+        removed = []
+        for source in list(video.findall("source")):
+            name = source.findtext("name")
+            if name in self.RETIRED_SOURCE_NAMES:
+                video.remove(source)
+                removed.append(name)
         added = []
         for name, attribute in self.SOURCES:
             path = self._directory(getattr(self.stream_library, attribute))
@@ -36,9 +42,10 @@ class KodiSourceSetupService:
                 ET.SubElement(source, "path", {"pathversion": "1"}).text = path
                 ET.SubElement(source, "allowsharing").text = "true"
                 added.append(name)
-        if added:
+        if added or removed:
             self._write(root)
-        return {"path": self.path, "added": added, "restart_required": bool(added)}
+        return {"path": self.path, "added": added, "removed": removed,
+                "restart_required": bool(added or removed)}
 
     def _read(self):
         if not os.path.exists(self.path):

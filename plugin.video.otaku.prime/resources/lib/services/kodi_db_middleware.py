@@ -69,12 +69,6 @@ class KodiDbMiddleware:
             {"tvshowid": int(kodi_tvshow_id), "playcount": 1 if watched else 0},
         )
 
-    def set_movie_watched(self, kodi_movie_id: int, watched: bool) -> None:
-        self._set_details(
-            "VideoLibrary.SetMovieDetails",
-            {"movieid": int(kodi_movie_id), "playcount": 1 if watched else 0},
-        )
-
     def _set_details(self, method: str, params: dict) -> None:
         self._request_id += 1
         response = json.loads(

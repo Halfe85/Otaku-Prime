@@ -58,23 +58,11 @@ class StreamLibraryServiceTests(unittest.TestCase):
             self.assertIn("Fate_stay night", path)
             self.assertTrue(path.endswith("Fate_stay night - S02E01.strm"))
 
-    def test_creates_two_source_roots_and_flat_movie_file(self):
+    def test_creates_only_tv_source_root(self):
         with tempfile.TemporaryDirectory() as directory:
             writer = StreamLibraryService(directory)
             writer.initialize()
-            self.assertTrue(os.path.isdir(writer.movies_root))
             self.assertTrue(os.path.isdir(writer.tv_series_root))
-            path = writer.write_movie({
-                "local_id": "movie-id", "english_name": "Movie Title", "year": 2024
-            })
-            self.assertEqual(
-                os.path.join(writer.movies_root, "Movie Title 2024.strm"), path
-            )
-            with open(path, encoding="utf-8") as handle:
-                self.assertEqual(
-                    "plugin://plugin.video.otaku.prime/play/movie/movie-id\n",
-                    handle.read(),
-                )
 
 
 class KodiDbMiddlewareTests(unittest.TestCase):
@@ -92,21 +80,18 @@ class KodiDbMiddlewareTests(unittest.TestCase):
         middleware = KodiDbMiddleware(object(), execute)
         middleware.set_episode_watched(12, True)
         middleware.set_series_watched(11, True)
-        middleware.set_movie_watched(13, False)
         middleware.scan("/prime/library")
 
         self.assertEqual(
             [
                 "VideoLibrary.SetEpisodeDetails",
                 "VideoLibrary.SetTVShowDetails",
-                "VideoLibrary.SetMovieDetails",
                 "Files.GetSources",
                 "VideoLibrary.Scan",
             ],
             [request["method"] for request in requests],
         )
         self.assertEqual(1, requests[0]["params"]["playcount"])
-        self.assertEqual(0, requests[2]["params"]["playcount"])
 
     def test_scan_refuses_unconfigured_source(self):
         def execute(payload):

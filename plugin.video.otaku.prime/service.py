@@ -85,8 +85,12 @@ def main() -> None:
     else:
         if source_result["added"]:
             log("INFO", "kodi-library",
-                "Registered {}; restart Kodi, then assign Movies/TV Shows content once"
+                "Registered {}; restart Kodi, then assign TV Shows content once"
                 .format(", ".join(source_result["added"])))
+        if source_result["removed"]:
+            log("INFO", "kodi-library",
+                "Retired {}; restart Kodi to unload the old source"
+                .format(", ".join(source_result["removed"])))
     release_watchdog = ReleaseWatchdogService(
         media_store,
         mediator.stream_library,
@@ -128,7 +132,6 @@ def main() -> None:
     background.start()
     log("INFO","service","Web service started on {}:{}".format(WEB_HOST,WEB_PORT))
     log("INFO","kodi-library","Using Kodi's existing video database; advancedsettings.xml is unchanged")
-    log("INFO","kodi-library","Movie scan source: {}".format(mediator.stream_library.movies_root))
     log("INFO","kodi-library","TV scan source: {}".format(mediator.stream_library.tv_series_root))
 
     xbmc.log(

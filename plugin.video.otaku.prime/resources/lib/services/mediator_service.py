@@ -33,5 +33,3 @@ class MediatorService:
             self.kodi_db.set_series_watched(link["kodi_tvshow_id"], watched)
         elif media_type == "episode":
             self.kodi_db.set_episode_watched(link["kodi_episode_id"], watched)
-        elif media_type == "movie":
-            self.kodi_db.set_movie_watched(link["kodi_movie_id"], watched)
