@@ -43,6 +43,15 @@ class SimklIdentityClient:
     def _headers():
         return {"Accept":"application/json","User-Agent":"Otaku-Prime/0.1.2"}
 
+    def _json(self,url):
+        try:
+            with self._open(Request(url,headers=self._headers()),timeout=self.timeout) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            raise RuntimeError("Simkl identity request failed with HTTP {}".format(exc.code)) from exc
+        except (URLError,TimeoutError,OSError,ValueError,json.JSONDecodeError) as exc:
+            raise RuntimeError("Simkl identity request failed: {}".format(exc)) from exc
+
     def _simkl_id(self,ids):
         if ids.get("simkl"): return str(ids["simkl"])
         source=next(((name,str(ids[name])) for name in ("anilist","mal","kitsu")
@@ -61,23 +70,47 @@ class SimklIdentityClient:
         match=re.search(r"/(?:anime|tv)/(\d+)(?:/|$)",urlparse(location).path)
         return match.group(1) if match else None
 
+    def _detail(self,simkl_id):
+        url=SIMKL_API_URL+"/anime/{}?{}".format(simkl_id,self._params())
+        return self._json(url)
+
+    def _search(self,provider,value):
+        url=SIMKL_API_URL+"/search/id?"+self._params({provider:str(value)})
+        payload=self._json(url)
+        return payload if isinstance(payload,list) else []
+
+    @staticmethod
+    def _resolved_ids(payload,simkl_id):
+        ids=(payload or {}).get("ids") or {}
+        ids["simkl"]=ids.get("simkl") or simkl_id
+        return {name:str(ids[name]) for name in PROVIDERS if ids.get(name) not in (None,"")}
+
+    @staticmethod
+    def _disagreements(known,resolved):
+        return {name:(str(known[name]),resolved[name]) for name in PROVIDERS
+                if known.get(name) and resolved.get(name) and str(known[name])!=resolved[name]}
+
     def resolve(self,item):
         known={name:item.get(name+"_id") for name in PROVIDERS}
         simkl_id=self._simkl_id(known)
         if not simkl_id: return {}
-        url=SIMKL_API_URL+"/anime/{}?{}".format(simkl_id,self._params())
-        try:
-            with self._open(Request(url,headers=self._headers()),timeout=self.timeout) as response:
-                payload=json.loads(response.read().decode("utf-8"))
-        except HTTPError as exc:
-            raise RuntimeError("Simkl identity request failed with HTTP {}".format(exc.code)) from exc
-        except (URLError,TimeoutError,OSError,ValueError,json.JSONDecodeError) as exc:
-            raise RuntimeError("Simkl identity request failed: {}".format(exc)) from exc
-        ids=payload.get("ids") or {}
-        ids["simkl"]=ids.get("simkl") or simkl_id
-        resolved={name:str(ids[name]) for name in PROVIDERS if ids.get(name) not in (None,"")}
-        disagreements={name:(str(known[name]),resolved[name]) for name in PROVIDERS
-                       if known.get(name) and resolved.get(name) and str(known[name])!=resolved[name]}
+        resolved=self._resolved_ids(self._detail(simkl_id),simkl_id)
+        disagreements=self._disagreements(known,resolved)
+        # Redirect deliberately falls back to parent titles for some specials,
+        # OVAs and films. Search each authoritative native ID only in that case,
+        # then require the detail record to agree with every ID already known.
+        if disagreements:
+            tried=set()
+            for provider in ("mal","anilist","kitsu"):
+                if not known.get(provider): continue
+                for candidate in self._search(provider,known[provider]):
+                    if candidate.get("type")!="anime": continue
+                    candidate_id=str(((candidate.get("ids") or {}).get("simkl") or ""))
+                    if not candidate_id or candidate_id in tried: continue
+                    tried.add(candidate_id)
+                    candidate_ids=self._resolved_ids(self._detail(candidate_id),candidate_id)
+                    if not self._disagreements(known,candidate_ids):
+                        return candidate_ids
         if disagreements:
             details=", ".join("{} {} != {}".format(name,*values)
                               for name,values in sorted(disagreements.items()))
@@ -109,7 +142,7 @@ class WatchlistIdentityEnrichmentService:
                                                               "No Simkl anime mapping")
                 except IdentityMappingConflict as exc:
                     unresolved+=1
-                    self.store.record_identity_resolution(item["local_id"],"CONFLICT",str(exc))
+                    self.store.record_identity_resolution(item["local_id"],"CONFLICT_EXACT",str(exc))
                     LOGGER.warning("Provider ID mapping conflict for Prime item %s: %s",
                                    item["local_id"],exc)
                 except Exception:

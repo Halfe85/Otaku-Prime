@@ -88,8 +88,9 @@
     setText("series-modal-local-id", "Prime ID  " + entry.local_id);
     document.getElementById("series-modal-conflict").hidden = !entry.has_conflict;
     var identityConflict = document.getElementById("series-modal-identity-conflict");
-    identityConflict.hidden = entry.identity_resolution_status !== "CONFLICT";
-    identityConflict.textContent = entry.identity_resolution_status === "CONFLICT"
+    var hasIdentityConflict = String(entry.identity_resolution_status || "").indexOf("CONFLICT") === 0;
+    identityConflict.hidden = !hasIdentityConflict;
+    identityConflict.textContent = hasIdentityConflict
       ? "Catalog identity conflict: " + value(entry.identity_resolution_error,
         "Simkl pointed to a different anime, so Prime kept the watchlist provider identity.")
       : "";

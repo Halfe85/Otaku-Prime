@@ -54,7 +54,7 @@ class WatchlistIdentityTests(unittest.TestCase):
           self.items,client=Client(),request_delay=0).run_once()
         row=self.items.list_all()[0]
         self.assertEqual(1,result["unresolved"])
-        self.assertEqual("CONFLICT",row["identity_resolution_status"])
+        self.assertEqual("CONFLICT_EXACT",row["identity_resolution_status"])
         self.assertEqual([],self.items.list_missing_provider_ids())
 
     def test_simkl_client_rejects_detail_for_a_different_anilist_item(self):
@@ -65,6 +65,18 @@ class WatchlistIdentityTests(unittest.TestCase):
         client=SimklIdentityClient(opener=lambda request,timeout:Response())
         with self.assertRaises(IdentityMappingConflict):
             client.resolve({"anilist_id":"5978","mal_id":"5978","simkl_id":"31"})
+
+    def test_simkl_client_recovers_exact_special_after_parent_redirect(self):
+        class Client(SimklIdentityClient):
+            def _simkl_id(self,ids): return "31"
+            def _detail(self,simkl_id):
+                if simkl_id=="31":
+                    return {"ids":{"simkl":31,"anilist":3958,"mal":3958}}
+                return {"ids":{"simkl":32,"anilist":5978,"mal":5978,"kitsu":99}}
+            def _search(self,provider,value):
+                return [{"type":"anime","ids":{"simkl":32}}]
+        result=Client().resolve({"anilist_id":"5978","mal_id":"5978"})
+        self.assertEqual({"simkl":"32","anilist":"5978","mal":"5978","kitsu":"99"},result)
 
 
 if __name__=="__main__": unittest.main()

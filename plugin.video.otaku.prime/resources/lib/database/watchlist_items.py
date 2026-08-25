@@ -81,6 +81,10 @@ class WatchlistItemStore:
             ):
                 if column not in columns:
                     db.execute("ALTER TABLE watchlist_items ADD COLUMN {} {}".format(column,declaration))
+            # Redirect-only Alpha9 conflicts predate exact external-ID fallback.
+            # Revisit them once; confirmed exact-search conflicts use a new state.
+            db.execute("""UPDATE watchlist_items SET identity_resolution_status='PENDING',
+              identity_resolution_error=NULL WHERE identity_resolution_status='CONFLICT'""")
             if legacy:
                 rows=db.execute("SELECT * FROM watchlist_items_alpha8").fetchall()
                 for row in rows:
