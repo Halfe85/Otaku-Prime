@@ -137,7 +137,7 @@ def main() -> None:
         log(
             "INFO",
             "metadata",
-            "Watchlist synchronization is blocked until TMDB or TheTVDB is configured",
+            "Raw watchlists and franchise relations can sync; provider placement waits for TMDB or TheTVDB configuration",
         )
 
     release_watchdog = ReleaseWatchdogService(
@@ -174,7 +174,7 @@ def main() -> None:
             ),
             metadata_resolver,
         ],
-        gate=metadata_resolver,
+        gate=None,
         error_handler=lambda exc: log("ERROR","watchlist","Watchlist sync failed: {}".format(exc)),
     )
 
