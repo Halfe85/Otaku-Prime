@@ -19,8 +19,8 @@ class Mediator:
 
 class StartupPipelineTests(unittest.TestCase):
     def test_initial_chain_precedes_periodic_watchdogs(self):
-        events=[]; watchlist=Component("watchlist",events); release=Component("release",events)
-        pipeline=StartupPipelineService(watchlist,release,Mediator(events))
+        events=[]; watchlist=Component("watchlist",events)
+        pipeline=StartupPipelineService(watchlist,Mediator(events))
         pipeline.start(); pipeline._thread.join(timeout=2)
         self.assertEqual(["kodi-inventory","watchlist","kodi-reconcile",
           ("watchlist",False)],events)

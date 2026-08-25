@@ -93,22 +93,6 @@ class WatchlistMediaStore:
               watched INTEGER NOT NULL CHECK(watched IN(0,1)), attempts INTEGER NOT NULL DEFAULT 0,
               last_error TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
               completed_at TEXT, UNIQUE(media_type,media_local_id,provider));
-            CREATE TABLE IF NOT EXISTS release_schedule(
-              media_type TEXT NOT NULL CHECK(media_type IN('season','episode','movie')),
-              media_local_id TEXT NOT NULL,
-              releases_at INTEGER NOT NULL,
-              updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-              PRIMARY KEY(media_type,media_local_id));
-            CREATE TABLE IF NOT EXISTS release_schedule_checks(
-              season_local_id TEXT PRIMARY KEY,
-              checked_at INTEGER NOT NULL,
-              FOREIGN KEY(season_local_id) REFERENCES seasons(local_id) ON DELETE CASCADE);
-            CREATE TABLE IF NOT EXISTS stream_publications(
-              media_type TEXT NOT NULL CHECK(media_type IN('episode','movie')),
-              media_local_id TEXT NOT NULL,
-              stream_path TEXT NOT NULL UNIQUE,
-              published_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-              PRIMARY KEY(media_type,media_local_id));
             CREATE TABLE IF NOT EXISTS kodi_series_links(
               series_local_id TEXT PRIMARY KEY, kodi_tvshow_id INTEGER NOT NULL UNIQUE,
               kodi_path TEXT, synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -388,76 +372,6 @@ class WatchlistMediaStore:
                 SUM(watched) AS watched_episodes FROM episodes GROUP BY related_season_id
               ) AS progress ON progress.related_season_id=season.local_id
               ORDER BY COALESCE(season.english_name,season.romaji_name),season.season_number""")]
-
-    def schedule_release(self, media_type, media_local_id, releases_at):
-        if media_type not in ("season", "episode", "movie"):
-            raise ValueError("invalid scheduled media_type")
-        with self._connection() as db:
-            db.execute("""INSERT INTO release_schedule(
-              media_type,media_local_id,releases_at) VALUES(?,?,?)
-              ON CONFLICT(media_type,media_local_id) DO UPDATE SET
-              releases_at=excluded.releases_at,updated_at=CURRENT_TIMESTAMP""",
-                       (media_type, media_local_id, int(releases_at)))
-
-    def list_seasons_needing_release_check(self, checked_before):
-        with self._connection() as db:
-            return [dict(row) for row in db.execute(
-                """SELECT season.local_id,season.related_series_id,
-                          season.season_number,season.anilist_id
-                   FROM seasons AS season
-                   LEFT JOIN release_schedule_checks AS check_state
-                     ON check_state.season_local_id=season.local_id
-                   WHERE season.anilist_id IS NOT NULL
-                     AND (check_state.checked_at IS NULL OR check_state.checked_at <= ?)
-                   ORDER BY season.created_at""", (int(checked_before),))]
-
-    def mark_release_schedule_checked(self, season_local_id, checked_at):
-        with self._connection() as db:
-            db.execute("""INSERT INTO release_schedule_checks(
-              season_local_id,checked_at) VALUES(?,?)
-              ON CONFLICT(season_local_id) DO UPDATE SET
-              checked_at=excluded.checked_at""", (season_local_id, int(checked_at)))
-
-    def list_releasable_episodes(self, released_before):
-        """Only return episodes whose season and episode are both released."""
-        with self._connection() as db:
-            return [dict(row) for row in db.execute(
-                """SELECT episode.*, season.season_number,
-                          season.kodi_show_name,season.kodi_show_year,
-                          season.kodi_season_number,
-                          series.english_name AS series_english_name,
-                          series.romaji_name AS series_romaji_name
-                   FROM episodes AS episode
-                   JOIN seasons AS season ON season.local_id=episode.related_season_id
-                   JOIN tv_series AS series ON series.local_id=episode.related_series_id
-                   JOIN release_schedule AS season_release
-                     ON season_release.media_type='season'
-                    AND season_release.media_local_id=season.local_id
-                   JOIN release_schedule AS episode_release
-                     ON episode_release.media_type='episode'
-                    AND episode_release.media_local_id=episode.local_id
-                   LEFT JOIN stream_publications AS publication
-                     ON publication.media_type='episode'
-                    AND publication.media_local_id=episode.local_id
-                   WHERE season_release.releases_at <= ?
-                     AND episode_release.releases_at <= ?
-                     AND publication.media_local_id IS NULL
-                     AND series.franchise_resolved=1
-                     AND season.kodi_resolved=1
-                     AND EXISTS(SELECT 1 FROM provider_list_entries AS membership
-                                WHERE membership.media_type='season'
-                                  AND membership.media_local_id=season.local_id)
-                   ORDER BY episode_release.releases_at,
-                            season.season_number,episode.episode_number""",
-                (int(released_before), int(released_before)))]
-
-    def mark_stream_published(self, media_type, media_local_id, stream_path):
-        with self._connection() as db:
-            db.execute("""INSERT INTO stream_publications(
-              media_type,media_local_id,stream_path) VALUES(?,?,?)
-              ON CONFLICT(media_type,media_local_id) DO UPDATE SET
-              stream_path=excluded.stream_path,published_at=CURRENT_TIMESTAMP""",
-                       (media_type, media_local_id, stream_path))
 
     def set_watch_status(self, media_type, local_id, watched, *,
                          source_provider=None, queue_connected_trackers=True):

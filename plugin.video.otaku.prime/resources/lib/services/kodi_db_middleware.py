@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import json
-import os
 from typing import Callable, Optional
 
 from resources.lib.connectors.kodi_library import (
@@ -40,38 +39,6 @@ class KodiDbMiddleware:
         if self.reconciler is None:
             return {"local":0,"plugin":0,"missing":0,"ambiguous":0}
         return self.reconciler.run_once()
-
-    def scan(self, directory: str) -> None:
-        if not self.is_video_source(directory):
-            raise RuntimeError(
-                "Kodi video source is not configured: {}".format(directory)
-            )
-        self._request_id += 1
-        payload = {
-            "jsonrpc": "2.0",
-            "id": self._request_id,
-            "method": "VideoLibrary.Scan",
-            "params": {"directory": directory, "showdialogs": False},
-        }
-        response = json.loads(self._execute(json.dumps(payload)))
-        if "error" in response:
-            raise RuntimeError("Kodi library scan failed: {}".format(response["error"]))
-
-    def video_sources(self) -> list:
-        self._request_id += 1
-        payload = {"jsonrpc": "2.0", "id": self._request_id,
-                   "method": "Files.GetSources", "params": {"media": "video"}}
-        response = json.loads(self._execute(json.dumps(payload)))
-        if "error" in response:
-            raise RuntimeError("Kodi source query failed: {}".format(response["error"]))
-        return (response.get("result") or {}).get("sources") or []
-
-    def is_video_source(self, directory: str) -> bool:
-        target = os.path.normcase(os.path.normpath(directory))
-        return any(
-            os.path.normcase(os.path.normpath(source.get("file") or "")) == target
-            for source in self.video_sources()
-        )
 
     def set_episode_watched(self, kodi_episode_id: int, watched: bool) -> None:
         self._set_details(

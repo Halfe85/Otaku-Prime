@@ -20,12 +20,9 @@ from resources.lib.database.metadata_provider import MetadataProviderStore
 from resources.lib.database.kodi_inventory import KodiInventoryStore
 from resources.lib.database.app_logs import AppLogStore
 from resources.lib.services.kodi_db_middleware import KodiDbMiddleware
-from resources.lib.services.anilist_release_schedule import AniListReleaseScheduleService
 from resources.lib.services.watchlist_franchise_resolver import UnifiedWatchlistFranchiseResolverService
 from resources.lib.services.metadata_structure_resolver import MetadataStructureResolverService
 from resources.lib.services.mediator_service import MediatorService
-from resources.lib.services.release_watchdog import ReleaseWatchdogService
-from resources.lib.services.stream_library import StreamLibraryService
 from resources.lib.services.startup_pipeline import StartupPipelineService
 from resources.lib.services.watchlist_sync import WatchlistSyncService
 from resources.lib.watchlist.anilist_sync import AniListWatchlistImportService
@@ -41,7 +38,6 @@ from resources.lib.logging_config import configure_logging,get_logger
 WEB_HOST = "0.0.0.0"
 WEB_PORT = 9898
 USERS_DB_NAME = "users.sqlite"
-LIBRARY_DIR_NAME = "library"
 
 
 class PrimeMonitor(xbmc.Monitor):
@@ -55,15 +51,8 @@ def _profile_path() -> str:
     return profile
 
 
-def _kodi_profile_path() -> str:
-    profile = xbmcvfs.translatePath("special://profile/")
-    os.makedirs(profile, exist_ok=True)
-    return profile
-
-
 def main() -> None:
     profile = _profile_path()
-    kodi_profile = _kodi_profile_path()
     users_db = os.path.join(profile, USERS_DB_NAME)
 
     user_store = UserStore(users_db)
@@ -118,7 +107,6 @@ def main() -> None:
 
     mediator = MediatorService(
         media_store,
-        StreamLibraryService(os.path.join(kodi_profile, LIBRARY_DIR_NAME)),
         KodiDbMiddleware(media_store, inventory_store=kodi_inventory),
         metadata_resolver=metadata_resolver,
     )
@@ -139,15 +127,6 @@ def main() -> None:
             "metadata",
             "Raw watchlists and franchise relations can sync; provider placement waits for TMDB or TheTVDB configuration",
         )
-
-    release_watchdog = ReleaseWatchdogService(
-        media_store,
-        mediator.stream_library,
-        mediator.kodi_db,
-        error_handler=lambda exc: log("ERROR","release","Release watchdog failed: {}".format(exc)),
-        schedule_service=AniListReleaseScheduleService(media_store),
-        metadata_resolver=metadata_resolver,
-    )
 
     # Every connected tracker writes its provider-native records into the same
     # raw watchlist_items table. Relation and metadata placement run only after
@@ -179,7 +158,7 @@ def main() -> None:
     )
 
     background = StartupPipelineService(
-        watchlist_sync, release_watchdog, mediator,
+        watchlist_sync, mediator,
         result_handler=lambda name, result: log(
             "INFO",name,"Initial {} pipeline: {}".format(name,result)),
         error_handler=lambda name, exc: log(
@@ -215,7 +194,7 @@ def main() -> None:
     background.start()
     log("INFO","service","Web service started on {}:{}".format(WEB_HOST,WEB_PORT))
     log("INFO","kodi-library","Using Kodi's existing video database; advancedsettings.xml is unchanged")
-    log("INFO","kodi-library","Prime direct library projection enabled; .strm publication is disabled")
+    log("INFO","kodi-library","Prime direct Kodi library projection enabled")
 
     xbmc.log(
         f"OTAKU PRIME: web service started on {WEB_HOST}:{WEB_PORT}",

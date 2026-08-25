@@ -62,12 +62,8 @@ class AniListWatchlistImportService:
         account=self.accounts.get_credentials(self.user_id,"anilist")
         if not account:
             self.watchlist_store.replace_provider_snapshot("anilist",[])
-            self.media_store.replace_anilist_staging([])
             return {"connected":False,"imported":0,"filtered":0,"watchlist_rows":0}
-        allow_mature=self.preferences.mature_content(self.user_id)
         entries=self.client.fetch(account["external_user_id"],account["access_token"])
-        filtered=0
-        staged_by_id={}
         canonical=[]
         for entry in entries:
             media=entry.get("media") or {}
@@ -96,28 +92,12 @@ class AniListWatchlistImportService:
                 "raw":entry,
             })
 
-            # Legacy staging remains filtered until its callers are removed.
-            if is_adult and not allow_mature:
-                filtered+=1
-                continue
-            staged_by_id[str(media["id"])]=dict(
-                english_name=titles.get("english"),
-                romaji_name=titles.get("romaji"),
-                list_status=status,
-                progress=progress,
-                is_adult=is_adult,
-                media_format=media.get("format"),
-                release_date=release_date,
-                anilist_id=media["id"],
-            )
-
-        self.watchlist_store.replace_provider_snapshot("anilist",canonical)
-        self.media_store.replace_anilist_staging(staged_by_id.values())
+        stored_count = self.watchlist_store.replace_provider_snapshot("anilist",canonical)
         return {
             "connected":True,
-            "imported":len(staged_by_id),
-            "filtered":filtered,
-            "watchlist_rows":len(canonical),
+            "imported":stored_count,
+            "filtered":0,
+            "watchlist_rows":stored_count,
         }
 
     @staticmethod

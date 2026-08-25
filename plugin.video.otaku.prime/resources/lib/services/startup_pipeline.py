@@ -6,10 +6,9 @@ LOGGER=get_logger(__name__)
 
 
 class StartupPipelineService:
-    def __init__(self, watchlist_sync, release_watchdog, mediator,
+    def __init__(self, watchlist_sync, mediator,
                  result_handler=None, error_handler=None):
         self.watchlist_sync = watchlist_sync
-        self.release_watchdog = release_watchdog
         self.mediator = mediator
         self.result_handler = result_handler or (lambda name, result: None)
         self.error_handler = error_handler or (lambda name, error: None)
@@ -45,7 +44,5 @@ class StartupPipelineService:
     def stop(self, timeout=5):
         self._stop.set()
         self.watchlist_sync.stop(timeout=timeout)
-        # The legacy .strm release watchdog remains stopped while Alpha8b uses
-        # direct Kodi database projection.
         if self._thread:
             self._thread.join(timeout=timeout)

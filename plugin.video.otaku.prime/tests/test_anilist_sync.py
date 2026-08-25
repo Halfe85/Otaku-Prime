@@ -9,6 +9,7 @@ import unittest
 ROOT=os.path.dirname(os.path.dirname(__file__)); sys.path.insert(0,ROOT)
 from resources.lib.database.watchlist_accounts import WatchlistAccountStore
 from resources.lib.database.watchlist_media import WatchlistMediaStore
+from resources.lib.database.watchlist_items import WatchlistItemStore
 from resources.lib.database.watchlist_preferences import WatchlistPreferenceStore
 from resources.lib.users import UserStore
 from resources.lib.watchlist.anilist_sync import AniListWatchlistClient, AniListWatchlistImportService
@@ -47,25 +48,22 @@ class AniListSyncTests(unittest.TestCase):
     def tearDown(self): self.tmp.cleanup()
     def test_imports_status_and_expands_progress_but_filters_mature(self):
         result=self.importer.sync()
-        self.assertEqual({"connected":True,"imported":1,"filtered":1},result)
+        self.assertEqual({"connected":True,"imported":2,"filtered":0,"watchlist_rows":2},result)
         self.assertEqual(0,len(self.media.list_media("season")))
-        self.resolver.run_once()
-        self.assertEqual(2,len(self.media.list_media("episode")))
-        with sqlite3.connect(self.path) as db:
-            self.assertEqual("CURRENT",db.execute(
-              "SELECT list_status FROM provider_list_entries").fetchone()[0])
+        self.assertEqual(2,len(WatchlistItemStore(self.path).list_provider("anilist")))
     def test_mature_switch_includes_adult_entries(self):
         self.preferences.set_mature_content(1,True)
         result=self.importer.sync()
-        self.resolver.run_once()
         self.assertEqual(2,result["imported"])
-        self.assertEqual(2,len(self.media.list_media("season")))
+        self.assertEqual(2,len(WatchlistItemStore(self.path).list_provider("anilist")))
+        self.assertEqual(0,len(self.media.list_media("season")))
     def test_switching_mature_off_removes_provider_membership(self):
-        self.preferences.set_mature_content(1,True); self.importer.sync(); self.resolver.run_once()
-        self.preferences.set_mature_content(1,False); self.importer.sync(); self.resolver.run_once()
+        self.preferences.set_mature_content(1,True); self.importer.sync()
+        self.preferences.set_mature_content(1,False); self.importer.sync()
         with sqlite3.connect(self.path) as db:
-            self.assertEqual(1,db.execute(
+            self.assertEqual(0,db.execute(
               "SELECT COUNT(*) FROM provider_list_entries WHERE provider='anilist'").fetchone()[0])
+        self.assertEqual(2,len(WatchlistItemStore(self.path).list_provider("anilist")))
 
     def test_franchise_resolution_stops_before_touching_replacement_database(self):
         self.media.replace_anilist_staging([{"anilist_id":1,"english_name":"Show",
@@ -120,7 +118,7 @@ class AniListSyncTests(unittest.TestCase):
         importer=AniListWatchlistImportService(
           self.accounts,self.preferences,self.media,client=DuplicateClient())
         self.assertEqual(1,importer.sync()["imported"])
-        self.assertEqual(1,len(self.media.list_anilist_staging()))
+        self.assertEqual(1,len(WatchlistItemStore(self.path).list_provider("anilist")))
 
     def test_import_stages_anilist_format_and_release_date(self):
         class FormatClient:
@@ -130,7 +128,7 @@ class AniListSyncTests(unittest.TestCase):
                   "title":{"english":"Bonus","romaji":"Bonus"}}}]
         importer=AniListWatchlistImportService(
           self.accounts,self.preferences,self.media,client=FormatClient())
-        importer.sync(); staged=self.media.list_anilist_staging()[0]
+        importer.sync(); staged=WatchlistItemStore(self.path).list_provider("anilist")[0]
         self.assertEqual("OVA",staged["media_format"])
         self.assertEqual("2025-03-04",staged["release_date"])
 

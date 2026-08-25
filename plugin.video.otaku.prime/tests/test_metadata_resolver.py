@@ -1,4 +1,3 @@
-import datetime
 import json
 import os
 import sqlite3
@@ -22,12 +21,6 @@ from resources.lib.services.metadata_resolver import (
 )
 from resources.lib.services.watchlist_sync import WatchlistSyncService
 from resources.lib.users import UserStore
-
-
-def stamp(year, month, day):
-    return int(datetime.datetime(
-        year, month, day, tzinfo=datetime.timezone.utc
-    ).timestamp())
 
 
 class Response:
@@ -331,8 +324,6 @@ class MetadataResolverTests(unittest.TestCase):
         self.media.save_provider_list_status("season", season, "anilist", "CURRENT")
         episode1 = self.media.upsert_episode(season, 1)
         episode2 = self.media.upsert_episode(season, 2)
-        self.media.schedule_release("episode", episode1, stamp(2021, 1, 10))
-        self.media.schedule_release("episode", episode2, stamp(2021, 1, 17))
 
         result = self.resolver.run_once()
 
@@ -372,7 +363,6 @@ class MetadataResolverTests(unittest.TestCase):
         )
         self.media.save_provider_list_status("season", special, "anilist", "COMPLETED")
         episode = self.media.upsert_episode(special, 1)
-        self.media.schedule_release("episode", episode, stamp(2020, 6, 1))
 
         result = self.resolver.run_once()
 

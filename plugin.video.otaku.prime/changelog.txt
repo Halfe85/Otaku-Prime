@@ -3,6 +3,12 @@ Otaku Prime 0.1.2 Alpha8b
 
 Alpha8b supersedes Alpha8 and includes all Alpha8 work below.
 
+- Store every tracker snapshot only in the canonical provider-tagged `watchlist_items` table; remove AniList's live dual-write into legacy staging.
+- Resolve franchise relations against canonical watchlist rows without mirroring results into the legacy AniList relation table.
+- Fetch and cache the metadata provider's complete season/episode structure before choosing placement for each watchlist item.
+- Compare TV-format entries against normal seasons and Season 0 candidates together instead of routing them through the legacy specials-first resolver.
+- Remove the legacy release-watchdog, `.strm` generator, Kodi source/scan setup, stream-publication tables, mediator publishing API, and their tests; direct Kodi projection is the only publication architecture.
+- Add UzaMaid/AniList 101506 regression coverage to require placement as provider Season 1 rather than a special episode.
 - Improve TheTVDB matching for anime with non-Latin primary titles by using title aliases without treating plot overviews as aliases.
 - Search conservative base-title variants when AniList franchise or season names end in numbered season, part, or cour suffixes.
 - Prevent overlapping full watchlist/metadata passes when Kodi reloads the service, and cancel metadata resolution cooperatively during shutdown.

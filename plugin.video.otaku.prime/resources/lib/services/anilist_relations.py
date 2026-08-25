@@ -83,15 +83,18 @@ class AniListFranchiseResolverService:
     tests/callers while the provider-placement stage is migrated.
     """
 
-    def __init__(self, media_store, client=None, max_nodes=100, stage_only=False):
+    def __init__(self, media_store, client=None, max_nodes=100, stage_only=False,
+                 legacy_relation_store=True):
         self.media_store = media_store
         self.client = client or AniListRelationClient()
         self.max_nodes = max(1, int(max_nodes))
         self.stage_only = bool(stage_only)
         self._cache = {}
         self._stop_event = None
-        self.relation_store = WatchlistRelationStore(media_store.db_path)
-        self.relation_store.initialize()
+        self.relation_store = None
+        if legacy_relation_store:
+            self.relation_store = WatchlistRelationStore(media_store.db_path)
+            self.relation_store.initialize()
 
     def bind_stop_event(self, stop_event):
         self._stop_event = stop_event
@@ -137,9 +140,10 @@ class AniListFranchiseResolverService:
                     anilist_root_id=resolution["root_id"],
                     franchise_resolved=True,
                 )
-                self.relation_store.save_resolution(
-                    entry["anilist_id"], franchise_id, resolution
-                )
+                if self.relation_store is not None:
+                    self.relation_store.save_resolution(
+                        entry["anilist_id"], franchise_id, resolution
+                    )
                 franchises.add(franchise_id)
                 if self.stage_only:
                     active.append(str(entry["anilist_id"]))

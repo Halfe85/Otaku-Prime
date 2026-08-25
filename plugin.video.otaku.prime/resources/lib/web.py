@@ -15,14 +15,13 @@ from resources.lib.auth import AuthService
 from resources.lib.database.watchlist_accounts import WatchlistAccountStore
 from resources.lib.database.watchlist_preferences import WatchlistPreferenceStore
 from resources.lib.database.watchlist_media import WatchlistMediaStore
+from resources.lib.database.watchlist_items import WatchlistItemStore
 from resources.lib.database.metadata_provider import MetadataProviderStore
 from resources.lib.database.kodi_inventory import KodiInventoryStore
 from resources.lib.database.app_logs import AppLogStore
 from resources.lib.endpoints.auth_service import AuthenticatorAPI, AuthenticatorAPIError
-from resources.lib.services.metadata_resolver import (
-    MetadataProviderError,
-    MetadataResolverService,
-)
+from resources.lib.services.metadata_resolver import MetadataProviderError
+from resources.lib.services.metadata_structure_resolver import MetadataStructureResolverService
 from resources.lib.logging_config import get_logger
 LOGGER=get_logger(__name__)
 from resources.lib.ui import (
@@ -58,7 +57,13 @@ def create_server(host: str, port: int, user_store, media_store=None,
     if metadata_resolver is None:
         metadata_store = MetadataProviderStore(user_store.db_path)
         metadata_store.initialize()
-        metadata_resolver = MetadataResolverService(metadata_store)
+        watchlist_items = WatchlistItemStore(user_store.db_path)
+        watchlist_items.initialize()
+        metadata_resolver = MetadataStructureResolverService(
+            metadata_store,
+            watchlist_items,
+            media_store=media_store,
+        )
     simkl_flows = {}
     simkl_flows_lock = threading.Lock()
 

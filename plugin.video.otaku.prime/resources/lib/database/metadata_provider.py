@@ -210,12 +210,8 @@ class MetadataProviderStore:
     def list_season_episodes(self, season_local_id):
         with self._connection() as db:
             return [dict(row) for row in db.execute("""
-              SELECT episode.*,
-                     release.releases_at AS releases_at
+              SELECT episode.*
                 FROM episodes AS episode
-                LEFT JOIN release_schedule AS release
-                  ON release.media_type='episode'
-                 AND release.media_local_id=episode.local_id
                WHERE episode.related_season_id=?
                ORDER BY episode.episode_number
             """, (season_local_id,))]

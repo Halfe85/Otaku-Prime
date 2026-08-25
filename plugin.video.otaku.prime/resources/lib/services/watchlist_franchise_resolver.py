@@ -177,6 +177,7 @@ class UnifiedWatchlistFranchiseResolverService(AniListFranchiseResolverService):
             client=relation_client or AniListRelationClient(),
             max_nodes=max_nodes,
             stage_only=True,
+            legacy_relation_store=False,
         )
         self.watchlist_store = watchlist_store
         self.watchlist_store.initialize()
@@ -237,14 +238,6 @@ class UnifiedWatchlistFranchiseResolverService(AniListFranchiseResolverService):
                     provider, item_id, franchise_id, resolution
                 )
                 self._mark_root_provider(provider, item_id)
-
-                # Keep the legacy AniList staging mirror updated while older UI
-                # and tests are being removed. Other tracker rows never touch it.
-                if provider == "anilist":
-                    try:
-                        self.relation_store.save_resolution(item_id, franchise_id, resolution)
-                    except KeyError:
-                        pass
 
                 franchises.add(franchise_id)
                 active.append("{}:{}".format(provider, item_id))

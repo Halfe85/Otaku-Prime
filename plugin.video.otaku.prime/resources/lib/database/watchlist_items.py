@@ -85,7 +85,10 @@ class WatchlistItemStore:
         provider = str(provider or "").strip().lower()
         if provider not in SUPPORTED_WATCHLIST_PROVIDERS:
             raise ValueError("unsupported watchlist provider")
-        rows = list(entries)
+        rows_by_id = {}
+        for entry in entries:
+            rows_by_id[str(entry["provider_item_id"])] = entry
+        rows = list(rows_by_id.values())
         ids = set()
         with self._connection() as db:
             for entry in rows:
