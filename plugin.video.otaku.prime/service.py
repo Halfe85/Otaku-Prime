@@ -13,6 +13,7 @@ import xbmcvfs
 
 from resources.lib.users import UserStore
 from resources.lib.database.watchlist_media import WatchlistMediaStore
+from resources.lib.database.watchlist_items import WatchlistItemStore
 from resources.lib.database.watchlist_accounts import WatchlistAccountStore
 from resources.lib.database.watchlist_preferences import WatchlistPreferenceStore
 from resources.lib.database.metadata_provider import MetadataProviderStore
@@ -20,8 +21,8 @@ from resources.lib.database.kodi_inventory import KodiInventoryStore
 from resources.lib.database.app_logs import AppLogStore
 from resources.lib.services.kodi_db_middleware import KodiDbMiddleware
 from resources.lib.services.anilist_release_schedule import AniListReleaseScheduleService
-from resources.lib.services.anilist_relations import AniListFranchiseResolverService
-from resources.lib.services.metadata_resolver_default_order import MetadataResolverService
+from resources.lib.services.watchlist_franchise_resolver import UnifiedAniListFranchiseResolverService
+from resources.lib.services.metadata_structure_resolver import MetadataStructureResolverService
 from resources.lib.services.mediator_service import MediatorService
 from resources.lib.services.release_watchdog import ReleaseWatchdogService
 from resources.lib.services.stream_library import StreamLibraryService
@@ -64,6 +65,8 @@ def main() -> None:
     user_store.initialize()
     media_store = WatchlistMediaStore(users_db)
     media_store.initialize()
+    watchlist_items = WatchlistItemStore(users_db)
+    watchlist_items.initialize()
     watchlist_accounts = WatchlistAccountStore(users_db)
     watchlist_accounts.initialize()
     watchlist_preferences = WatchlistPreferenceStore(users_db)
@@ -100,8 +103,9 @@ def main() -> None:
         xbmc.executebuiltin("InstallAddon({})".format(addon_id))
         return True
 
-    metadata_resolver = MetadataResolverService(
+    metadata_resolver = MetadataStructureResolverService(
         metadata_store,
+        watchlist_items,
         scraper_checker=scraper_installed,
         scraper_installer=request_scraper_install,
         media_store=media_store,
@@ -141,10 +145,13 @@ def main() -> None:
     )
     watchlist_sync = WatchlistSyncService(
         [AniListWatchlistImportService(
-            watchlist_accounts, watchlist_preferences, media_store
+            watchlist_accounts,
+            watchlist_preferences,
+            media_store,
+            watchlist_store=watchlist_items,
         )],
         processors=[
-            AniListFranchiseResolverService(media_store, stage_only=True),
+            UnifiedAniListFranchiseResolverService(media_store, watchlist_items),
             metadata_resolver,
         ],
         gate=metadata_resolver,
