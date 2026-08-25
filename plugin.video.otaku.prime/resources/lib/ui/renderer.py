@@ -17,7 +17,7 @@ SETTINGS_CATEGORIES = (
     ("playback", "Playback", "Play style, audio, subtitles, skip intro, and playing next."),
     ("sort-filter", "Sort & Filter", "Resolution, codecs, source types, and result ordering."),
     ("accounts", "Accounts", "Prime administrator and future debrid service connections."),
-    ("watchlist", "Watchlist Accounts", "AniList, MyAnimeList, Kitsu, and Simkl connections."),
+    ("watchlist", "Watchlist Accounts", "Metadata authority plus AniList, MyAnimeList, Kitsu, and Simkl connections."),
     ("watchlist-management", "Watchlist Management", "Browse, filter, and manage imported series."),
     ("menu", "Menu Customization", "Choose which destinations appear in Kodi menus."),
     ("context", "Context Customization", "Configure actions shown in Kodi context menus."),
@@ -152,12 +152,58 @@ def _watchlist_content(accounts: dict) -> str:
     kitsu = accounts.get("kitsu")
     mal = accounts.get("mal")
     simkl = accounts.get("simkl")
+    metadata = accounts.get("_metadata") or {}
+    metadata_message = accounts.get("_metadata_message") or ""
+    configured = bool(metadata.get("configured"))
+    provider = metadata.get("provider")
+    provider_name = {"tmdb": "TMDB", "thetvdb": "TheTVDB"}.get(provider)
+    if configured:
+        metadata_description = (
+            "{} is Prime's metadata authority. Watchlist synchronization is enabled and "
+            "Kodi must use the matching TV information scraper."
+        ).format(provider_name)
+    else:
+        metadata_description = (
+            "Configure and verify TMDB or TheTVDB before Prime is allowed to fetch any "
+            "connected watchlist."
+        )
+    metadata_notice = (
+        '<p class="notice warning">{}</p>'.format(html.escape(metadata_message))
+        if metadata_message else ""
+    )
+    tmdb_selected = provider in (None, "tmdb")
+    auth_type = metadata.get("auth_type") or "bearer"
     return _fill(
         _template("components/main-container/watchlist.html"),
+        METADATA_BADGE="Connected" if configured else "Required",
+        METADATA_DESCRIPTION=html.escape(metadata_description),
+        METADATA_NOTICE=metadata_notice,
+        METADATA_KODI_ADDON=html.escape(
+            metadata.get("kodi_scraper_addon") or "Choose a resolver first"
+        ),
+        TMDB_SELECTED=" selected" if tmdb_selected else "",
+        TVDB_SELECTED=" selected" if provider == "thetvdb" else "",
+        TMDB_BEARER_SELECTED=" selected" if auth_type == "bearer" else "",
+        TMDB_API_KEY_SELECTED=" selected" if auth_type == "api_key" else "",
+        TMDB_CREDENTIAL_PLACEHOLDER=(
+            "Stored — leave blank to keep current credential"
+            if configured and provider == "tmdb"
+            else "Paste TMDB credential"
+        ),
+        TVDB_API_KEY_PLACEHOLDER=(
+            "Stored — leave blank to keep current API key"
+            if configured and provider == "thetvdb"
+            else "Paste TheTVDB project API key"
+        ),
+        TVDB_PIN_PLACEHOLDER=(
+            "Stored — leave blank to keep current PIN"
+            if configured and provider == "thetvdb" and metadata.get("has_pin")
+            else "Optional subscriber PIN"
+        ),
         ANILIST_BADGE="Connected" if anilist else "Not connected",
         ANILIST_DESCRIPTION=(
             "Connected as {}.".format(html.escape(anilist["external_username"]))
-            if anilist else "Connect AniList through the simplified ArmKai authorization flow."
+            if anilist else "Connect directly through AniList's authorization PIN flow."
         ),
         ANILIST_ACTION="Manage" if anilist else "Connect",
         MAL_BADGE="Connected" if mal else "Not connected",
