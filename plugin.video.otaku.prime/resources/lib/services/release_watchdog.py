@@ -9,13 +9,14 @@ import time
 
 class ReleaseWatchdogService:
     def __init__(self, media_store, stream_library, kodi_db, interval_seconds=60,
-                 error_handler=None, schedule_service=None):
+                 error_handler=None, schedule_service=None, metadata_resolver=None):
         self.media_store = media_store
         self.stream_library = stream_library
         self.kodi_db = kodi_db
         self.interval_seconds = max(5, int(interval_seconds))
         self.error_handler = error_handler or (lambda error: None)
         self.schedule_service = schedule_service
+        self.metadata_resolver = metadata_resolver
         self._stop = threading.Event()
         self._thread = None
 
@@ -23,6 +24,10 @@ class ReleaseWatchdogService:
         now = int(time.time() if now is None else now)
         if self.schedule_service:
             self.schedule_service.refresh_pending(now)
+        if self.metadata_resolver and self.metadata_resolver.is_configured():
+            # Release scheduling may create new episode records. Resolve those against
+            # the selected scraper before allowing any new SxxEyy filename to publish.
+            self.metadata_resolver.run_once()
         pending_publications = []
         failed = []
         for episode in self.media_store.list_releasable_episodes(now):
