@@ -177,7 +177,20 @@ class WatchlistItemStore:
                         item.provider,item.provider_item_id
             """)]
 
+    def prepare_for_metadata_provider(self, provider):
+        """Invalidate only placements made by a different metadata authority."""
+        with self._connection() as db:
+            db.execute("""UPDATE watchlist_items SET
+              metadata_provider=NULL,metadata_show_id=NULL,placement_kind=NULL,
+              metadata_season_id=NULL,metadata_season_number=NULL,
+              metadata_episode_id=NULL,metadata_episode_number=NULL,
+              placement_score=NULL,placement_resolved=0,catalogue_season_local_id=NULL,
+              updated_at=CURRENT_TIMESTAMP
+              WHERE placement_resolved=1
+                AND (metadata_provider IS NULL OR metadata_provider<>?)""", (provider,))
+
     def save_placement(self, provider, provider_item_id, placement, catalogue_season_local_id=None):
+        show_id = placement.get("show_id")
         with self._connection() as db:
             cursor = db.execute("""UPDATE watchlist_items SET
               metadata_provider=?,metadata_show_id=?,placement_kind=?,
@@ -186,7 +199,7 @@ class WatchlistItemStore:
               placement_score=?,placement_resolved=1,catalogue_season_local_id=?,
               updated_at=CURRENT_TIMESTAMP
               WHERE provider=? AND provider_item_id=?""", (
-                placement.get("metadata_provider"),str(placement.get("show_id")),
+                placement.get("metadata_provider"),str(show_id) if show_id is not None else None,
                 placement.get("kind"),
                 str(placement.get("season_id")) if placement.get("season_id") is not None else None,
                 int(placement["season_number"]) if placement.get("season_number") is not None else None,
