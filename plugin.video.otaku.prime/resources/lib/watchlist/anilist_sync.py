@@ -61,7 +61,9 @@ class AniListWatchlistImportService:
     def sync(self):
         account=self.accounts.get_credentials(self.user_id,"anilist")
         if not account:
-            return {"connected":False,"imported":0,"filtered":0}
+            self.watchlist_store.replace_provider_snapshot("anilist",[])
+            self.media_store.replace_anilist_staging([])
+            return {"connected":False,"imported":0,"filtered":0,"watchlist_rows":0}
         allow_mature=self.preferences.mature_content(self.user_id)
         entries=self.client.fetch(account["external_user_id"],account["access_token"])
         filtered=0
@@ -69,9 +71,6 @@ class AniListWatchlistImportService:
         canonical=[]
         for entry in entries:
             media=entry.get("media") or {}
-            if media.get("isAdult") and not allow_mature:
-                filtered+=1
-                continue
             titles=media.get("title") or {}
             title=titles.get("english") or titles.get("romaji") or titles.get("native")
             if not media.get("id") or not title:
@@ -79,16 +78,10 @@ class AniListWatchlistImportService:
             status=entry.get("status")
             progress=max(0,int(entry.get("progress") or 0))
             release_date=self._date(media.get("startDate"))
-            common={
-                "english_name":titles.get("english"),
-                "romaji_name":titles.get("romaji"),
-                "list_status":status,
-                "progress":progress,
-                "is_adult":bool(media.get("isAdult")),
-                "media_format":media.get("format"),
-                "release_date":release_date,
-            }
-            staged_by_id[str(media["id"])]=dict(common,anilist_id=media["id"])
+            is_adult=bool(media.get("isAdult"))
+
+            # Canonical storage is the raw tracker snapshot. Content preferences
+            # are applied by the franchise processor, not by deleting source rows.
             canonical.append({
                 "provider_item_id":str(media["id"]),
                 "english_name":titles.get("english"),
@@ -97,17 +90,28 @@ class AniListWatchlistImportService:
                 "list_status":status,
                 "progress":progress,
                 "episode_count":media.get("episodes"),
-                "is_adult":bool(media.get("isAdult")),
+                "is_adult":is_adult,
                 "media_format":media.get("format"),
                 "release_date":release_date,
                 "raw":entry,
             })
 
-        # Canonical boundary used by the new franchise/metadata pipeline.
-        self.watchlist_store.replace_provider_snapshot("anilist",canonical)
+            # Legacy staging remains filtered until its callers are removed.
+            if is_adult and not allow_mature:
+                filtered+=1
+                continue
+            staged_by_id[str(media["id"])]=dict(
+                english_name=titles.get("english"),
+                romaji_name=titles.get("romaji"),
+                list_status=status,
+                progress=progress,
+                is_adult=is_adult,
+                media_format=media.get("format"),
+                release_date=release_date,
+                anilist_id=media["id"],
+            )
 
-        # Compatibility mirror for Alpha8 code paths/tests while the remaining
-        # provider adapters and admin UI are migrated to watchlist_items.
+        self.watchlist_store.replace_provider_snapshot("anilist",canonical)
         self.media_store.replace_anilist_staging(staged_by_id.values())
         return {
             "connected":True,
