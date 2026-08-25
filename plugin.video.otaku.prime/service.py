@@ -175,6 +175,7 @@ def main() -> None:
             media_store,
             app_logs,
             metadata_resolver=metadata_resolver,
+            on_metadata_configured=watchlist_sync.run_once,
         )
     except OSError as exc:
         xbmc.log(
