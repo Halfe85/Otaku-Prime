@@ -1,11 +1,23 @@
-Otaku Prime 0.1.2 Alpha7
+Otaku Prime 0.1.2 Alpha8
 ========================
 
-Kodi TV-only library:
-- Use one Kodi TV Shows source for all Prime media.
-- Stop creating and registering a separate Movies source.
-- Route movies, OVAs, ONAs, specials, and spin-offs through TV-show season 00.
-- Stop synchronizing Prime media through Kodi's movie library.
+Metadata authority:
+- Add mandatory TMDB and TheTVDB v4 resolver connections using credentials supplied by each Prime installation.
+- Store the selected resolver globally so Prime's Kodi library uses one numbering authority.
+- Block all watchlist fetching until TMDB or TheTVDB has been configured and verified.
+- Require the matching Kodi TV information scraper and offer to install it when missing.
 
-Season-zero validation:
-- Started controlled Kodi 21 / MyVideos131 testing of TMDB TV Shows special-episode imports.
+Franchise and episode resolution:
+- Resolve Prime franchises to the selected provider's TV show identity.
+- Resolve normal seasons while retaining provider-specific season names when they differ from the franchise title.
+- Store provider show, season, and episode identities separately from AniList and Prime's internal identities.
+- Resolve Season 00 episode numbers from the metadata provider instead of inventing S00E numbers from AniList ordering.
+- Keep ambiguous specials unresolved and unpublished until a unique provider match is available.
+
+Web settings:
+- Put Information Resolver at the top of Watchlist Accounts as a mandatory setup step.
+- Support TMDB API Read Access Token/API key and TheTVDB v4 project API key with optional subscriber PIN.
+- Never render stored resolver credentials back into the web interface.
+
+Testing:
+- Add regression coverage for named seasons, normal episode mapping, S00E07 special mapping, ambiguous-special blocking, and the mandatory watchlist gate.
