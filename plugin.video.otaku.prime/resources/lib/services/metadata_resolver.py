@@ -246,9 +246,23 @@ class TVDBMetadataClient:
                 "id": identifier,
                 "name": item.get("name") or item.get("seriesName"),
                 "original_name": item.get("name") or item.get("seriesName"),
+                "aliases": self._aliases(item),
                 "year": result_year,
             })
         return results
+
+    @staticmethod
+    def _aliases(item):
+        values=[]
+        for key in ("aliases","translations","overviews"):
+            raw=item.get(key) or []
+            if isinstance(raw,dict): raw=list(raw.values())
+            if not isinstance(raw,list): raw=[raw]
+            for value in raw:
+                if isinstance(value,dict):
+                    value=value.get("name") or value.get("title") or value.get("value")
+                if value and str(value) not in values: values.append(str(value))
+        return values
 
     def get_show(self, show_id):
         payload = self._request("/series/{}/extended".format(show_id))
@@ -341,7 +355,13 @@ class TVDBMetadataClient:
 class MetadataResolverService:
     """Switchable TMDB/TheTVDB authority used before Prime publishes to Kodi."""
 
-    SPECIAL_CATEGORIES = ("movie", "ona", "ova", "oad", "special", "spin_off")
+    SPECIAL_CATEGORIES = ("movie", "ova", "oad", "special", "spin_off")
+    SPECIAL_RELATIONS = ("PARENT", "SIDE_STORY", "SPIN_OFF")
+
+    def _is_special(self, season):
+        category=season.get("media_category")
+        return (category in self.SPECIAL_CATEGORIES or
+                (category == "ona" and season.get("relation_type") in self.SPECIAL_RELATIONS))
 
     def __init__(self, config_store, timeout=20, client_factory=None,
                  scraper_checker=None, scraper_installer=None):
@@ -498,7 +518,7 @@ class MetadataResolverService:
         mappings, complete = self._resolve_episodes(
             season, local_episodes, provider_season.get("episodes") or []
         )
-        is_special = season.get("media_category") in self.SPECIAL_CATEGORIES
+        is_special = self._is_special(season)
         resolved = bool(provider_season) and complete and (bool(local_episodes) or not is_special)
         self.config_store.apply_resolution(
             season, provider, show, provider_season, mappings, resolved
@@ -526,11 +546,11 @@ class MetadataResolverService:
         if not names:
             raise MetadataProviderError("Franchise has no title to search")
         target_year = _year(season.get("franchise_release_date"))
-        candidates = []
+        candidates_by_id = {}
         for name in names:
-            candidates.extend(client.search_series(name, target_year))
-            if candidates:
-                break
+            for item in client.search_series(name, target_year):
+                candidates_by_id[str(item["id"])]=item
+        candidates=list(candidates_by_id.values())
         candidate = self._best_show(names, target_year, candidates)
         if not candidate:
             raise MetadataProviderError("No confident metadata-provider series match")
@@ -547,6 +567,9 @@ class MetadataResolverService:
                 _normalize(candidate.get("name")),
                 _normalize(candidate.get("original_name")),
             ]
+            candidate_names.extend(
+                _normalize(value) for value in candidate.get("aliases") or []
+            )
             score = 0
             for wanted in normalized:
                 for actual in candidate_names:
@@ -577,10 +600,10 @@ class MetadataResolverService:
         return scored[0][1]
 
     def _resolve_season(self, client, show, season):
-        special = season.get("media_category") in self.SPECIAL_CATEGORIES
+        special = self._is_special(season)
         expected_number = 0 if special else int(
             season.get("kodi_season_number")
-            if season.get("kodi_season_number") is not None
+            if season.get("kodi_season_number") not in (None,0)
             else season.get("season_number") or 1
         )
         candidates = show.get("seasons") or []
@@ -639,7 +662,7 @@ class MetadataResolverService:
         return scored[0][1]
 
     def _resolve_episodes(self, season, local_episodes, provider_episodes):
-        special = season.get("media_category") in self.SPECIAL_CATEGORIES
+        special = self._is_special(season)
         used = set()
         mappings = []
         for local in local_episodes:

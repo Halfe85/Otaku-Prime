@@ -19,6 +19,11 @@ Application logging:
 - Capture unhandled main-thread and background-thread exceptions with tracebacks.
 - Log startup stages, watchlist gates/importers/processors, metadata resolution, Kodi inventory, ownership reconciliation, and web configuration failures.
 
+Metadata matching fixes:
+- Preserve TheTVDB aliases and translated search names when the provider's primary series title uses another script or language.
+- Search every available AniList franchise title and de-duplicate provider results instead of stopping on the first non-empty but unrelated result set.
+- Treat standalone/main-series ONA entries as numbered TV seasons; reserve season 00 for ONA side stories, parent-linked extras, and spin-offs.
+
 Metadata authority:
 - Add mandatory TMDB and TheTVDB v4 resolver connections using credentials supplied by each Prime installation.
 - Store the selected resolver globally so Prime's Kodi library uses one numbering authority.

@@ -146,6 +146,30 @@ class MetadataAuthenticationTests(unittest.TestCase):
         self.assertEqual("subscriber-pin", body["pin"])
         self.assertTrue(requests[0].full_url.endswith("/v4/login"))
 
+    def test_tvdb_search_retains_aliases_for_non_latin_primary_title(self):
+        def opener(request, timeout):
+            return Response({"data":[{"tvdb_id":"423688","name":"龙族",
+              "aliases":["Long Zu","Dragon Raja -The Blazing Dawn-"],
+              "first_air_time":"2022-08-19"}]})
+        client=TVDBMetadataClient("key",bearer_token="token",
+          bearer_expires_at=9999999999,opener=opener)
+        result=client.search_series("Dragon Raja -The Blazing Dawn-",2022)[0]
+        self.assertEqual(["Long Zu","Dragon Raja -The Blazing Dawn-"],result["aliases"])
+
+    def test_show_matching_uses_aliases(self):
+        match=MetadataResolverService._best_show(
+          ["Dragon Raja -The Blazing Dawn-","Long Zu"],2022,
+          [{"id":"423688","name":"龙族","original_name":"龙族","year":2022,
+            "aliases":["Long Zu","Dragon Raja -The Blazing Dawn-"]}])
+        self.assertEqual("423688",match["id"])
+
+    def test_main_series_ona_is_numbered_but_side_story_ona_is_special(self):
+        resolver=MetadataResolverService.__new__(MetadataResolverService)
+        self.assertFalse(resolver._is_special(
+          {"media_category":"ona","relation_type":None}))
+        self.assertTrue(resolver._is_special(
+          {"media_category":"ona","relation_type":"SIDE_STORY"}))
+
 
 class MetadataResolverTests(unittest.TestCase):
     def setUp(self):
