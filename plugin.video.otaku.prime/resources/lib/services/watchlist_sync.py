@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Periodically synchronize connected watchlists into Prime SQLite."""
+"""Synchronize connected watchlists into Prime's canonical raw watchlist."""
 import threading
 from resources.lib.logging_config import get_logger
 LOGGER=get_logger(__name__)
@@ -26,11 +26,9 @@ class WatchlistSyncService:
             if binder:
                 binder(self._stop)
 
-    def run_once(self):
+    def run_once(self, periodic=False):
         # Immediate callbacks can arrive together (account connected, settings
-        # changed, startup pipeline). Do not queue multiple full AniList/TMDB/
-        # TVDB pipelines behind the active one; the active run already reads the
-        # latest persisted settings/watchlist state in normal UI use.
+        # changed, startup pipeline). Do not queue duplicate full pipelines.
         if not _PIPELINE_LOCK.acquire(blocking=False):
             if not self._busy_notice:
                 LOGGER.info(
@@ -40,11 +38,11 @@ class WatchlistSyncService:
             return [{"skipped": True, "reason": "pipeline_already_active"}]
         self._busy_notice = False
         try:
-            return self._run_once_locked()
+            return self._run_once_locked(periodic=bool(periodic))
         finally:
             _PIPELINE_LOCK.release()
 
-    def _run_once_locked(self):
+    def _run_once_locked(self, periodic=False):
         if self.gate is not None and not self.gate.is_configured():
             status = self.gate.status()
             LOGGER.warning("Watchlist synchronization blocked: metadata provider is required")
@@ -58,6 +56,15 @@ class WatchlistSyncService:
         for importer in self.importers:
             if self._stop.is_set():
                 return results + [{"cancelled": True, "reason": "pipeline_stopping"}]
+            # Some providers (currently Simkl) explicitly disallow unconditional
+            # timer polling. They still run on startup/manual/user-visible syncs.
+            if periodic and getattr(importer, "allow_periodic", True) is False:
+                results.append({
+                    "provider": getattr(importer, "provider", importer.__class__.__name__),
+                    "skipped": True,
+                    "reason": "provider_disallows_periodic_polling",
+                })
+                continue
             try:
                 LOGGER.info("Running watchlist importer %s",importer.__class__.__name__)
                 results.append(importer.sync())
@@ -65,6 +72,7 @@ class WatchlistSyncService:
                 LOGGER.exception("Watchlist importer %s failed",importer.__class__.__name__)
                 self.error_handler(exc)
                 results.append({"error": str(exc)})
+
         for processor in self.processors:
             if self._stop.is_set():
                 return results + [{"cancelled": True, "reason": "pipeline_stopping"}]
@@ -90,11 +98,14 @@ class WatchlistSyncService:
         self._thread.start()
 
     def _run(self, run_immediately=True):
-        if not run_immediately and self._stop.wait(self.interval_seconds):
+        if run_immediately:
+            self.run_once(periodic=False)
+        elif self._stop.wait(self.interval_seconds):
             return
         while not self._stop.is_set():
-            self.run_once()
-            self._stop.wait(self.interval_seconds)
+            self.run_once(periodic=True)
+            if self._stop.wait(self.interval_seconds):
+                break
 
     def stop(self, timeout=5):
         self._stop.set()
