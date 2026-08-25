@@ -1,18 +1,31 @@
 # -*- coding: utf-8 -*-
-"""Coordinate Prime media state, stream files and Kodi DB middleware."""
-
+"""Coordinate Prime media state, metadata authority, stream files and Kodi."""
 from __future__ import annotations
 
 
 class MediatorService:
-    def __init__(self, media_store, stream_library, kodi_db):
+    def __init__(self, media_store, stream_library, kodi_db, metadata_resolver=None):
         self.media_store = media_store
         self.stream_library = stream_library
         self.kodi_db = kodi_db
+        self.metadata_resolver = metadata_resolver
 
     def start(self) -> dict:
-        """Link existing Kodi media. Stream export is explicit until imports exist."""
-        return self.kodi_db.synchronize_links()
+        """Link existing Kodi media without opening Kodi's video DB directly."""
+        result = self.kodi_db.synchronize_links()
+        if self.metadata_resolver is not None:
+            result["metadata"] = self.metadata_resolver.status()
+        return result
+
+    def metadata_status(self) -> dict:
+        if self.metadata_resolver is None:
+            return {"configured": False, "provider": None, "kodi_scraper_addon": None}
+        return self.metadata_resolver.status()
+
+    def required_kodi_scraper(self):
+        if self.metadata_resolver is None:
+            return None
+        return self.metadata_resolver.kodi_scraper_addon()
 
     def publish_series(self, series: dict, episodes: list) -> list:
         paths = self.stream_library.write_series(series, episodes)
