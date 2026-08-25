@@ -354,6 +354,17 @@ class MetadataResolverTests(unittest.TestCase):
         self.assertEqual(0, importer.calls)
         self.assertEqual("metadata_provider_required", result[0]["blocked"])
 
+    def test_metadata_resolution_honors_pipeline_stop_event(self):
+        import threading
+        stop = threading.Event()
+        stop.set()
+        self.resolver.bind_stop_event(stop)
+
+        result = self.resolver.run_once()
+
+        self.assertTrue(result["cancelled"])
+        self.assertEqual(0, result["resolved"])
+
 
 if __name__ == "__main__":
     unittest.main()

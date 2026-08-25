@@ -399,6 +399,10 @@ class MetadataResolverService:
         self.scraper_checker = scraper_checker
         self.scraper_installer = scraper_installer
         self._show_cache = {}
+        self._stop_event = None
+
+    def bind_stop_event(self, stop_event):
+        self._stop_event = stop_event
 
     def status(self):
         return self.config_store.status()
@@ -520,7 +524,18 @@ class MetadataResolverService:
         client = self._client()
         results = {"configured": True, "provider": provider,
                    "resolved": 0, "unresolved": 0, "failed": []}
+        if self._stop_event is not None and self._stop_event.is_set():
+            LOGGER.warning("Metadata resolution cancelled before processing started")
+            results["cancelled"] = True
+            return results
         for season in self.config_store.list_resolution_targets():
+            if self._stop_event is not None and self._stop_event.is_set():
+                LOGGER.warning(
+                    "Metadata resolution cancelled after %s resolved and %s unresolved entries",
+                    results["resolved"], results["unresolved"],
+                )
+                results["cancelled"] = True
+                break
             try:
                 resolved = self._resolve_target(client, provider, season)
             except Exception as exc:
@@ -587,7 +602,11 @@ class MetadataResolverService:
         candidates=list(candidates_by_id.values())
         candidate = self._best_show(names, target_year, candidates)
         if not candidate:
-            raise MetadataProviderError("No confident metadata-provider series match")
+            raise MetadataProviderError(
+                "No confident metadata-provider series match for: {} ({} candidates)".format(
+                    ", ".join(names), len(candidates)
+                )
+            )
         show = client.get_show(candidate["id"])
         self._show_cache[series_id] = show
         return show

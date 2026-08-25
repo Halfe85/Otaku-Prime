@@ -4,6 +4,11 @@ import threading
 from resources.lib.logging_config import get_logger
 LOGGER=get_logger(__name__)
 
+# Kodi can reload a service before its previous Python worker has fully
+# returned. Keep full watchlist pipelines single-flight across service
+# instances in the shared addon interpreter.
+_PIPELINE_LOCK = threading.Lock()
+
 
 class WatchlistSyncService:
     def __init__(self, importers, interval_seconds=900, error_handler=None,
@@ -15,8 +20,23 @@ class WatchlistSyncService:
         self.error_handler = error_handler or (lambda error: None)
         self._stop = threading.Event()
         self._thread = None
+        for processor in self.processors:
+            binder = getattr(processor, "bind_stop_event", None)
+            if binder:
+                binder(self._stop)
 
     def run_once(self):
+        while not _PIPELINE_LOCK.acquire(timeout=0.5):
+            if self._stop.is_set():
+                LOGGER.warning("Watchlist synchronization cancelled while another pipeline is active")
+                return [{"cancelled": True, "reason": "pipeline_stopping"}]
+            LOGGER.info("Watchlist synchronization waiting for the active pipeline")
+        try:
+            return self._run_once_locked()
+        finally:
+            _PIPELINE_LOCK.release()
+
+    def _run_once_locked(self):
         if self.gate is not None and not self.gate.is_configured():
             status = self.gate.status()
             LOGGER.warning("Watchlist synchronization blocked: metadata provider is required")
@@ -28,6 +48,8 @@ class WatchlistSyncService:
 
         results = []
         for importer in self.importers:
+            if self._stop.is_set():
+                return results + [{"cancelled": True, "reason": "pipeline_stopping"}]
             try:
                 LOGGER.info("Running watchlist importer %s",importer.__class__.__name__)
                 results.append(importer.sync())
@@ -36,6 +58,8 @@ class WatchlistSyncService:
                 self.error_handler(exc)
                 results.append({"error": str(exc)})
         for processor in self.processors:
+            if self._stop.is_set():
+                return results + [{"cancelled": True, "reason": "pipeline_stopping"}]
             try:
                 LOGGER.info("Running watchlist processor %s",processor.__class__.__name__)
                 results.append(processor.run_once())

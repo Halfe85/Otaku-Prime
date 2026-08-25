@@ -5,6 +5,8 @@ Alpha8b supersedes Alpha8 and includes all Alpha8 work below.
 
 - Improve TheTVDB matching for anime with non-Latin primary titles by using title aliases without treating plot overviews as aliases.
 - Search conservative base-title variants when AniList franchise or season names end in numbered season, part, or cour suffixes.
+- Prevent overlapping full watchlist/metadata passes when Kodi reloads the service, and cancel metadata resolution cooperatively during shutdown.
+- Include searched titles and provider candidate counts in unresolved metadata errors.
 
 Kodi database adoption:
 - Make verified TMDB or TheTVDB configuration the mandatory gate before watchlist processing.
