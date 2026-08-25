@@ -41,7 +41,8 @@ MAX_FORM_BYTES = 16 * 1024
 
 def create_server(host: str, port: int, user_store, media_store=None,
                   app_log_store=None, metadata_resolver=None,
-                  on_metadata_configured=None,kodi_inventory_store=None) -> ThreadingHTTPServer:
+                  on_metadata_configured=None,on_watchlist_changed=None,
+                  kodi_inventory_store=None) -> ThreadingHTTPServer:
     auth = AuthService(user_store)
     authenticator_api = AuthenticatorAPI()
     watchlist_accounts = WatchlistAccountStore(user_store.db_path)
@@ -533,6 +534,13 @@ def create_server(host: str, port: int, user_store, media_store=None,
                     external_username=viewer["username"],
                     access_token=token,
                 )
+                LOGGER.info("AniList account connected through admin UI: %s",viewer["username"])
+                if on_watchlist_changed:
+                    threading.Thread(
+                        target=on_watchlist_changed,
+                        name="OtakuPrimeAniListConnected",
+                        daemon=True,
+                    ).start()
                 self._redirect("/watchlist/anilist")
                 return
 
@@ -552,6 +560,12 @@ def create_server(host: str, port: int, user_store, media_store=None,
                 watchlist_preferences.set_mature_content(
                     user["id"], form.get("mature_content") == "1"
                 )
+                if on_watchlist_changed:
+                    threading.Thread(
+                        target=on_watchlist_changed,
+                        name="OtakuPrimeAniListPreferences",
+                        daemon=True,
+                    ).start()
                 self._redirect("/watchlist/anilist")
                 return
 

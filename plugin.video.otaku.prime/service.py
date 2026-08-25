@@ -104,6 +104,7 @@ def main() -> None:
         metadata_store,
         scraper_checker=scraper_installed,
         scraper_installer=request_scraper_install,
+        media_store=media_store,
     )
 
     mediator = MediatorService(
@@ -167,6 +168,7 @@ def main() -> None:
             app_logs,
             metadata_resolver=metadata_resolver,
             on_metadata_configured=watchlist_sync.run_once,
+            on_watchlist_changed=watchlist_sync.run_once,
             kodi_inventory_store=kodi_inventory,
         )
     except OSError as exc:

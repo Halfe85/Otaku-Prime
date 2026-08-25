@@ -78,14 +78,14 @@ class AniListSyncTests(unittest.TestCase):
     def test_relation_discovery_does_not_import_unlisted_sequel(self):
         class ChainRelations:
             media={
-              "10":{"id":10,"title":{"english":"Root","romaji":"Root"},
+              "10":{"id":10,"format":"TV","title":{"english":"Root","romaji":"Root"},
                 "startDate":{"year":2020},"relations":{"edges":[
                   {"relationType":"SEQUEL","node":{"id":11,"format":"TV","startDate":{"year":2021}}}]}},
-              "11":{"id":11,"title":{"english":"Root 2","romaji":"Root 2"},
+              "11":{"id":11,"format":"TV","title":{"english":"Root 2","romaji":"Root 2"},
                 "startDate":{"year":2021},"relations":{"edges":[
                   {"relationType":"PREQUEL","node":{"id":10,"format":"TV","startDate":{"year":2020}}},
                   {"relationType":"SEQUEL","node":{"id":12,"format":"TV","startDate":{"year":2022}}}]}},
-              "12":{"id":12,"title":{"english":"Root 3","romaji":"Root 3"},
+              "12":{"id":12,"format":"TV","title":{"english":"Root 3","romaji":"Root 3"},
                 "startDate":{"year":2022},"relations":{"edges":[
                   {"relationType":"PREQUEL","node":{"id":11,"format":"TV","startDate":{"year":2021}}}]}},
             }

@@ -16,6 +16,7 @@ from resources.lib.database.metadata_provider import (
     KODI_SCRAPER_ADDONS,
     SUPPORTED_PROVIDERS,
 )
+from resources.lib.database.watchlist_relations import WatchlistRelationStore
 
 
 class MetadataProviderError(RuntimeError):
@@ -77,6 +78,13 @@ def _year(value):
         return int(str(value or "")[:4])
     except (TypeError, ValueError):
         return None
+
+
+def _date_value(value):
+    try:
+        return datetime.date.fromisoformat(str(value or "")[:10])
+    except (TypeError, ValueError):
+        return datetime.date.min
 
 
 def _utc_date(timestamp):
@@ -412,12 +420,18 @@ class MetadataResolverService:
                 (category == "ona" and season.get("relation_type") in self.SPECIAL_RELATIONS))
 
     def __init__(self, config_store, timeout=20, client_factory=None,
-                 scraper_checker=None, scraper_installer=None):
+                 scraper_checker=None, scraper_installer=None, media_store=None):
         self.config_store = config_store
         self.timeout = int(timeout)
         self.client_factory = client_factory
         self.scraper_checker = scraper_checker
         self.scraper_installer = scraper_installer
+        self.media_store = media_store
+        self.relation_store = (
+            WatchlistRelationStore(media_store.db_path) if media_store else None
+        )
+        if self.relation_store:
+            self.relation_store.initialize()
         self._show_cache = {}
         self._stop_event = None
 
@@ -543,11 +557,32 @@ class MetadataResolverService:
         self.config_store.prepare_for_provider(provider)
         client = self._client()
         results = {"configured": True, "provider": provider,
-                   "resolved": 0, "unresolved": 0, "failed": []}
+                   "resolved": 0, "unresolved": 0, "failed": [], "placed": 0}
         if self._stop_event is not None and self._stop_event.is_set():
             LOGGER.warning("Metadata resolution cancelled before processing started")
             results["cancelled"] = True
             return results
+        staged_targets = self.relation_store.list_resolved() if self.relation_store else []
+        for staged in staged_targets:
+            if self._stop_event is not None and self._stop_event.is_set():
+                results["cancelled"] = True
+                return results
+            try:
+                self._place_staged_target(client, provider, staged)
+                results["resolved"] += 1
+                results["placed"] += 1
+            except Exception as exc:
+                LOGGER.exception(
+                    "Metadata placement failed for staged AniList ID %s",
+                    staged.get("anilist_id"),
+                )
+                results["unresolved"] += 1
+                results["failed"].append({
+                    "season_id": None,
+                    "anilist_id": staged.get("anilist_id"),
+                    "error": str(exc),
+                    "stage": "provider_placement",
+                })
         for season in self.config_store.list_resolution_targets():
             if self._stop_event is not None and self._stop_event.is_set():
                 LOGGER.warning(
@@ -573,6 +608,129 @@ class MetadataResolverService:
         if results["unresolved"]:
             LOGGER.warning("Metadata resolution left %s entries unresolved",results["unresolved"])
         return results
+
+    def _place_staged_target(self, client, provider, staged):
+        """Let the metadata authority place one relation-resolved watchlist row."""
+        target = dict(staged)
+        target["related_series_id"] = staged["franchise_local_id"]
+        target["franchise_release_date"] = staged.get("franchise_release_date")
+        show = self._resolve_show(client, target)
+        special = self._is_special(target)
+        if special:
+            season_summary = next(
+                (item for item in show.get("seasons") or []
+                 if int(item.get("number", -1)) == 0), None,
+            )
+        else:
+            season_summary = self._best_staged_season(target, show.get("seasons") or [])
+        if not season_summary:
+            raise MetadataProviderError(
+                "Provider franchise has no confident placement for watchlist item"
+            )
+        provider_season = client.get_season(
+            show["id"], int(season_summary["number"]), season_summary.get("id")
+        )
+        provider_episodes = provider_season.get("episodes") or []
+        if special:
+            matched = self._best_staged_special(target, provider_episodes)
+            if not matched:
+                raise MetadataProviderError(
+                    "Provider specials season has no confident episode placement"
+                )
+            selected_episodes = [matched]
+        else:
+            selected_episodes = provider_episodes
+
+        resolution = {
+            "root_id": staged["relation_root_id"],
+            "season_number": int(provider_season["number"]) if not special else 1,
+            "franchise_english_name": staged.get("franchise_english_name"),
+            "franchise_romaji_name": staged.get("franchise_romaji_name"),
+            "start_year": _year(staged.get("release_date")),
+            "media_format": staged.get("media_format"),
+            "relation_type": staged.get("relation_type"),
+            "media_category": staged.get("media_category"),
+        }
+        season_id = self.media_store.promote_anilist_season(staged, resolution)
+        mappings = []
+        for position, episode in enumerate(selected_episodes, 1):
+            local_number = position if special else int(episode["number"])
+            local_id = self.media_store.upsert_episode(season_id, local_number)
+            mappings.append({
+                "local_id": local_id,
+                "provider_episode_id": episode["id"],
+                "provider_episode_number": int(episode["number"]),
+                "provider_episode_name": episode.get("name"),
+            })
+        self.media_store.import_provider_episode_count(
+            season_id, "anilist", int(staged.get("progress") or 0)
+        )
+        promoted = dict(target)
+        promoted["local_id"] = season_id
+        self.config_store.apply_resolution(
+            promoted, provider, show, provider_season, mappings, True
+        )
+        self.media_store.save_provider_list_status(
+            "season", season_id, "anilist", staged["list_status"]
+        )
+
+    @staticmethod
+    def _best_staged_season(staged, candidates):
+        release = str(staged.get("release_date") or "")[:10]
+        release_year = _year(release)
+        scored = []
+        for item in candidates:
+            if item.get("number") is None or int(item["number"]) == 0:
+                continue
+            air_date = str(item.get("air_date") or "")[:10]
+            score = 0
+            if release and air_date:
+                if release == air_date:
+                    score += 120
+                else:
+                    difference = abs((_date_value(release) - _date_value(air_date)).days)
+                    if difference <= 14:
+                        score += 90
+                    elif difference <= 60:
+                        score += 60
+            elif release_year and _year(air_date) == release_year:
+                score += 35
+            if score:
+                scored.append((score, item))
+        if not scored:
+            return None
+        scored.sort(key=lambda value: value[0], reverse=True)
+        if len(scored) > 1 and scored[0][0] == scored[1][0]:
+            return None
+        return scored[0][1]
+
+    @staticmethod
+    def _best_staged_special(staged, episodes):
+        release = str(staged.get("release_date") or "")[:10]
+        wanted = [_normalize(staged.get("english_name")), _normalize(staged.get("romaji_name"))]
+        scored = []
+        for episode in episodes:
+            if episode.get("id") is None:
+                continue
+            score = 0
+            if release and str(episode.get("air_date") or "")[:10] == release:
+                score += 120
+            actual = _normalize(episode.get("name"))
+            for name in wanted:
+                if name and actual and name == actual:
+                    score += 100
+                    break
+                if name and actual and (name in actual or actual in name):
+                    score += 55
+                    break
+            if score:
+                scored.append((score, episode))
+        if not scored:
+            return None
+        scored.sort(key=lambda value: value[0], reverse=True)
+        if len(scored) > 1 and scored[0][0] == scored[1][0]:
+            return None
+        return scored[0][1]
 
     def _resolve_target(self, client, provider, season):
         show = self._resolve_show(client, season)

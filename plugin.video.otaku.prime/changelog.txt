@@ -13,6 +13,9 @@ Alpha8b supersedes Alpha8 and includes all Alpha8 work below.
 - Add shorter TheTVDB discovery queries for long punctuation-heavy titles while retaining strict full-title scoring.
 - Make metadata synchronization resumable by skipping completed seasons while still selecting newly added or unmapped episodes.
 - Cancel AniList franchise traversal and promotion during Kodi shutdown so an old service worker cannot populate a newly reinstalled database.
+- Start synchronization immediately after AniList is connected or its mature-content preference changes, instead of waiting for the periodic poll.
+- Resolve relation-staged franchises and watchlist items against TMDB/TheTVDB before creating catalogue seasons and episodes.
+- Populate normal seasons from provider-owned episode lists and promote specials as only their confidently matched Season 0 episode.
 
 Kodi database adoption:
 - Make verified TMDB or TheTVDB configuration the mandatory gate before watchlist processing.

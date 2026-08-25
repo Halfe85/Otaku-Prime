@@ -78,9 +78,20 @@ class WatchlistRelationStore:
     def list_resolved(self):
         with self._connection() as db:
             return [dict(row) for row in db.execute(
-                """SELECT * FROM anilist_import_staging
-                   WHERE relation_resolved=1
-                   ORDER BY synced_at,anilist_id"""
+                """SELECT staging.*,
+                          series.metadata_provider AS series_metadata_provider,
+                          series.metadata_show_id,
+                          series.metadata_show_name,
+                          series.metadata_show_year
+                     FROM anilist_import_staging AS staging
+                     JOIN tv_series AS series
+                       ON series.local_id=staging.franchise_local_id
+                    WHERE staging.relation_resolved=1
+                      AND NOT EXISTS(
+                        SELECT 1 FROM seasons AS season
+                         WHERE season.anilist_id=staging.anilist_id
+                           AND season.kodi_resolved=1)
+                    ORDER BY staging.synced_at,staging.anilist_id"""
             )]
 
     def get(self, anilist_id):

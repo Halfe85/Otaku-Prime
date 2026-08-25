@@ -11,6 +11,7 @@ ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, ROOT)
 
 from resources.lib.database.metadata_provider import MetadataProviderStore
+from resources.lib.database.watchlist_relations import WatchlistRelationStore
 from resources.lib.database.watchlist_media import WatchlistMediaStore
 from resources.lib.services.metadata_resolver import (
     MetadataResolverService,
@@ -257,6 +258,63 @@ class MetadataResolverTests(unittest.TestCase):
                 "SELECT * FROM {} WHERE local_id=?".format(table),
                 (local_id,),
             ).fetchone())
+
+    def _stage_for_placement(self, anilist_id, title, media_format, release_date,
+                             progress=0, category="tv", relation_type=None):
+        self.media.replace_anilist_staging([{
+            "anilist_id":anilist_id,"english_name":title,"romaji_name":title,
+            "list_status":"CURRENT","progress":progress,"media_format":media_format,
+            "release_date":release_date,
+        }])
+        franchise=self.media.upsert_tv_series(
+            english_name="Franchise",romaji_name="Franchise",
+            anilist_root_id=1,franchise_resolved=True)
+        relations=WatchlistRelationStore(self.db_path); relations.initialize()
+        relations.save_resolution(anilist_id,franchise,{
+            "root_id":1,"franchise_english_name":"Franchise",
+            "franchise_romaji_name":"Franchise",
+            "franchise_release_date":"2020-01-01",
+            "relation_type":relation_type,"media_category":category,
+            "relation_path":[1,anilist_id],
+        })
+        return franchise
+
+    def test_staged_tv_item_is_placed_by_provider_before_catalogue_promotion(self):
+        franchise=self._stage_for_placement(
+            2,"Completely Different Arc Title","TV","2021-01-10",progress=1)
+        resolver=MetadataResolverService(
+            self.config,media_store=self.media,
+            client_factory=lambda provider,config: FakeMetadataClient())
+        self.assertEqual([],self.media.list_media("season"))
+
+        result=resolver.run_once()
+
+        self.assertEqual(1,result["placed"])
+        seasons=self.media.list_media("season")
+        self.assertEqual(1,len(seasons))
+        self.assertEqual(2,seasons[0]["kodi_season_number"])
+        episodes=self.media.list_media("episode")
+        self.assertEqual(2,len(episodes))
+        self.assertEqual([1,2],[row["kodi_episode_number"] for row in episodes])
+        self.assertEqual(franchise,seasons[0]["related_series_id"])
+
+    def test_staged_special_promotes_only_matched_provider_special_episode(self):
+        self._stage_for_placement(
+            30,"Bonus Story","OVA","2020-06-01",progress=1,
+            category="ova",relation_type="PARENT")
+        resolver=MetadataResolverService(
+            self.config,media_store=self.media,
+            client_factory=lambda provider,config: FakeMetadataClient())
+
+        result=resolver.run_once()
+
+        self.assertEqual(1,result["placed"])
+        season=self.media.list_media("season")[0]
+        self.assertEqual(0,season["kodi_season_number"])
+        episodes=self.media.list_media("episode")
+        self.assertEqual(1,len(episodes))
+        self.assertEqual(7,episodes[0]["kodi_episode_number"])
+        self.assertEqual("1007",episodes[0]["metadata_episode_id"])
 
     def test_resolves_franchise_named_season_and_normal_episodes(self):
         series = self._franchise()
