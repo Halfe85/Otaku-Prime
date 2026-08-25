@@ -96,6 +96,8 @@ class AniListFranchiseResolverService:
                 media=self._cache.get(media_id)
                 if not media: continue
                 following.update(str(node["id"]) for node in self._main_neighbors(media,"PREQUEL"))
+                if media.get("format") in SPECIAL_FORMATS:
+                    following.update(str(node["id"]) for node in self._special_graph_neighbors(media))
             frontier=following-visited
 
     @staticmethod
@@ -108,10 +110,51 @@ class AniListFranchiseResolverService:
         nodes=[]
         for edge in (media.get("relations") or {}).get("edges") or []:
             node=edge.get("node") or {}
-            if (edge.get("relationType")==relation and node.get("id")
-                    and node.get("format") in SERIES_FORMATS):
+            allowed = node.get("format") in SERIES_FORMATS or (
+                media.get("format") == "ONA" and node.get("format") == "ONA"
+            )
+            if edge.get("relationType")==relation and node.get("id") and allowed:
                 nodes.append(node)
         return sorted(nodes,key=self._date_key)
+
+    def _special_graph_neighbors(self,media):
+        nodes=[]
+        for edge in (media.get("relations") or {}).get("edges") or []:
+            node=edge.get("node") or {}
+            relation=edge.get("relationType"); node_format=node.get("format")
+            is_anchor=(relation in ("PARENT","OTHER","SEQUEL") and
+                       node_format in SERIES_FORMATS+("ONA",))
+            is_special_prequel=(relation=="PREQUEL" and
+                                node_format in SPECIAL_FORMATS)
+            if node.get("id") and (is_anchor or is_special_prequel):
+                nodes.append(node)
+        return sorted(nodes,key=self._date_key)
+
+    def _special_anchor(self,media):
+        """Find a TV/ONA parent through direct or chained special relations."""
+        queue=[media]; seen=set()
+        while queue and len(seen)<self.max_nodes:
+            item=queue.pop(0); key=str(item["id"])
+            if key in seen: continue
+            seen.add(key)
+            edges=(item.get("relations") or {}).get("edges") or []
+            for relation in ("PARENT","OTHER","SEQUEL"):
+                anchors=[]
+                for edge in edges:
+                    node=edge.get("node") or {}
+                    if (edge.get("relationType")==relation and node.get("id")
+                            and node.get("format") in SERIES_FORMATS+("ONA",)):
+                        anchors.append(node)
+                if anchors:
+                    anchor=sorted(anchors,key=self._date_key)[0]
+                    return self._cache.get(str(anchor["id"]))
+            for edge in edges:
+                node=edge.get("node") or {}
+                if (edge.get("relationType")=="PREQUEL" and node.get("id")
+                        and node.get("format") in SPECIAL_FORMATS):
+                    cached=self._cache.get(str(node["id"]))
+                    if cached: queue.append(cached)
+        return None
 
     def _resolve(self,media_id):
         current=self._media(media_id); seen=set()
@@ -120,6 +163,12 @@ class AniListFranchiseResolverService:
         for edge in (current.get("relations") or {}).get("edges") or []:
             if edge.get("relationType") in ("SPIN_OFF","SIDE_STORY","PARENT"):
                 relation_type=edge.get("relationType"); break
+        # Specials belong to their parent franchise but remain the only promoted
+        # watchlist entry. Relation traversal never imports the parent itself.
+        if media_format in SPECIAL_FORMATS:
+            anchor=self._special_anchor(current)
+            if anchor:
+                current=anchor
         # Follow the oldest prequel at ambiguous forks. Side stories are excluded.
         while str(current["id"]) not in seen and len(seen)<self.max_nodes:
             seen.add(str(current["id"])); previous=self._main_neighbors(current,"PREQUEL")

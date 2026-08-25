@@ -170,6 +170,82 @@ class AniListSyncTests(unittest.TestCase):
         result=AniListFranchiseResolverService(self.media,client=MixedRelations()).run_once()
         self.assertEqual(1,result["resolved"]); self.assertEqual([],result["failed"])
 
+    def test_parent_special_is_grouped_under_parent_without_importing_parent(self):
+        class ParentRelations:
+            media={
+              "30":{"id":30,"format":"OVA","title":{"english":"Show OVA"},
+                "startDate":{"year":2021},"relations":{"edges":[
+                  {"relationType":"PARENT","node":{"id":10,"format":"TV",
+                    "title":{"english":"Show"},"startDate":{"year":2020}}}]}},
+              "10":{"id":10,"format":"TV","title":{"english":"Show"},
+                "startDate":{"year":2020},"relations":{"edges":[]}},
+            }
+            def fetch_many(self,ids): return [self.media[str(value)] for value in ids]
+        self.media.replace_anilist_staging([{"anilist_id":30,"english_name":"Show OVA",
+          "list_status":"PLANNING","progress":0,"media_format":"OVA"}])
+        result=AniListFranchiseResolverService(
+          self.media,client=ParentRelations()).run_once()
+        self.assertEqual([],result["failed"])
+        seasons=self.media.list_media("season")
+        self.assertEqual(["30"],[row["anilist_id"] for row in seasons])
+        with sqlite3.connect(self.path) as db:
+            root_id=db.execute("""SELECT series.anilist_root_id FROM seasons AS season
+              JOIN tv_series AS series ON series.local_id=season.related_series_id
+              WHERE season.local_id=?""",(seasons[0]["local_id"],)).fetchone()[0]
+        self.assertEqual("10",root_id)
+        self.assertEqual(0,seasons[0]["kodi_season_number"])
+
+    def test_special_can_find_tv_anchor_through_other_or_special_prequel(self):
+        class SpecialChainRelations:
+            media={
+              "32":{"id":32,"format":"OVA","title":{"english":"Bonus 2"},
+                "startDate":{"year":2022},"relations":{"edges":[
+                  {"relationType":"PREQUEL","node":{"id":31,"format":"OVA",
+                    "title":{"english":"Bonus 1"},"startDate":{"year":2021}}}]}},
+              "31":{"id":31,"format":"OVA","title":{"english":"Bonus 1"},
+                "startDate":{"year":2021},"relations":{"edges":[
+                  {"relationType":"OTHER","node":{"id":10,"format":"TV",
+                    "title":{"english":"Main Show"},"startDate":{"year":2020}}}]}},
+              "10":{"id":10,"format":"TV","title":{"english":"Main Show"},
+                "startDate":{"year":2020},"relations":{"edges":[]}},
+            }
+            def fetch_many(self,ids): return [self.media[str(value)] for value in ids]
+        self.media.replace_anilist_staging([{"anilist_id":32,"english_name":"Bonus 2",
+          "list_status":"PLANNING","progress":0,"media_format":"OVA"}])
+        result=AniListFranchiseResolverService(
+          self.media,client=SpecialChainRelations()).run_once()
+        self.assertEqual([],result["failed"])
+        season=self.media.list_media("season")[0]
+        with sqlite3.connect(self.path) as db:
+            root_id=db.execute("""SELECT series.anilist_root_id FROM seasons AS season
+              JOIN tv_series AS series ON series.local_id=season.related_series_id
+              WHERE season.local_id=?""",(season["local_id"],)).fetchone()[0]
+        self.assertEqual("10",root_id)
+
+    def test_ona_prequel_chain_is_numbered_as_main_series(self):
+        class OnaRelations:
+            media={
+              "41":{"id":41,"format":"ONA","title":{"english":"Sword Part II"},
+                "startDate":{"year":2018},"relations":{"edges":[
+                  {"relationType":"PREQUEL","node":{"id":40,"format":"ONA",
+                    "title":{"english":"Sword"},"startDate":{"year":2018}}}]}},
+              "40":{"id":40,"format":"ONA","title":{"english":"Sword"},
+                "startDate":{"year":2018},"relations":{"edges":[]}},
+            }
+            def fetch_many(self,ids): return [self.media[str(value)] for value in ids]
+        self.media.replace_anilist_staging([{"anilist_id":41,"english_name":"Sword Part II",
+          "list_status":"CURRENT","progress":0,"media_format":"ONA"}])
+        result=AniListFranchiseResolverService(
+          self.media,client=OnaRelations()).run_once()
+        self.assertEqual([],result["failed"])
+        season=self.media.list_media("season")[0]
+        with sqlite3.connect(self.path) as db:
+            root_id=db.execute("""SELECT series.anilist_root_id FROM seasons AS season
+              JOIN tv_series AS series ON series.local_id=season.related_series_id
+              WHERE season.local_id=?""",(season["local_id"],)).fetchone()[0]
+        self.assertEqual("40",root_id)
+        self.assertEqual(2,season["kodi_season_number"])
+
     def test_branching_seasons_receive_distinct_local_numbers(self):
         class BranchRelations:
             media={

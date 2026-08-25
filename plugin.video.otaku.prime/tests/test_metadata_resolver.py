@@ -16,6 +16,7 @@ from resources.lib.services.metadata_resolver import (
     MetadataResolverService,
     TMDBMetadataClient,
     TVDBMetadataClient,
+    _search_title_variants,
     _title_variants,
 )
 from resources.lib.services.watchlist_sync import WatchlistSyncService
@@ -175,6 +176,15 @@ class MetadataAuthenticationTests(unittest.TestCase):
           _title_variants("That Time I Got Reincarnated as a Slime Season 2 Part 2"))
         self.assertIn("Tensei Shitara Slime Datta Ken",
           _title_variants("Tensei Shitara Slime Datta Ken 2nd Season Part 2"))
+        self.assertIn("SWORDGAI The Animation",
+          _title_variants("SWORDGAI The Animation Part II"))
+
+    def test_search_variants_add_short_queries_without_weakening_match_titles(self):
+        variants=_search_title_variants(
+          "I’m a Noble on the Brink of Ruin, So I Might as Well Try Mastering Magic")
+        self.assertIn("Noble on the Brink of Ruin",variants)
+        self.assertIn("7th Time Loop",_search_title_variants(
+          "7th Time Loop: The Villainess Enjoys a Carefree Life"))
 
     def test_show_matching_uses_aliases(self):
         match=MetadataResolverService._best_show(

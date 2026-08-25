@@ -277,7 +277,9 @@ class WatchlistMediaStore:
             anilist_root_id=root_id,franchise_resolved=True)
         anilist_id=str(entry["anilist_id"])
         category=resolution.get("media_category") or "tv"
-        is_special=category in ("movie","ona","ova","oad","special","spin_off")
+        is_special=(category in ("movie","ova","oad","special","spin_off") or
+                    (category=="ona" and resolution.get("relation_type") in
+                     ("PARENT","SIDE_STORY","SPIN_OFF")))
         # Internal season numbers remain unique. Kodi placement is independently
         # represented by kodi_season_number, so specials can all target season 0.
         season_number=max(1,int(resolution.get("season_number") or 1))

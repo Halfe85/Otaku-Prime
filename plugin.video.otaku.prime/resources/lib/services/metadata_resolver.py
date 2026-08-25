@@ -35,6 +35,7 @@ def _title_variants(value):
     base = title
     suffixes = (
         r"\s*(?:[-:–—]\s*)?(?:part|cour)\s*\d+\s*$",
+        r"\s*(?:[-:–—]\s*)?part\s+[ivxlcdm]+\s*$",
         r"\s*(?:[-:–—]\s*)?(?:season\s*\d+|\d+(?:st|nd|rd|th)\s+season)\s*$",
     )
     while True:
@@ -49,6 +50,25 @@ def _title_variants(value):
         base = reduced
         if base not in variants:
             variants.append(base)
+    return variants
+
+
+def _search_title_variants(value):
+    """Build extra discovery queries while preserving full titles for scoring."""
+    variants = _title_variants(value)
+    for title in list(variants):
+        ascii_title = title.replace("’", "'").replace("–", "-").replace("—", "-")
+        if ascii_title not in variants:
+            variants.append(ascii_title)
+        clause = re.split(r"\s*[:;,]\s*|\s+-\s+", ascii_title, maxsplit=1)[0].strip()
+        if len(clause) >= 6 and clause not in variants:
+            variants.append(clause)
+        without_lead = re.sub(
+            r"^(?:i(?:'m| am)\s+(?:a|an)\s+|the\s+|a\s+|an\s+)",
+            "", clause, flags=re.IGNORECASE,
+        ).strip()
+        if len(without_lead) >= 6 and without_lead not in variants:
+            variants.append(without_lead)
     return variants
 
 
@@ -588,16 +608,20 @@ class MetadataResolverService:
             season.get("romaji_name"),
         ]
         names = []
+        queries = []
         for source_name in source_names:
             for name in _title_variants(source_name):
                 if name not in names:
                     names.append(name)
+            for query in _search_title_variants(source_name):
+                if query not in queries:
+                    queries.append(query)
         if not names:
             raise MetadataProviderError("Franchise has no title to search")
         target_year = _year(season.get("franchise_release_date"))
         candidates_by_id = {}
-        for name in names:
-            for item in client.search_series(name, target_year):
+        for query in queries:
+            for item in client.search_series(query, target_year):
                 candidates_by_id[str(item["id"])]=item
         candidates=list(candidates_by_id.values())
         candidate = self._best_show(names, target_year, candidates)
