@@ -11,3 +11,52 @@
   <span id="watchlist-page-status">Page 1 of 1</span>
   <button class="button secondary" id="watchlist-next" type="button">Next</button>
 </nav>
+
+<div class="series-modal" id="series-modal" hidden>
+  <div class="series-modal-backdrop" data-modal-close></div>
+  <section class="series-modal-card" role="dialog" aria-modal="true" aria-labelledby="series-modal-title" aria-describedby="series-modal-summary">
+    <header class="series-modal-header">
+      <div>
+        <span class="series-modal-eyebrow">Prime watchlist item</span>
+        <h2 id="series-modal-title">Series details</h2>
+        <p id="series-modal-summary" class="muted"></p>
+      </div>
+      <button class="series-modal-close" type="button" data-modal-close aria-label="Close series details">&times;</button>
+    </header>
+
+    <div class="series-modal-body">
+      <section class="series-state-card">
+        <div><span>Prime status</span><strong id="series-modal-status">—</strong></div>
+        <div><span>Progress</span><strong id="series-modal-progress">—</strong></div>
+        <div><span>Format</span><strong id="series-modal-format">—</strong></div>
+        <div><span>First release</span><strong id="series-modal-release">—</strong></div>
+      </section>
+
+      <p class="series-conflict" id="series-modal-conflict" hidden>
+        A connected provider disagrees with Prime. Prime's status and progress remain authoritative.
+      </p>
+
+      <section class="series-detail-section">
+        <h3>Titles</h3>
+        <dl class="series-title-list">
+          <div><dt>English</dt><dd id="series-modal-english">—</dd></div>
+          <div><dt>Romaji</dt><dd id="series-modal-romaji">—</dd></div>
+          <div><dt>Native</dt><dd id="series-modal-native">—</dd></div>
+        </dl>
+      </section>
+
+      <section class="series-detail-section">
+        <div class="series-section-heading">
+          <div><h3>Provider identities</h3><p>Open this exact item on its tracking provider.</p></div>
+          <span id="series-modal-sources" class="series-source-count"></span>
+        </div>
+        <div class="provider-link-grid" id="series-modal-provider-links"></div>
+      </section>
+    </div>
+
+    <footer class="series-modal-footer">
+      <span id="series-modal-local-id" class="series-local-id"></span>
+      <button class="button secondary" type="button" data-modal-close>Close</button>
+    </footer>
+  </section>
+</div>

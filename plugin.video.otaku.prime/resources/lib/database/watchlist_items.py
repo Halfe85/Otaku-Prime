@@ -114,13 +114,15 @@ class WatchlistItemStore:
         values={column:target_row.get(column) or other.get(column) for column in
                 ("anilist_id","mal_id","kitsu_id","simkl_id","english_name","romaji_name","native_name",
                  "episode_count","media_format","release_date")}
+        # Release the duplicate row's UNIQUE provider IDs before assigning them
+        # to the surviving canonical row.
+        db.execute("UPDATE OR REPLACE watchlist_provider_entries SET local_id=? WHERE local_id=?",(target,duplicate))
+        db.execute("DELETE FROM watchlist_items WHERE local_id=?",(duplicate,))
         db.execute("""UPDATE watchlist_items SET anilist_id=?,mal_id=?,kitsu_id=?,simkl_id=?,
           english_name=?,romaji_name=?,native_name=?,episode_count=?,media_format=?,release_date=?,
           is_adult=MAX(is_adult,?),updated_at=CURRENT_TIMESTAMP WHERE local_id=?""",
           tuple(values[key] for key in ("anilist_id","mal_id","kitsu_id","simkl_id","english_name",
             "romaji_name","native_name","episode_count","media_format","release_date"))+(other["is_adult"],target))
-        db.execute("UPDATE OR REPLACE watchlist_provider_entries SET local_id=? WHERE local_id=?",(target,duplicate))
-        db.execute("DELETE FROM watchlist_items WHERE local_id=?",(duplicate,))
 
     def _upsert_snapshot_row(self,db,provider,entry):
         ids=self._clean_ids(provider,entry); matches=self._matching_local_ids(db,ids)
@@ -195,6 +197,39 @@ class WatchlistItemStore:
               GROUP_CONCAT(entry.provider,',') AS connected_providers
               FROM watchlist_items item JOIN watchlist_provider_entries entry ON entry.local_id=item.local_id
               GROUP BY item.local_id ORDER BY LOWER(COALESCE(item.english_name,item.romaji_name,item.native_name,''))""")]
+
+    def list_missing_provider_ids(self):
+        """Return canonical items whose provider identity set is incomplete."""
+        with self._connection() as db:
+            return [dict(row) for row in db.execute("""SELECT * FROM watchlist_items
+              WHERE anilist_id IS NULL OR mal_id IS NULL OR kitsu_id IS NULL OR simkl_id IS NULL
+              ORDER BY created_at,local_id""")]
+
+    def apply_resolved_ids(self,local_id,ids):
+        """Attach verified catalog IDs and merge rows they prove are identical."""
+        clean={name:str(value) for name,value in (ids or {}).items()
+               if name in ID_COLUMNS and value not in (None,"")}
+        if not clean: return local_id
+        with self._connection() as db:
+            current=db.execute("SELECT * FROM watchlist_items WHERE local_id=?",(local_id,)).fetchone()
+            if not current: raise KeyError("watchlist item not found")
+            for provider,value in clean.items():
+                existing=current[ID_COLUMNS[provider]]
+                if existing and existing!=value:
+                    raise WatchlistIdentityConflict(
+                        "verified identity collision for {}: {} != {}".format(
+                            ID_COLUMNS[provider],existing,value))
+            matches=self._matching_local_ids(db,clean)
+            for duplicate in matches:
+                if duplicate!=local_id: self._merge_items(db,local_id,duplicate)
+            assignments=[]; values=[]
+            for provider,value in clean.items():
+                column=ID_COLUMNS[provider]
+                assignments.append("{}=COALESCE({},?)".format(column,column)); values.append(value)
+            assignments.append("updated_at=CURRENT_TIMESTAMP")
+            db.execute("UPDATE watchlist_items SET {} WHERE local_id=?".format(
+                ",".join(assignments)),tuple(values)+(local_id,))
+        return local_id
 
     def set_master_state(self,local_id,status,progress):
         if status not in STATUSES: raise ValueError("unsupported watchlist status")

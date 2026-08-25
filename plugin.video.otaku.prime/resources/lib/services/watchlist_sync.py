@@ -11,11 +11,13 @@ _PIPELINE_LOCK = threading.Lock()
 
 
 class WatchlistSyncService:
-    def __init__(self, importers, watchlist_store, interval_seconds=900, error_handler=None):
+    def __init__(self, importers, watchlist_store, interval_seconds=900, error_handler=None,
+                 identity_enricher=None):
         self.importers = list(importers)
         self.watchlist_store = watchlist_store
         self.interval_seconds = max(60, int(interval_seconds))
         self.error_handler = error_handler or (lambda error: None)
+        self.identity_enricher = identity_enricher
         self._stop = threading.Event()
         self._thread = None
         self._busy_notice = False
@@ -53,6 +55,8 @@ class WatchlistSyncService:
         LOGGER.info("Prime watchlist merge complete: items=%s initialized=%s conflicts=%s",
                     merge["items"],merge["initialized"],merge["conflicts"])
         results.append({"prime_watchlist":merge})
+        if self.identity_enricher:
+            results.append({"provider_id_enrichment":self.identity_enricher.start()})
         return results
 
     def start(self, run_immediately=True):
@@ -77,3 +81,5 @@ class WatchlistSyncService:
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=timeout)
+        if self.identity_enricher:
+            self.identity_enricher.stop(timeout=timeout)

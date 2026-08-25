@@ -12,7 +12,9 @@ Otaku Prime 0.1.2 Alpha9
 - Detect provider disagreements without overwriting Prime's master state.
 - Fetch AniList's native MAL mapping and Kitsu's AniList/MAL mappings.
 - Retain every AniList/MAL/Kitsu/Simkl ID returned by Simkl watchlist records.
+- Resolve missing AniList, MAL, Kitsu, and Simkl catalog IDs for every Prime watchlist item, regardless of which tracker accounts are connected.
 - Refresh expired MAL and Kitsu access tokens before fetching their lists.
 - Use Simkl activities and delta synchronization during periodic runs instead of skipping Simkl.
 - Update Watchlist Management to show one row with all known IDs, Prime state, and connected sources.
+- Open each watchlist row in a responsive series-details modal with canonical state, titles, conflict status, and direct AniList, MAL, Kitsu, and Simkl links.
 - Migrate Alpha8b provider rows into the Alpha9 canonical schema without losing fetched entries.

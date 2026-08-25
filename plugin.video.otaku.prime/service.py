@@ -15,6 +15,7 @@ from resources.lib.database.watchlist_items import WatchlistItemStore
 from resources.lib.database.watchlist_accounts import WatchlistAccountStore
 from resources.lib.database.app_logs import AppLogStore
 from resources.lib.services.watchlist_sync import WatchlistSyncService
+from resources.lib.services.watchlist_identity import WatchlistIdentityEnrichmentService
 from resources.lib.watchlist.anilist_sync import AniListWatchlistImportService
 from resources.lib.watchlist.provider_importers import (
     MALWatchlistImportService,
@@ -63,18 +64,20 @@ def main() -> None:
         logger=get_logger(source)
         getattr(logger,{"ERROR":"error","WARNING":"warning"}.get(level,"info"))(message)
 
-    # This is the intentional application boundary: tracker-native snapshots are
-    # stored in watchlist_items and are not resolved, merged, or projected.
+    # Accounts only control list/status synchronization. Catalog identities are
+    # enriched independently after the canonical watchlist has been assembled.
     watchlist_importers = [
         AniListWatchlistImportService(watchlist_accounts, watchlist_items),
         MALWatchlistImportService(watchlist_accounts, watchlist_items),
         KitsuWatchlistImportService(watchlist_accounts, watchlist_items),
         SimklWatchlistImportService(watchlist_accounts, watchlist_items),
     ]
+    identity_enricher = WatchlistIdentityEnrichmentService(watchlist_items)
     watchlist_sync = WatchlistSyncService(
         watchlist_importers,
         watchlist_items,
         error_handler=lambda exc: log("ERROR","watchlist","Watchlist sync failed: {}".format(exc)),
+        identity_enricher=identity_enricher,
     )
 
     try:

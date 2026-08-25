@@ -345,7 +345,9 @@ class SimklWatchlistImportService:
     def _normalize(rows):
         normalized = []
         for row in rows:
-            show = row.get("show") or {}
+            # The current API names this object `anime`; retain `show` support
+            # for older Simkl responses already used by deployed Prime builds.
+            show = row.get("anime") or row.get("show") or {}
             ids = show.get("ids") or {}
             status = _status(row.get("status"))
             if not status or ids.get("simkl") is None:
