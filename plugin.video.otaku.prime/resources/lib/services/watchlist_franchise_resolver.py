@@ -12,6 +12,10 @@ from resources.lib.services.anilist_relations import (
     AniListFranchiseResolverService,
     AniListRelationClient,
 )
+from resources.lib.logging_config import get_logger
+
+
+LOGGER = get_logger(__name__)
 
 
 def _normalize(value):
@@ -205,6 +209,8 @@ class UnifiedWatchlistFranchiseResolverService(AniListFranchiseResolverService):
         if not rows:
             return {"resolved": 0, "failed": [], "franchises": 0, "staged_only": True}
 
+        LOGGER.info("Franchise resolution preparing %s pending watchlist items", len(rows))
+        prepared = []
         for row in rows:
             if self._stopping():
                 return {
@@ -219,7 +225,40 @@ class UnifiedWatchlistFranchiseResolverService(AniListFranchiseResolverService):
                 anilist_id = self.identity_client.resolve(row)
                 if not anilist_id:
                     raise RuntimeError("No confident AniList identity for relation traversal")
-                self._load_relation_graph([anilist_id])
+                prepared.append((row, provider, item_id, str(anilist_id)))
+            except Exception as exc:
+                failed.append({
+                    "provider": provider,
+                    "provider_item_id": item_id,
+                    "error": str(exc),
+                })
+
+        if prepared and not self._stopping():
+            LOGGER.info(
+                "Franchise resolution fetching relation graph for %s identified items",
+                len(prepared),
+            )
+            try:
+                self._load_relation_graph([entry[3] for entry in prepared])
+            except Exception as exc:
+                LOGGER.exception("Bulk AniList relation graph fetch failed")
+                return {
+                    "resolved": 0,
+                    "failed": failed + [{"provider": "anilist", "provider_item_id": None,
+                                           "error": str(exc)}],
+                    "franchises": 0,
+                    "staged_only": True,
+                }
+
+        for index, (row, provider, item_id, anilist_id) in enumerate(prepared, 1):
+            if self._stopping():
+                return {
+                    "resolved": len(active),
+                    "failed": failed,
+                    "franchises": len(franchises),
+                    "cancelled": True,
+                }
+            try:
                 resolution = self._resolve(anilist_id)
                 resolution["source_anilist_id"] = str(anilist_id)
                 franchise_id = self.media_store.upsert_tv_series(
@@ -247,13 +286,23 @@ class UnifiedWatchlistFranchiseResolverService(AniListFranchiseResolverService):
                     "provider_item_id": item_id,
                     "error": str(exc),
                 })
+            if index == len(prepared) or index % 25 == 0:
+                LOGGER.info(
+                    "Franchise resolution progress: %s/%s processed, %s resolved, %s failed",
+                    index, len(prepared), len(active), len(failed),
+                )
 
-        return {
+        result = {
             "resolved": len(active),
             "failed": failed,
             "franchises": len(franchises),
             "staged_only": True,
         }
+        LOGGER.info(
+            "Franchise resolution complete: resolved=%s failed=%s franchises=%s",
+            result["resolved"], len(result["failed"]), result["franchises"],
+        )
+        return result
 
 
 # Transitional alias for code/tests that imported the first canonical class.
