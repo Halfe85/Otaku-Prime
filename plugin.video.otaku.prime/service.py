@@ -143,7 +143,7 @@ def main() -> None:
             watchlist_accounts, watchlist_preferences, media_store
         )],
         processors=[
-            AniListFranchiseResolverService(media_store),
+            AniListFranchiseResolverService(media_store, stage_only=True),
             metadata_resolver,
         ],
         gate=metadata_resolver,
