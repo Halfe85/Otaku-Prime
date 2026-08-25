@@ -229,13 +229,23 @@ class AniListFranchiseResolverService:
         PREQUEL is always traversable, including through movies/OVAs. This is
         the critical bridge needed for chains such as TV -> MOVIE -> TV.
         PARENT/OTHER are used only by special entries to attach them to the
-        owning franchise. SEQUEL is deliberately never used as a root anchor.
+        owning franchise. An earlier main-series SEQUEL is a final fallback
+        for AniList's reversed prequel-special relationship convention.
         """
         nodes = list(self._edge_nodes(media, ("PREQUEL",)))
         if media.get("format") in SPECIAL_FORMATS:
             nodes.extend(self._edge_nodes(media, ("PARENT",), SERIES_FORMATS))
             if not nodes:
                 nodes.extend(self._edge_nodes(media, ("OTHER",), SERIES_FORMATS))
+            if not nodes:
+                # AniList occasionally models a prequel special as pointing to
+                # the older main series with SEQUEL (for example BURN THE WITCH
+                # #0.8 -> BURN THE WITCH). Only accept an earlier released
+                # series so a movie cannot attach itself to a future sequel.
+                nodes.extend(
+                    node for node in self._edge_nodes(media, ("SEQUEL",), SERIES_FORMATS)
+                    if self._date_key(node) < self._date_key(media)
+                )
         deduped = {}
         for node in nodes:
             deduped[str(node["id"])] = node

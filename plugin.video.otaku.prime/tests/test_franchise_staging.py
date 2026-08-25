@@ -96,6 +96,34 @@ class ParentSpecialRelations:
         return [self.media[str(value)] for value in ids]
 
 
+class BurnTheWitchRelations:
+    media = {
+        "169362": {
+            "id": 169362, "format": "SPECIAL",
+            "title": {"english": "BURN THE WITCH #0.8", "romaji": "BURN THE WITCH #0.8"},
+            "startDate": {"year": 2023, "month": 12, "day": 30},
+            "relations": {"edges": [{"relationType": "SEQUEL", "node": {
+                "id": 116673, "format": "ONA",
+                "title": {"english": "BURN THE WITCH", "romaji": "BURN THE WITCH"},
+                "startDate": {"year": 2020, "month": 10, "day": 2},
+            }}]},
+        },
+        "116673": {
+            "id": 116673, "format": "ONA",
+            "title": {"english": "BURN THE WITCH", "romaji": "BURN THE WITCH"},
+            "startDate": {"year": 2020, "month": 10, "day": 2},
+            "relations": {"edges": [{"relationType": "PREQUEL", "node": {
+                "id": 169362, "format": "SPECIAL",
+                "title": {"english": "BURN THE WITCH #0.8", "romaji": "BURN THE WITCH #0.8"},
+                "startDate": {"year": 2023, "month": 12, "day": 30},
+            }}]},
+        },
+    }
+
+    def fetch_many(self, ids):
+        return [self.media[str(value)] for value in ids]
+
+
 class FranchiseStagingTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -178,6 +206,20 @@ class FranchiseStagingTests(unittest.TestCase):
         self.assertEqual("PARENT", staged["relation_type"])
         self.assertEqual("ova", staged["media_category"])
         self.assertEqual([], self.media.list_media("season"))
+
+    def test_prequel_special_uses_older_main_series_sequel_as_franchise(self):
+        self._stage(169362, "BURN THE WITCH #0.8", "SPECIAL")
+        result = AniListFranchiseResolverService(
+            self.media,
+            client=BurnTheWitchRelations(),
+            stage_only=True,
+        ).run_once()
+
+        self.assertEqual([], result["failed"])
+        staged = self.relations.get(169362)
+        self.assertEqual("116673", staged["relation_root_id"])
+        self.assertEqual("BURN THE WITCH", staged["franchise_english_name"])
+        self.assertEqual(["116673", "169362"], json.loads(staged["relation_path_json"]))
 
 
 if __name__ == "__main__":

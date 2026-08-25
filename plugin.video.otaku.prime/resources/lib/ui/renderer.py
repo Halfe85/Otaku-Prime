@@ -253,7 +253,11 @@ def render_home(user: dict, message: str = "", active_tab: str = "general", watc
         elif category_id == "watchlist":
             panel_content = _watchlist_content(watchlist_accounts)
         elif category_id == "watchlist-management":
-            panel_content = _template("components/watchlist-management/watchlist-management.html")
+            panel_content = (
+                '<link rel="stylesheet" href="/ui/components/watchlist-management/watchlist-management.css">'
+                + _template("components/watchlist-management/watchlist-management.html")
+                + '<script src="/ui/components/watchlist-management/watchlist-management.js" defer></script>'
+            )
         else:
             panel_content = _preview_card(category_id)
         panels.append('<section class="panel" id="panel-{}" role="tabpanel"{}><header class="panel-header"><h2>{}</h2><p>{}</p></header>{}</section>'.format(category_id, "" if selected else " hidden", html.escape(label), html.escape(description), panel_content))

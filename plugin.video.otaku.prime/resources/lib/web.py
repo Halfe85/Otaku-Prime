@@ -50,6 +50,8 @@ def create_server(host: str, port: int, user_store, media_store=None,
     watchlist_preferences.initialize()
     media_store = media_store or WatchlistMediaStore(user_store.db_path)
     media_store.initialize()
+    watchlist_items = WatchlistItemStore(user_store.db_path)
+    watchlist_items.initialize()
     app_log_store = app_log_store or AppLogStore(user_store.db_path)
     app_log_store.initialize()
     kodi_inventory_store=kodi_inventory_store or KodiInventoryStore(user_store.db_path)
@@ -57,8 +59,6 @@ def create_server(host: str, port: int, user_store, media_store=None,
     if metadata_resolver is None:
         metadata_store = MetadataProviderStore(user_store.db_path)
         metadata_store.initialize()
-        watchlist_items = WatchlistItemStore(user_store.db_path)
-        watchlist_items.initialize()
         metadata_resolver = MetadataStructureResolverService(
             metadata_store,
             watchlist_items,
@@ -289,10 +289,10 @@ def create_server(host: str, port: int, user_store, media_store=None,
                 entries=app_log_store.list(after_id=after_id)
                 self._send_json(200,{"ok":True,"entries":entries}); return
 
-            if path == "/api/watchlist/series":
+            if path == "/api/watchlist/items":
                 if not self._current_user():
                     self._send_json(401,{"ok":False,"message":"Sign in again."}); return
-                self._send_json(200,{"ok":True,"entries":media_store.list_watchlist_seasons()})
+                self._send_json(200,{"ok":True,"entries":watchlist_items.list_all()})
                 return
 
             if path == "/api/auth/anilist/info":

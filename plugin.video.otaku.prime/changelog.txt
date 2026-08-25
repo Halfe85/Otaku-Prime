@@ -10,6 +10,8 @@ Alpha8b supersedes Alpha8 and includes all Alpha8 work below.
 - Remove the legacy release-watchdog, `.strm` generator, Kodi source/scan setup, stream-publication tables, mediator publishing API, and their tests; direct Kodi projection is the only publication architecture.
 - Add UzaMaid/AniList 101506 regression coverage to require placement as provider Season 1 rather than a special episode.
 - Bulk-prefetch pending AniList relation graphs and log franchise progress every 25 items so large watchlists no longer appear frozen during per-item network traversal.
+- Show the canonical multi-provider `watchlist_items` table in Watchlist Management with responsive paging, search, status filtering, franchise state, and metadata placement state.
+- Attach prequel specials such as AniList 169362 to an older main-series SEQUEL anchor, and version relation results so previously mis-rooted rows are automatically reprocessed.
 - Improve TheTVDB matching for anime with non-Latin primary titles by using title aliases without treating plot overviews as aliases.
 - Search conservative base-title variants when AniList franchise or season names end in numbered season, part, or cour suffixes.
 - Prevent overlapping full watchlist/metadata passes when Kodi reloads the service, and cancel metadata resolution cooperatively during shutdown.

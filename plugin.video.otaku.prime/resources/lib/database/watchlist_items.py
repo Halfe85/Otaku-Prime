@@ -8,6 +8,7 @@ from contextlib import contextmanager
 
 
 SUPPORTED_WATCHLIST_PROVIDERS = ("anilist", "mal", "kitsu", "simkl")
+RELATION_RESOLVER_VERSION = 2
 
 
 class WatchlistItemStore:
@@ -59,6 +60,7 @@ class WatchlistItemStore:
               franchise_release_date TEXT,
               relation_path_json TEXT,
               relation_resolved INTEGER NOT NULL DEFAULT 0 CHECK(relation_resolved IN(0,1)),
+              relation_version INTEGER NOT NULL DEFAULT 0,
 
               metadata_provider TEXT,
               metadata_show_id TEXT,
@@ -80,6 +82,11 @@ class WatchlistItemStore:
             CREATE INDEX IF NOT EXISTS ix_watchlist_items_placement_pending
               ON watchlist_items(relation_resolved,placement_resolved,franchise_local_id);
             """)
+            columns = {row[1] for row in db.execute("PRAGMA table_info(watchlist_items)")}
+            if "relation_version" not in columns:
+                db.execute(
+                    "ALTER TABLE watchlist_items ADD COLUMN relation_version INTEGER NOT NULL DEFAULT 0"
+                )
 
     def replace_provider_snapshot(self, provider, entries):
         provider = str(provider or "").strip().lower()
@@ -139,9 +146,24 @@ class WatchlistItemStore:
                ORDER BY LOWER(COALESCE(english_name,romaji_name,native_name,'')),provider_item_id
             """, (provider,))]
 
+    def list_all(self):
+        """Return the canonical raw tracker table for the management UI."""
+        with self._connection() as db:
+            return [dict(row) for row in db.execute("""
+              SELECT provider,provider_item_id,english_name,romaji_name,native_name,
+                     list_status,progress,episode_count,media_format,release_date,is_adult,
+                     relation_root_id,franchise_local_id,franchise_english_name,
+                     franchise_romaji_name,relation_resolved,metadata_provider,
+                     metadata_show_id,placement_kind,metadata_season_number,
+                     metadata_episode_number,placement_score,placement_resolved,updated_at
+                FROM watchlist_items
+               ORDER BY LOWER(COALESCE(english_name,romaji_name,native_name,'')),
+                        provider,provider_item_id
+            """)]
+
     def list_relation_pending(self, provider=None):
-        sql = "SELECT * FROM watchlist_items WHERE relation_resolved=0"
-        params = []
+        sql = "SELECT * FROM watchlist_items WHERE (relation_resolved=0 OR relation_version<?)"
+        params = [RELATION_RESOLVER_VERSION]
         if provider:
             sql += " AND provider=?"
             params.append(provider)
@@ -154,7 +176,7 @@ class WatchlistItemStore:
             cursor = db.execute("""UPDATE watchlist_items SET
               relation_root_provider=?,relation_root_id=?,franchise_local_id=?,
               franchise_english_name=?,franchise_romaji_name=?,franchise_release_date=?,
-              relation_path_json=?,relation_resolved=1,
+              relation_path_json=?,relation_resolved=1,relation_version=?,
               placement_resolved=0,updated_at=CURRENT_TIMESTAMP
               WHERE provider=? AND provider_item_id=?""", (
                 provider,str(resolution["root_id"]),franchise_local_id,
@@ -162,6 +184,7 @@ class WatchlistItemStore:
                 resolution.get("franchise_romaji_name"),
                 resolution.get("franchise_release_date"),
                 json.dumps(resolution.get("relation_path") or []),
+                RELATION_RESOLVER_VERSION,
                 provider,str(provider_item_id),
             ))
             if cursor.rowcount != 1:

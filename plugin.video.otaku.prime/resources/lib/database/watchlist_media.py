@@ -108,6 +108,17 @@ class WatchlistMediaStore:
               synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
               FOREIGN KEY(episode_local_id) REFERENCES episodes(local_id) ON DELETE CASCADE);
             """)
+
+    def delete_empty_franchise(self, local_id):
+        """Remove a superseded franchise only when nothing still owns it."""
+        with self._connection() as db:
+            cursor = db.execute("""DELETE FROM tv_series
+              WHERE local_id=?
+                AND NOT EXISTS(SELECT 1 FROM seasons WHERE related_series_id=?)
+                AND NOT EXISTS(SELECT 1 FROM movies WHERE related_series_id=?)
+                AND NOT EXISTS(SELECT 1 FROM watchlist_items WHERE franchise_local_id=?)""",
+                (local_id, local_id, local_id, local_id))
+            return cursor.rowcount == 1
             self._ensure_column(db,"tv_series","anilist_root_id","TEXT")
             self._ensure_column(db,"tv_series","franchise_resolved","INTEGER NOT NULL DEFAULT 0")
             self._ensure_column(db,"seasons","kodi_show_name","TEXT")

@@ -277,6 +277,9 @@ class UnifiedWatchlistFranchiseResolverService(AniListFranchiseResolverService):
                     provider, item_id, franchise_id, resolution
                 )
                 self._mark_root_provider(provider, item_id)
+                previous_franchise_id = row.get("franchise_local_id")
+                if previous_franchise_id and previous_franchise_id != franchise_id:
+                    self.media_store.delete_empty_franchise(previous_franchise_id)
 
                 franchises.add(franchise_id)
                 active.append("{}:{}".format(provider, item_id))
