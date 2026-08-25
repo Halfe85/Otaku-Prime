@@ -21,7 +21,7 @@ from resources.lib.database.app_logs import AppLogStore
 from resources.lib.services.kodi_db_middleware import KodiDbMiddleware
 from resources.lib.services.anilist_release_schedule import AniListReleaseScheduleService
 from resources.lib.services.anilist_relations import AniListFranchiseResolverService
-from resources.lib.services.metadata_resolver import MetadataResolverService
+from resources.lib.services.metadata_resolver_default_order import MetadataResolverService
 from resources.lib.services.mediator_service import MediatorService
 from resources.lib.services.release_watchdog import ReleaseWatchdogService
 from resources.lib.services.stream_library import StreamLibraryService
