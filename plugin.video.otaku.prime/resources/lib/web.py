@@ -13,15 +13,9 @@ from urllib.parse import parse_qs, urlsplit
 
 from resources.lib.auth import AuthService
 from resources.lib.database.watchlist_accounts import WatchlistAccountStore
-from resources.lib.database.watchlist_preferences import WatchlistPreferenceStore
-from resources.lib.database.watchlist_media import WatchlistMediaStore
 from resources.lib.database.watchlist_items import WatchlistItemStore
-from resources.lib.database.metadata_provider import MetadataProviderStore
-from resources.lib.database.kodi_inventory import KodiInventoryStore
 from resources.lib.database.app_logs import AppLogStore
 from resources.lib.endpoints.auth_service import AuthenticatorAPI, AuthenticatorAPIError
-from resources.lib.services.metadata_resolver import MetadataProviderError
-from resources.lib.services.metadata_structure_resolver import MetadataStructureResolverService
 from resources.lib.logging_config import get_logger
 LOGGER=get_logger(__name__)
 from resources.lib.ui import (
@@ -38,32 +32,16 @@ from resources.lib.ui import (
 MAX_FORM_BYTES = 16 * 1024
 
 
-def create_server(host: str, port: int, user_store, media_store=None,
-                  app_log_store=None, metadata_resolver=None,
-                  on_metadata_configured=None,on_watchlist_changed=None,
-                  kodi_inventory_store=None) -> ThreadingHTTPServer:
+def create_server(host: str, port: int, user_store, app_log_store=None,
+                  on_watchlist_changed=None) -> ThreadingHTTPServer:
     auth = AuthService(user_store)
     authenticator_api = AuthenticatorAPI()
     watchlist_accounts = WatchlistAccountStore(user_store.db_path)
     watchlist_accounts.initialize()
-    watchlist_preferences = WatchlistPreferenceStore(user_store.db_path)
-    watchlist_preferences.initialize()
-    media_store = media_store or WatchlistMediaStore(user_store.db_path)
-    media_store.initialize()
     watchlist_items = WatchlistItemStore(user_store.db_path)
     watchlist_items.initialize()
     app_log_store = app_log_store or AppLogStore(user_store.db_path)
     app_log_store.initialize()
-    kodi_inventory_store=kodi_inventory_store or KodiInventoryStore(user_store.db_path)
-    kodi_inventory_store.initialize()
-    if metadata_resolver is None:
-        metadata_store = MetadataProviderStore(user_store.db_path)
-        metadata_store.initialize()
-        metadata_resolver = MetadataStructureResolverService(
-            metadata_store,
-            watchlist_items,
-            media_store=media_store,
-        )
     simkl_flows = {}
     simkl_flows_lock = threading.Lock()
 
@@ -167,6 +145,14 @@ def create_server(host: str, port: int, user_store, media_store=None,
                 return None
             return user
 
+        def _watchlist_changed(self, provider):
+            if on_watchlist_changed:
+                threading.Thread(
+                    target=on_watchlist_changed,
+                    name="OtakuPrime{}Changed".format(provider.title()),
+                    daemon=True,
+                ).start()
+
         def _anilist_page(self, user: dict, message: str = "") -> None:
             account = watchlist_accounts.get(user["id"], "anilist")
             try:
@@ -181,7 +167,6 @@ def create_server(host: str, port: int, user_store, media_store=None,
                 render_anilist_auth(
                     authorize_url=authorize_url,
                     connected_account=account,
-                    mature_content=watchlist_preferences.mature_content(user["id"]),
                     message=message,
                 ),
             )
@@ -228,15 +213,12 @@ def create_server(host: str, port: int, user_store, media_store=None,
                 ),
             )
 
-        def _home_page(self, user: dict, message: str = "", active_tab: str = "general") -> str:
+        def _home_page(self, user: dict, message: str = "", active_tab: str = "watchlist") -> str:
             accounts = {
                 "anilist": watchlist_accounts.get(user["id"], "anilist"),
                 "kitsu": watchlist_accounts.get(user["id"], "kitsu"),
                 "mal": watchlist_accounts.get(user["id"], "mal"),
                 "simkl": watchlist_accounts.get(user["id"], "simkl"),
-                "_metadata": metadata_resolver.status(),
-                "_kodi": kodi_inventory_store.status(),
-                "_metadata_message": message if active_tab == "watchlist" else "",
             }
             return render_home(
                 user,
@@ -264,20 +246,6 @@ def create_server(host: str, port: int, user_store, media_store=None,
 
             if path == "/api/auth/providers":
                 self._send_json(200, authenticator_api.list_providers())
-                return
-
-            if path == "/api/metadata-resolver":
-                if not self._current_user():
-                    self._send_json(401, {"ok": False, "message": "Sign in again."})
-                    return
-                self._send_json(200, {"ok": True, "resolver": metadata_resolver.status()})
-                return
-
-            if path == "/api/kodi-library":
-                if not self._current_user():
-                    self._send_json(401,{"ok":False,"message":"Sign in again."}); return
-                self._send_json(200,{"ok":True,"library":kodi_inventory_store.status(),
-                  "ownership":kodi_inventory_store.list_ownership()})
                 return
 
             if path == "/api/logs":
@@ -413,6 +381,7 @@ def create_server(host: str, port: int, user_store, media_store=None,
                 )
                 with simkl_flows_lock:
                     simkl_flows.pop(user["id"], None)
+                self._watchlist_changed("simkl")
                 self._send_json(200, {"status": "connected", "username": viewer["username"]})
                 return
 
@@ -440,64 +409,6 @@ def create_server(host: str, port: int, user_store, media_store=None,
 
         def do_POST(self):
             path = self.path.split("?", 1)[0]
-
-            if path == "/settings/metadata-provider":
-                user = self._require_user()
-                if not user:
-                    return
-                form = self._read_form()
-                provider = str(form.get("provider") or "").strip().lower()
-                try:
-                    if provider == "tmdb":
-                        status = metadata_resolver.configure(
-                            "tmdb",
-                            auth_type=form.get("tmdb_auth_type", "bearer"),
-                            credential=form.get("tmdb_credential", ""),
-                        )
-                    elif provider == "thetvdb":
-                        status = metadata_resolver.configure(
-                            "thetvdb",
-                            api_key=form.get("tvdb_api_key", ""),
-                            pin=form.get("tvdb_pin", ""),
-                        )
-                    else:
-                        raise MetadataProviderError("Choose TMDB or TheTVDB")
-                    scraper = metadata_resolver.ensure_kodi_scraper()
-                except (MetadataProviderError, ValueError) as exc:
-                    LOGGER.warning("Metadata provider configuration rejected: %s",exc)
-                    self._send_html(400, self._home_page(user, str(exc), "watchlist"))
-                    return
-                app_log_store.write(
-                    "INFO",
-                    "metadata",
-                    "Metadata resolver configured: {}; Kodi scraper={}".format(
-                        status.get("provider"), scraper.get("required")
-                    ),
-                )
-                LOGGER.info("Metadata provider configured through admin UI: %s",status.get("provider"))
-                if on_metadata_configured:
-                    threading.Thread(
-                        target=on_metadata_configured,
-                        name="OtakuPrimeMetadataConfigured",
-                        daemon=True,
-                    ).start()
-                self._redirect("/#watchlist")
-                return
-
-            if path == "/api/watchlist/series/watch-status":
-                user=self._current_user()
-                if not user:
-                    self._send_json(401,{"ok":False,"message":"Sign in again."}); return
-                payload=self._read_api_payload(); local_id=str(payload.get("local_id") or "")
-                watched=payload.get("watched")
-                if not local_id or not isinstance(watched,bool):
-                    self._send_json(400,{"ok":False,"message":"Invalid watch status."}); return
-                try: media_store.set_watch_status("season",local_id,watched)
-                except KeyError:
-                    self._send_json(404,{"ok":False,"message":"Watchlist entry not found."}); return
-                app_log_store.write("INFO","watchlist",
-                  "{} marked {} by {}".format(local_id,"watched" if watched else "unwatched",user["username"]))
-                self._send_json(200,{"ok":True,"watched":watched}); return
 
             if path == "/api/auth/anilist/verify":
                 user = self._current_user()
@@ -540,12 +451,7 @@ def create_server(host: str, port: int, user_store, media_store=None,
                     access_token=token,
                 )
                 LOGGER.info("AniList account connected through admin UI: %s",viewer["username"])
-                if on_watchlist_changed:
-                    threading.Thread(
-                        target=on_watchlist_changed,
-                        name="OtakuPrimeAniListConnected",
-                        daemon=True,
-                    ).start()
+                self._watchlist_changed("anilist")
                 self._redirect("/watchlist/anilist")
                 return
 
@@ -554,23 +460,7 @@ def create_server(host: str, port: int, user_store, media_store=None,
                 if not user:
                     return
                 watchlist_accounts.delete(user["id"], "anilist")
-                self._redirect("/watchlist/anilist")
-                return
-
-            if path == "/watchlist/anilist/preferences":
-                user = self._require_user()
-                if not user:
-                    return
-                form = self._read_form()
-                watchlist_preferences.set_mature_content(
-                    user["id"], form.get("mature_content") == "1"
-                )
-                if on_watchlist_changed:
-                    threading.Thread(
-                        target=on_watchlist_changed,
-                        name="OtakuPrimeAniListPreferences",
-                        daemon=True,
-                    ).start()
+                self._watchlist_changed("anilist")
                 self._redirect("/watchlist/anilist")
                 return
 
@@ -594,6 +484,7 @@ def create_server(host: str, port: int, user_store, media_store=None,
                     refresh_token=result["refresh_token"],
                     token_expires_at=result["expires_at"],
                 )
+                self._watchlist_changed("mal")
                 self._redirect("/watchlist/mal")
                 return
 
@@ -602,6 +493,7 @@ def create_server(host: str, port: int, user_store, media_store=None,
                 if not user:
                     return
                 watchlist_accounts.delete(user["id"], "mal")
+                self._watchlist_changed("mal")
                 self._redirect("/watchlist/mal")
                 return
 
@@ -628,6 +520,7 @@ def create_server(host: str, port: int, user_store, media_store=None,
                     refresh_token=result["refresh_token"],
                     token_expires_at=result["expires_at"],
                 )
+                self._watchlist_changed("kitsu")
                 self._redirect("/watchlist/kitsu")
                 return
 
@@ -636,6 +529,7 @@ def create_server(host: str, port: int, user_store, media_store=None,
                 if not user:
                     return
                 watchlist_accounts.delete(user["id"], "kitsu")
+                self._watchlist_changed("kitsu")
                 self._redirect("/watchlist/kitsu")
                 return
 
@@ -667,6 +561,7 @@ def create_server(host: str, port: int, user_store, media_store=None,
                 watchlist_accounts.delete(user["id"], "simkl")
                 with simkl_flows_lock:
                     simkl_flows.pop(user["id"], None)
+                self._watchlist_changed("simkl")
                 self._redirect("/watchlist/simkl")
                 return
 

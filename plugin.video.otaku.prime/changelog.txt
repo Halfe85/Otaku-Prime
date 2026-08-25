@@ -1,69 +1,16 @@
 Otaku Prime 0.1.2 Alpha8b
 =========================
 
-Alpha8b supersedes Alpha8 and includes all Alpha8 work below.
+Alpha8b supersedes the abandoned resolver/library direction from Alpha8.
 
-- Store every tracker snapshot only in the canonical provider-tagged `watchlist_items` table; remove AniList's live dual-write into legacy staging.
-- Resolve franchise relations against canonical watchlist rows without mirroring results into the legacy AniList relation table.
-- Fetch and cache the metadata provider's complete season/episode structure before choosing placement for each watchlist item.
-- Compare TV-format entries against normal seasons and Season 0 candidates together instead of routing them through the legacy specials-first resolver.
-- Remove the legacy release-watchdog, `.strm` generator, Kodi source/scan setup, stream-publication tables, mediator publishing API, and their tests; direct Kodi projection is the only publication architecture.
-- Add UzaMaid/AniList 101506 regression coverage to require placement as provider Season 1 rather than a special episode.
-- Bulk-prefetch pending AniList relation graphs and log franchise progress every 25 items so large watchlists no longer appear frozen during per-item network traversal.
-- Show the canonical multi-provider `watchlist_items` table in Watchlist Management with responsive paging, search, status filtering, franchise state, and metadata placement state.
-- Attach prequel specials such as AniList 169362 to an older main-series SEQUEL anchor, and version relation results so previously mis-rooted rows are automatically reprocessed.
-- Improve TheTVDB matching for anime with non-Latin primary titles by using title aliases without treating plot overviews as aliases.
-- Search conservative base-title variants when AniList franchise or season names end in numbered season, part, or cour suffixes.
-- Prevent overlapping full watchlist/metadata passes when Kodi reloads the service, and cancel metadata resolution cooperatively during shutdown.
-- Include searched titles and provider candidate counts in unresolved metadata errors.
-- Attach AniList movies, OVAs, and specials with PARENT relations to the parent franchise without importing unlisted parent media.
-- Follow chained special PREQUEL links and conservative TV anchors such as OTHER or SEQUEL when AniList does not expose a direct PARENT relation.
-- Treat sequential ONA PREQUEL chains as numbered seasons while keeping side-story ONAs in Kodi Specials.
-- Add shorter TheTVDB discovery queries for long punctuation-heavy titles while retaining strict full-title scoring.
-- Make metadata synchronization resumable by skipping completed seasons while still selecting newly added or unmapped episodes.
-- Cancel AniList franchise traversal and promotion during Kodi shutdown so an old service worker cannot populate a newly reinstalled database.
-- Start synchronization immediately after AniList is connected or its mature-content preference changes, instead of waiting for the periodic poll.
-- Resolve relation-staged franchises and watchlist items against TMDB/TheTVDB before creating catalogue seasons and episodes.
-- Populate normal seasons from provider-owned episode lists and promote specials as only their confidently matched Season 0 episode.
-
-Kodi database adoption:
-- Make verified TMDB or TheTVDB configuration the mandatory gate before watchlist processing.
-- Inventory Kodi TV shows and episodes before importing or resolving watchlist content.
-- Treat an available but empty Kodi video library as a valid database ready for Prime content.
-- Persist Kodi inventory state, provider IDs, playback paths, and local-versus-plugin origin.
-- Add a Prime/Kodi ownership registry with local, external, pending, and Prime ownership states.
-- Match resolved episodes by provider episode ID, then provider show ID plus season/episode number.
-- Give existing local files unconditional priority over Prime streaming projections.
-- Mark missing episodes as pending Prime projections and expose Kodi status/ownership through the authenticated admin API.
-- Disable legacy source registration, `.strm` publication, and library scanning while direct `plugin://` projection replaces them.
-
-Application logging:
-- Centralize INFO, WARNING, and ERROR logging for Kodi and Prime's SQLite-backed admin log window.
-- Capture unhandled main-thread and background-thread exceptions with tracebacks.
-- Log startup stages, watchlist gates/importers/processors, metadata resolution, Kodi inventory, ownership reconciliation, and web configuration failures.
-
-Metadata matching fixes:
-- Preserve TheTVDB aliases and translated search names when the provider's primary series title uses another script or language.
-- Search every available AniList franchise title and de-duplicate provider results instead of stopping on the first non-empty but unrelated result set.
-- Treat standalone/main-series ONA entries as numbered TV seasons; reserve season 00 for ONA side stories, parent-linked extras, and spin-offs.
-
-Metadata authority:
-- Add mandatory TMDB and TheTVDB v4 resolver connections using credentials supplied by each Prime installation.
-- Store the selected resolver globally so Prime's Kodi library uses one numbering authority.
-- Block all watchlist fetching until TMDB or TheTVDB has been configured and verified.
-- Require the matching Kodi TV information scraper and offer to install it when missing.
-
-Franchise and episode resolution:
-- Resolve Prime franchises to the selected provider's TV show identity.
-- Resolve normal seasons while retaining provider-specific season names when they differ from the franchise title.
-- Store provider show, season, and episode identities separately from AniList and Prime's internal identities.
-- Resolve Season 00 episode numbers from the metadata provider instead of inventing S00E numbers from AniList ordering.
-- Keep ambiguous specials unresolved and unpublished until a unique provider match is available.
-
-Web settings:
-- Put Information Resolver at the top of Watchlist Accounts as a mandatory setup step.
-- Support TMDB API Read Access Token/API key and TheTVDB v4 project API key with optional subscriber PIN.
-- Never render stored resolver credentials back into the web interface.
-
-Testing:
-- Add regression coverage for named seasons, normal episode mapping, S00E07 special mapping, ambiguous-special blocking, and the mandatory watchlist gate.
+- Define raw watchlist ingestion as Prime's current application boundary.
+- Keep local administrator login and forced first-password replacement.
+- Keep AniList, MyAnimeList, Kitsu, and Simkl account connection flows.
+- Fetch each connected provider into the canonical provider-tagged `watchlist_items` table.
+- Preserve provider IDs, titles, list status, progress, episode count, format, release date, adult flag, and original provider JSON.
+- Show the raw multi-provider table in Watchlist Management with responsive paging, search, and status filtering.
+- Refresh raw snapshots at startup, on supported periodic intervals, and after account connection changes.
+- Remove the TMDB and TheTVDB configuration dependency and mandatory metadata gate.
+- Remove franchise/relation resolution, metadata structure resolution, catalogue promotion, and watchlist mediation.
+- Remove Kodi inventory, ownership reconciliation, direct database projection, and watch-status projection.
+- Transactionally remove obsolete resolver/placement columns from existing `watchlist_items` tables while preserving raw fetched rows.

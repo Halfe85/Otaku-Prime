@@ -8,8 +8,8 @@
   </extension>
   <extension point="xbmc.service" library="service.py"/>
   <extension point="xbmc.addon.metadata">
-    <summary lang="en">Otaku Prime anime library and playback addon</summary>
-    <description lang="en">Otaku Prime integrates anime watchlists with Kodi's native video library and uses provider-based playback resolution.</description>
+    <summary lang="en">Otaku Prime watchlist connector</summary>
+    <description lang="en">Otaku Prime connects AniList, MyAnimeList, Kitsu, and Simkl and stores their raw watchlist snapshots locally.</description>
     <platform>all</platform>
     <license>GPL-3.0</license>
     <source>https://github.com/Halfe85/Otaku-Prime</source>

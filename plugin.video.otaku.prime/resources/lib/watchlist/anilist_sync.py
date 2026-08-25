@@ -5,7 +5,6 @@ import json
 from urllib.request import Request,urlopen
 from urllib.error import HTTPError
 
-from resources.lib.database.watchlist_items import WatchlistItemStore
 from resources.lib.services.anilist_rate_limit import ANILIST_RATE_LIMITER
 
 STATUSES=("CURRENT","COMPLETED","PAUSED","DROPPED","PLANNING")
@@ -48,14 +47,11 @@ class AniListWatchlistClient:
 
 
 class AniListWatchlistImportService:
-    def __init__(self,accounts,preferences,media_store,client=None,user_id=1,
-                 watchlist_store=None):
+    def __init__(self,accounts,watchlist_store,client=None,user_id=1):
         self.accounts=accounts
-        self.preferences=preferences
-        self.media_store=media_store
         self.client=client or AniListWatchlistClient()
         self.user_id=user_id
-        self.watchlist_store=watchlist_store or WatchlistItemStore(media_store.db_path)
+        self.watchlist_store=watchlist_store
         self.watchlist_store.initialize()
 
     def sync(self):
@@ -76,8 +72,7 @@ class AniListWatchlistImportService:
             release_date=self._date(media.get("startDate"))
             is_adult=bool(media.get("isAdult"))
 
-            # Canonical storage is the raw tracker snapshot. Content preferences
-            # are applied by the franchise processor, not by deleting source rows.
+            # Preserve the provider snapshot exactly at the ingestion boundary.
             canonical.append({
                 "provider_item_id":str(media["id"]),
                 "english_name":titles.get("english"),

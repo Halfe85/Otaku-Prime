@@ -14,19 +14,4 @@
   });
   var requested = location.hash.slice(1);
   if (document.getElementById("panel-" + requested)) selectTab(requested);
-
-  var provider = document.getElementById("metadata-provider");
-  function updateMetadataFields() {
-    if (!provider) return;
-    Array.prototype.forEach.call(
-      document.querySelectorAll("[data-metadata-provider-field]"),
-      function (field) {
-        field.hidden = field.getAttribute("data-metadata-provider-field") !== provider.value;
-      }
-    );
-  }
-  if (provider) {
-    provider.addEventListener("change", updateMetadataFields);
-    updateMetadataFields();
-  }
 }());

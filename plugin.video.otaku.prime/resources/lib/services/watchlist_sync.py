@@ -11,20 +11,13 @@ _PIPELINE_LOCK = threading.Lock()
 
 
 class WatchlistSyncService:
-    def __init__(self, importers, interval_seconds=900, error_handler=None,
-                 processors=None, gate=None):
+    def __init__(self, importers, interval_seconds=900, error_handler=None):
         self.importers = list(importers)
-        self.processors = list(processors or [])
-        self.gate = gate
         self.interval_seconds = max(60, int(interval_seconds))
         self.error_handler = error_handler or (lambda error: None)
         self._stop = threading.Event()
         self._thread = None
         self._busy_notice = False
-        for processor in self.processors:
-            binder = getattr(processor, "bind_stop_event", None)
-            if binder:
-                binder(self._stop)
 
     def run_once(self, periodic=False):
         # Immediate callbacks can arrive together (account connected, settings
@@ -43,15 +36,6 @@ class WatchlistSyncService:
             _PIPELINE_LOCK.release()
 
     def _run_once_locked(self, periodic=False):
-        if self.gate is not None and not self.gate.is_configured():
-            status = self.gate.status()
-            LOGGER.warning("Watchlist synchronization blocked: metadata provider is required")
-            return [{
-                "blocked": "metadata_provider_required",
-                "configured": False,
-                "provider": status.get("provider"),
-            }]
-
         results = []
         for importer in self.importers:
             if self._stop.is_set():
@@ -73,16 +57,6 @@ class WatchlistSyncService:
                 self.error_handler(exc)
                 results.append({"error": str(exc)})
 
-        for processor in self.processors:
-            if self._stop.is_set():
-                return results + [{"cancelled": True, "reason": "pipeline_stopping"}]
-            try:
-                LOGGER.info("Running watchlist processor %s",processor.__class__.__name__)
-                results.append(processor.run_once())
-            except Exception as exc:
-                LOGGER.exception("Watchlist processor %s failed",processor.__class__.__name__)
-                self.error_handler(exc)
-                results.append({"error": str(exc)})
         return results
 
     def start(self, run_immediately=True):
@@ -100,12 +74,8 @@ class WatchlistSyncService:
     def _run(self, run_immediately=True):
         if run_immediately:
             self.run_once(periodic=False)
-        elif self._stop.wait(self.interval_seconds):
-            return
-        while not self._stop.is_set():
+        while not self._stop.wait(self.interval_seconds):
             self.run_once(periodic=True)
-            if self._stop.wait(self.interval_seconds):
-                break
 
     def stop(self, timeout=5):
         self._stop.set()

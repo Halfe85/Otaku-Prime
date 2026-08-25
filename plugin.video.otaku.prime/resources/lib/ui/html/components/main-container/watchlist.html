@@ -1,79 +1,16 @@
 <article class="card">
-  <span class="badge">{{METADATA_BADGE}}</span>
-  <h3>Information resolver — required</h3>
-  <p class="muted">{{METADATA_DESCRIPTION}}</p>
-  {{METADATA_NOTICE}}
-  <form method="post" action="/settings/metadata-provider" data-metadata-form>
-    <div class="field-grid">
-      <label>
-        Resolver
-        <select name="provider" id="metadata-provider">
-          <option value="tmdb"{{TMDB_SELECTED}}>TMDB</option>
-          <option value="thetvdb"{{TVDB_SELECTED}}>TheTVDB</option>
-        </select>
-      </label>
-      <label data-metadata-provider-field="tmdb">
-        TMDB authentication
-        <select name="tmdb_auth_type">
-          <option value="bearer"{{TMDB_BEARER_SELECTED}}>API Read Access Token</option>
-          <option value="api_key"{{TMDB_API_KEY_SELECTED}}>API key</option>
-        </select>
-      </label>
-      <label data-metadata-provider-field="tmdb">
-        TMDB credential
-        <input type="password" name="tmdb_credential" autocomplete="off"
-               placeholder="{{TMDB_CREDENTIAL_PLACEHOLDER}}">
-      </label>
-      <label data-metadata-provider-field="thetvdb">
-        TheTVDB v4 project API key
-        <input type="password" name="tvdb_api_key" autocomplete="off"
-               placeholder="{{TVDB_API_KEY_PLACEHOLDER}}">
-      </label>
-      <label data-metadata-provider-field="thetvdb">
-        TheTVDB subscriber PIN (when required)
-        <input type="password" name="tvdb_pin" autocomplete="off"
-               placeholder="{{TVDB_PIN_PLACEHOLDER}}">
-      </label>
-    </div>
-    <p class="muted" data-metadata-provider-field="tmdb">
-      Use your own TMDB API Read Access Token or v3 API key. Prime never ships the project owner's credential.
-    </p>
-    <p class="muted" data-metadata-provider-field="thetvdb">
-      TheTVDB v4 uses a project API key and, for user-supported projects, a subscriber PIN. Prime stores only the credentials entered on this Kodi installation.
-    </p>
-    <p><button class="button" type="submit">Save &amp; test connection</button></p>
-  </form>
-  <p class="muted">Kodi information scraper: <strong>{{METADATA_KODI_ADDON}}</strong></p>
-</article>
-
-<article class="card">
-  <span class="badge">{{KODI_LIBRARY_BADGE}}</span>
-  <h3>Kodi video database — required</h3>
-  <p class="muted">{{KODI_LIBRARY_DESCRIPTION}}</p>
-  <p class="muted">Existing local episodes have priority. Prime only projects missing watchlist episodes.</p>
-</article>
-
-<article class="card">
-  <span class="badge">{{ANILIST_BADGE}}</span>
-  <h3>AniList</h3>
-  <p class="muted">{{ANILIST_DESCRIPTION}}</p>
-  <p><a class="button" href="/watchlist/anilist">{{ANILIST_ACTION}}</a></p>
+  <span class="badge">{{ANILIST_BADGE}}</span><h3>AniList</h3>
+  <p class="muted">{{ANILIST_DESCRIPTION}}</p><p><a class="button" href="/watchlist/anilist">{{ANILIST_ACTION}}</a></p>
 </article>
 <article class="card">
-  <span class="badge">{{MAL_BADGE}}</span>
-  <h3>MyAnimeList</h3>
-  <p class="muted">{{MAL_DESCRIPTION}}</p>
-  <p><a class="button" href="/watchlist/mal">{{MAL_ACTION}}</a></p>
+  <span class="badge">{{MAL_BADGE}}</span><h3>MyAnimeList</h3>
+  <p class="muted">{{MAL_DESCRIPTION}}</p><p><a class="button" href="/watchlist/mal">{{MAL_ACTION}}</a></p>
 </article>
 <article class="card">
-  <span class="badge">{{KITSU_BADGE}}</span>
-  <h3>Kitsu</h3>
-  <p class="muted">{{KITSU_DESCRIPTION}}</p>
-  <p><a class="button" href="/watchlist/kitsu">{{KITSU_ACTION}}</a></p>
+  <span class="badge">{{KITSU_BADGE}}</span><h3>Kitsu</h3>
+  <p class="muted">{{KITSU_DESCRIPTION}}</p><p><a class="button" href="/watchlist/kitsu">{{KITSU_ACTION}}</a></p>
 </article>
 <article class="card">
-  <span class="badge">{{SIMKL_BADGE}}</span>
-  <h3>Simkl</h3>
-  <p class="muted">{{SIMKL_DESCRIPTION}}</p>
-  <p><a class="button" href="/watchlist/simkl">{{SIMKL_ACTION}}</a></p>
+  <span class="badge">{{SIMKL_BADGE}}</span><h3>Simkl</h3>
+  <p class="muted">{{SIMKL_DESCRIPTION}}</p><p><a class="button" href="/watchlist/simkl">{{SIMKL_ACTION}}</a></p>
 </article>

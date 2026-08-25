@@ -326,7 +326,7 @@ class SimklWatchlistImportService:
                 "episode_count": row.get("total_episodes_count"),
                 "media_format": _format(row.get("anime_type")),
                 # Simkl summary data gives a year but not an exact first-air date;
-                # do not manufacture January 1 and accidentally bias placement.
+                # Preserve an unknown release date instead of manufacturing one.
                 "release_date": None,
                 "is_adult": False,
                 "raw": row,
