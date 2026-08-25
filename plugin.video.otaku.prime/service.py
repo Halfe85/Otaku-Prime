@@ -166,7 +166,12 @@ def main() -> None:
     watchlist_sync = WatchlistSyncService(
         watchlist_importers,
         processors=[
-            UnifiedWatchlistFranchiseResolverService(media_store, watchlist_items),
+            UnifiedWatchlistFranchiseResolverService(
+                media_store,
+                watchlist_items,
+                preferences=watchlist_preferences,
+                user_id=1,
+            ),
             metadata_resolver,
         ],
         gate=metadata_resolver,
