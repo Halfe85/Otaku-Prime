@@ -8,17 +8,20 @@ import threading
 
 import xbmc
 import xbmcaddon
+import xbmcgui
 import xbmcvfs
 
 from resources.lib.users import UserStore
 from resources.lib.database.watchlist_media import WatchlistMediaStore
 from resources.lib.database.watchlist_accounts import WatchlistAccountStore
 from resources.lib.database.watchlist_preferences import WatchlistPreferenceStore
+from resources.lib.database.metadata_provider import MetadataProviderStore
 from resources.lib.database.app_logs import AppLogStore
 from resources.lib.services.kodi_db_middleware import KodiDbMiddleware
 from resources.lib.services.kodi_source_setup import KodiSourceSetupService
 from resources.lib.services.anilist_release_schedule import AniListReleaseScheduleService
 from resources.lib.services.anilist_relations import AniListFranchiseResolverService
+from resources.lib.services.metadata_resolver import MetadataResolverService
 from resources.lib.services.mediator_service import MediatorService
 from resources.lib.services.release_watchdog import ReleaseWatchdogService
 from resources.lib.services.stream_library import StreamLibraryService
@@ -66,15 +69,41 @@ def main() -> None:
     watchlist_preferences.initialize()
     app_logs = AppLogStore(users_db)
     app_logs.initialize()
+    metadata_store = MetadataProviderStore(users_db)
+    metadata_store.initialize()
 
     def log(level, source, message):
         kodi_level = xbmc.LOGERROR if level == "ERROR" else xbmc.LOGINFO
         xbmc.log("OTAKU PRIME: {}".format(message), kodi_level)
         app_logs.write(level, source, message)
+
+    def scraper_installed(addon_id):
+        return bool(xbmc.getCondVisibility("System.HasAddon({})".format(addon_id)))
+
+    def request_scraper_install(addon_id):
+        if scraper_installed(addon_id):
+            return False
+        accepted = xbmcgui.Dialog().yesno(
+            "Otaku Prime metadata provider",
+            "Prime requires {} so Kodi uses the same season and episode numbering. "
+            "Install it now?".format(addon_id),
+        )
+        if not accepted:
+            return False
+        xbmc.executebuiltin("InstallAddon({})".format(addon_id))
+        return True
+
+    metadata_resolver = MetadataResolverService(
+        metadata_store,
+        scraper_checker=scraper_installed,
+        scraper_installer=request_scraper_install,
+    )
+
     mediator = MediatorService(
         media_store,
         StreamLibraryService(os.path.join(kodi_profile, LIBRARY_DIR_NAME)),
         KodiDbMiddleware(media_store),
+        metadata_resolver=metadata_resolver,
     )
     mediator.stream_library.initialize()
     source_setup = KodiSourceSetupService(kodi_profile, mediator.stream_library)
@@ -91,17 +120,42 @@ def main() -> None:
             log("INFO", "kodi-library",
                 "Retired {}; restart Kodi to unload the old source"
                 .format(", ".join(source_result["removed"])))
+
+    if metadata_resolver.is_configured():
+        scraper = metadata_resolver.ensure_kodi_scraper()
+        log(
+            "INFO",
+            "metadata",
+            "Metadata resolver {} requires Kodi scraper {}; installed={}".format(
+                metadata_resolver.status().get("provider"),
+                scraper.get("required"),
+                scraper.get("installed"),
+            ),
+        )
+    else:
+        log(
+            "INFO",
+            "metadata",
+            "Watchlist synchronization is blocked until TMDB or TheTVDB is configured",
+        )
+
     release_watchdog = ReleaseWatchdogService(
         media_store,
         mediator.stream_library,
         mediator.kodi_db,
         error_handler=lambda exc: log("ERROR","release","Release watchdog failed: {}".format(exc)),
         schedule_service=AniListReleaseScheduleService(media_store),
+        metadata_resolver=metadata_resolver,
     )
     watchlist_sync = WatchlistSyncService(
         [AniListWatchlistImportService(
             watchlist_accounts, watchlist_preferences, media_store
-        )],processors=[AniListFranchiseResolverService(media_store)],
+        )],
+        processors=[
+            AniListFranchiseResolverService(media_store),
+            metadata_resolver,
+        ],
+        gate=metadata_resolver,
         error_handler=lambda exc: log("ERROR","watchlist","Watchlist sync failed: {}".format(exc)),
     )
 
@@ -114,7 +168,14 @@ def main() -> None:
     )
 
     try:
-        server = create_server(WEB_HOST, WEB_PORT, user_store, media_store, app_logs)
+        server = create_server(
+            WEB_HOST,
+            WEB_PORT,
+            user_store,
+            media_store,
+            app_logs,
+            metadata_resolver=metadata_resolver,
+        )
     except OSError as exc:
         xbmc.log(
             f"OTAKU PRIME: failed to bind web server on {WEB_HOST}:{WEB_PORT}: {exc}",
