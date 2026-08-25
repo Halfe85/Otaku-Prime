@@ -163,7 +163,7 @@ class AniListIdentityClient:
 
 
 class UnifiedWatchlistFranchiseResolverService(AniListFranchiseResolverService):
-    """Resolve every raw tracker item to a franchise, without placing it.
+    """Resolve every eligible raw tracker item to a franchise, without placing it.
 
     Tracker identity is translated to AniList only for relation traversal. The
     original provider/provider_item_id remains the canonical watchlist identity.
@@ -171,7 +171,7 @@ class UnifiedWatchlistFranchiseResolverService(AniListFranchiseResolverService):
     """
 
     def __init__(self, media_store, watchlist_store, relation_client=None,
-                 identity_client=None, max_nodes=100):
+                 identity_client=None, max_nodes=100, preferences=None, user_id=1):
         super().__init__(
             media_store,
             client=relation_client or AniListRelationClient(),
@@ -181,6 +181,8 @@ class UnifiedWatchlistFranchiseResolverService(AniListFranchiseResolverService):
         self.watchlist_store = watchlist_store
         self.watchlist_store.initialize()
         self.identity_client = identity_client or AniListIdentityClient()
+        self.preferences = preferences
+        self.user_id = user_id
 
     def _mark_root_provider(self, provider, provider_item_id):
         # save_relation stores the source provider by default; the relation root
@@ -192,6 +194,8 @@ class UnifiedWatchlistFranchiseResolverService(AniListFranchiseResolverService):
 
     def run_once(self):
         rows = self.watchlist_store.list_relation_pending()
+        if self.preferences is not None and not self.preferences.mature_content(self.user_id):
+            rows = [row for row in rows if not bool(row.get("is_adult"))]
         active = []
         failed = []
         franchises = set()
