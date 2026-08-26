@@ -17,6 +17,7 @@ from resources.lib.database.app_logs import AppLogStore
 from resources.lib.database.catalog import CatalogStore
 from resources.lib.services.watchlist_sync import WatchlistSyncService
 from resources.lib.services.watchlist_identity import WatchlistIdentityEnrichmentService
+from resources.lib.services.mediator_tvshow import TVShowMediatorService
 from resources.lib.watchlist.anilist_sync import AniListWatchlistImportService
 from resources.lib.watchlist.provider_importers import (
     MALWatchlistImportService,
@@ -75,7 +76,9 @@ def main() -> None:
         KitsuWatchlistImportService(watchlist_accounts, watchlist_items),
         SimklWatchlistImportService(watchlist_accounts, watchlist_items),
     ]
-    identity_enricher = WatchlistIdentityEnrichmentService(watchlist_items)
+    tvshow_mediator = TVShowMediatorService(watchlist_items,catalog)
+    identity_enricher = WatchlistIdentityEnrichmentService(
+        watchlist_items,on_complete=tvshow_mediator.start)
     watchlist_sync = WatchlistSyncService(
         watchlist_importers,
         watchlist_items,
@@ -123,6 +126,7 @@ def main() -> None:
 
     server.shutdown()
     watchlist_sync.stop()
+    tvshow_mediator.stop()
     server.server_close()
     server_thread.join(timeout=5)
 

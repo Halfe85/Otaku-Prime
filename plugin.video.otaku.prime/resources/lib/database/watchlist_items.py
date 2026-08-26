@@ -43,6 +43,10 @@ class WatchlistItemStore:
           identity_resolution_status TEXT,
           identity_resolution_error TEXT,
           identity_checked_at TEXT,
+          mediator_status TEXT,
+          mediator_provider TEXT,
+          mediator_error TEXT,
+          mediator_checked_at TEXT,
           master_initialized INTEGER NOT NULL DEFAULT 0 CHECK(master_initialized IN(0,1)),
           has_conflict INTEGER NOT NULL DEFAULT 0 CHECK(has_conflict IN(0,1)),
           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -78,6 +82,10 @@ class WatchlistItemStore:
                 ("identity_resolution_status","TEXT"),
                 ("identity_resolution_error","TEXT"),
                 ("identity_checked_at","TEXT"),
+                ("mediator_status","TEXT"),
+                ("mediator_provider","TEXT"),
+                ("mediator_error","TEXT"),
+                ("mediator_checked_at","TEXT"),
             ):
                 if column not in columns:
                     db.execute("ALTER TABLE watchlist_items ADD COLUMN {} {}".format(column,declaration))
@@ -269,3 +277,14 @@ class WatchlistItemStore:
               (status,max(0,int(progress)),local_id))
             if cursor.rowcount!=1: raise KeyError("watchlist item not found")
         return self.finalize_merge()
+
+    def record_mediator_resolution(self,local_id,status,provider=None,error=None):
+        value=str(status or "").upper()
+        if value not in ("RESOLVED","PARTIAL","UNRESOLVED","ERROR"):
+            raise ValueError("unsupported mediator status")
+        with self._connection() as db:
+            cursor=db.execute("""UPDATE watchlist_items SET mediator_status=?,
+              mediator_provider=?,mediator_error=?,mediator_checked_at=CURRENT_TIMESTAMP,
+              updated_at=CURRENT_TIMESTAMP WHERE local_id=?""",
+              (value,str(provider) if provider else None,str(error) if error else None,local_id))
+            if cursor.rowcount!=1: raise KeyError("watchlist item not found")

@@ -1,0 +1,108 @@
+# -*- coding: utf-8 -*-
+"""Project canonical watchlist items into Prime TV-show catalogue records."""
+from __future__ import annotations
+
+import threading
+
+from resources.lib.logging_config import get_logger
+from resources.lib.services.mediator_helper_anilist import AniListMediatorHelper
+from resources.lib.services.mediator_helper_kitsu import KitsuMediatorHelper
+from resources.lib.services.mediator_helper_mal import MALMediatorHelper
+from resources.lib.services.mediator_helper_simkl import (
+    MediatorPlacementError,SimklMediatorClient,SimklMediatorHelper,
+)
+
+
+LOGGER=get_logger(__name__)
+PROVIDER_PRIORITY=("simkl","anilist","mal","kitsu")
+
+
+class TVShowMediatorService:
+    """Resolve and persist exact franchise/season/episode placement."""
+    def __init__(self,watchlist_store,catalog_store,client=None,helpers=None):
+        self.watchlist_store=watchlist_store; self.catalog_store=catalog_store
+        self.client=client or SimklMediatorClient(); self._stop=threading.Event()
+        self._lock=threading.Lock(); self._thread=None
+        self.helpers=helpers or {
+            "simkl":SimklMediatorHelper(),"anilist":AniListMediatorHelper(),
+            "mal":MALMediatorHelper(),"kitsu":KitsuMediatorHelper()}
+
+    @staticmethod
+    def provider_for(item):
+        return next((provider for provider in PROVIDER_PRIORITY
+                     if item.get(provider+"_id") not in (None,"")),None)
+
+    def resolve_item(self,item):
+        """Try every present provider ID in priority order until one resolves."""
+        attempts=[]
+        for provider in PROVIDER_PRIORITY:
+            provider_id=item.get(provider+"_id")
+            if provider_id in (None,""): continue
+            try:
+                placement=self.helpers[provider].resolve(item,self.client)
+                placement["provider_path"]=provider
+                placement["provider_attempts"]=list(attempts)
+                return placement
+            except Exception as exc:
+                attempts.append({"provider":provider,"provider_id":str(provider_id),
+                                 "error":str(exc)})
+                LOGGER.warning("Mediator %s path failed for Prime item %s: %s",
+                               provider,item["local_id"],exc)
+        if not attempts: raise MediatorPlacementError("Prime item has no supported provider ID")
+        raise MediatorPlacementError("; ".join(
+            "{}: {}".format(value["provider"],value["error"]) for value in attempts))
+
+    def process_item(self,item):
+        placement=self.resolve_item(item); provider=placement["provider_path"]
+        show=placement["tv_show"]
+        series=self.catalog_store.get_or_create_series(
+            english_name=show.get("name"),root_simkl_id=show.get("simkl_id"),
+            tvdb_id=show.get("tvdb_id"))
+        season_data=placement["season"]
+        season=self.catalog_store.add_watchlist_season(
+            series["local_id"],item,season_number=season_data["number"],
+            provider_path=provider,placement_source=season_data["number_source"],
+            first_episode=season_data["first_episode"],last_episode=season_data["last_episode"])
+        for episode in placement["episodes"]:
+            self.catalog_store.add_episode(
+                season["local_id"],episode["episode_number"],
+                source_episode_number=episode["source_episode_number"],
+                mal_id=episode.get("mal_id"),simkl_id=episode.get("simkl_id"),
+                release_date=episode.get("release_date"))
+        LOGGER.info("Mediator placed Prime item %s through %s as %s S%02dE%02d-E%02d",
+                    item["local_id"],provider,show.get("name"),season_data["number"],
+                    season_data["first_episode"],season_data["last_episode"])
+        if hasattr(self.watchlist_store,"record_mediator_resolution"):
+            self.watchlist_store.record_mediator_resolution(item["local_id"],"RESOLVED",provider=provider)
+        return placement
+
+    def run_once(self):
+        if not self._lock.acquire(blocking=False): return {"scheduled":False,"busy":True}
+        placed=existing=failed=0
+        try:
+            linked=self.catalog_store.linked_watchlist_ids()
+            for item in self.watchlist_store.list_all():
+                if self._stop.is_set(): break
+                if item["local_id"] in linked: existing+=1; continue
+                try:
+                    self.process_item(item); placed+=1
+                except Exception as exc:
+                    failed+=1
+                    LOGGER.exception("Mediator placement failed for Prime item %s",item["local_id"])
+                    if hasattr(self.watchlist_store,"record_mediator_resolution"):
+                        self.watchlist_store.record_mediator_resolution(
+                            item["local_id"],"UNRESOLVED",error=str(exc))
+            LOGGER.info("TV-show mediator complete: placed=%s existing=%s failed=%s",
+                        placed,existing,failed)
+            return {"placed":placed,"existing":existing,"failed":failed}
+        finally: self._lock.release()
+
+    def start(self):
+        if self._thread and self._thread.is_alive(): return {"scheduled":False,"busy":True}
+        self._stop.clear(); self._thread=threading.Thread(
+            target=self.run_once,name="OtakuPrimeTVShowMediator",daemon=True)
+        self._thread.start(); return {"scheduled":True,"busy":False}
+
+    def stop(self,timeout=5):
+        self._stop.set()
+        if self._thread: self._thread.join(timeout=timeout)

@@ -120,9 +120,10 @@ class SimklIdentityClient:
 
 class WatchlistIdentityEnrichmentService:
     """Account-independent, resumable catalog identity enrichment worker."""
-    def __init__(self,store,client=None,request_delay=0.25):
+    def __init__(self,store,client=None,request_delay=0.25,on_complete=None):
         self.store=store; self.client=client or SimklIdentityClient()
         self.request_delay=max(0,float(request_delay)); self._stop=threading.Event()
+        self.on_complete=on_complete
         self._lock=threading.Lock(); self._thread=None
 
     def run_once(self):
@@ -158,7 +159,11 @@ class WatchlistIdentityEnrichmentService:
             self.store.finalize_merge()
             LOGGER.info("Provider ID enrichment complete: complete=%s partial=%s unavailable=%s failed=%s",
                         complete,partial,unavailable,failed)
-            return {"complete":complete,"partial":partial,"unavailable":unavailable,"failed":failed}
+            result={"complete":complete,"partial":partial,"unavailable":unavailable,"failed":failed}
+            if self.on_complete and not self._stop.is_set():
+                try: self.on_complete()
+                except Exception: LOGGER.exception("Post-enrichment service failed to start")
+            return result
         finally: self._lock.release()
 
     def start(self):

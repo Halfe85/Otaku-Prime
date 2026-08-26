@@ -9,3 +9,12 @@ Otaku Prime 0.1.2 Alpha10
 - Store AniList, MAL, Kitsu, and Simkl identities on watchlist-owned seasons.
 - Store MAL context and Simkl episode identities on episodes.
 - Preserve Alpha10 catalogue tables when the Alpha9 watchlist store initializes.
+- Add a read-only Simkl mediator diagnostic that loads Prime watchlist IDs, dispatches through Simkl/AniList/MAL/Kitsu priority paths, walks direct prequel relations, and reports proposed franchise, season, and episode placement.
+- Report exact TVDB franchise episode ranges, coordinate gaps, and unmapped source episodes instead of reporting only episode totals.
+- Add the production TV-show mediator with Simkl, AniList, MAL, and Kitsu provider paths in strict priority order.
+- Resolve each watchlist item into a franchise, season number, and exact contiguous franchise episode range before inserting catalogue records.
+- Preserve source episode numbers separately from franchise coordinates, allowing split cours such as 1-12 to map to S02E13-S02E24 and franchise continuations to start above E01.
+- Start TV-show mediation after provider-ID enrichment and leave incomplete, conflicting, or unmapped placements out of the catalogue.
+- Keep supplemental specials attached to ordinary TV entries out of the catalogue; map Season 00 content only when that movie, OVA, ONA, or special is itself a watchlist item.
+- Try every provider identity present on an item in Simkl, AniList, MAL, then Kitsu order instead of stopping after the first provider failure.
+- Persist resolved or unresolved mediator state, successful provider path, failure reason, and check time on each canonical watchlist item.
