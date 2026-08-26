@@ -14,6 +14,7 @@ from resources.lib.users import UserStore
 from resources.lib.database.watchlist_items import WatchlistItemStore
 from resources.lib.database.watchlist_accounts import WatchlistAccountStore
 from resources.lib.database.app_logs import AppLogStore
+from resources.lib.database.catalog import CatalogStore
 from resources.lib.services.watchlist_sync import WatchlistSyncService
 from resources.lib.services.watchlist_identity import WatchlistIdentityEnrichmentService
 from resources.lib.watchlist.anilist_sync import AniListWatchlistImportService
@@ -52,6 +53,8 @@ def main() -> None:
     watchlist_items.initialize()
     watchlist_accounts = WatchlistAccountStore(users_db)
     watchlist_accounts.initialize()
+    catalog = CatalogStore(users_db)
+    catalog.initialize()
     app_logs = AppLogStore(users_db)
     app_logs.initialize()
 

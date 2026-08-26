@@ -98,7 +98,7 @@ class WatchlistItemStore:
                 "kodi_inventory_shows","kodi_library_state","kodi_episode_links",
                 "kodi_movie_links","kodi_series_links","provider_watch_states",
                 "watch_status_outbox","provider_list_entries","anilist_import_staging",
-                "episodes","seasons","movies","tv_series","metadata_resolver_config",
+                "movies","metadata_resolver_config",
                 "watchlist_preferences",
             ): db.execute("DROP TABLE IF EXISTS "+table)
 

@@ -1,25 +1,11 @@
-Otaku Prime 0.1.2 Alpha9
-========================
+Otaku Prime 0.1.2 Alpha10
+=========================
 
-- Replace provider-separated watchlist rows with one canonical Prime watchlist item per verified anime identity.
-- Add AniList, MyAnimeList, Kitsu, and Simkl ID columns to every canonical item.
-- Keep provider snapshots as connector state rather than separate user-facing watchlists.
-- Merge provider entries only through verified overlapping IDs; never merge by title guessing.
-- Preserve each provider's original status, normalized status, progress, update time, and raw response.
-- Normalize watching, completed, paused/on-hold, dropped, and planning states across all four trackers.
-- Preserve AniList REPEATING and normalize it to Prime's watching state.
-- Make Prime's canonical status and progress authoritative after the initial merge.
-- Detect provider disagreements without overwriting Prime's master state.
-- Fetch AniList's native MAL mapping and Kitsu's AniList/MAL mappings.
-- Retain every AniList/MAL/Kitsu/Simkl ID returned by Simkl watchlist records.
-- Resolve missing AniList, MAL, Kitsu, and Simkl catalog IDs for every Prime watchlist item, regardless of which tracker accounts are connected.
-- Reject and record Simkl parent-title fallbacks when their IDs disagree with the authoritative watchlist item, instead of overwriting or repeatedly retrying them.
-- Retry Simkl parent-title redirects through exact external-ID search and accept only detail records that agree with every authoritative ID Prime already knows.
-- Show catalog-identity conflicts separately from watch-progress conflicts in the series-details modal.
-- Treat missing cross-provider catalog IDs as a valid unavailable/partial state and reserve failures for actual enrichment errors.
-- Use Simkl's current anime watchlist endpoint and report empty or malformed API responses cleanly.
-- Refresh expired MAL and Kitsu access tokens before fetching their lists.
-- Use Simkl activities and delta synchronization during periodic runs instead of skipping Simkl.
-- Update Watchlist Management to show one row with all known IDs, Prime state, and connected sources.
-- Open each watchlist row in a responsive series-details modal with canonical state, titles, conflict status, and direct AniList, MAL, Kitsu, and Simkl links.
-- Migrate Alpha8b provider rows into the Alpha9 canonical schema without losing fetched entries.
+- Add persistent TV-series, season, and episode catalogue tables as the watchlist-to-database boundary.
+- Generate opaque six-character hexadecimal TV-series IDs.
+- Build 12-character season IDs from the related TV-series ID plus a new six-character segment.
+- Build 18-character episode IDs from the related season ID plus a new six-character segment.
+- Enforce hierarchical ID prefixes, parent foreign keys, episode numbering, and watch-status constraints in SQLite.
+- Store AniList, MAL, Kitsu, and Simkl identities on watchlist-owned seasons.
+- Store MAL context and Simkl episode identities on episodes.
+- Preserve Alpha10 catalogue tables when the Alpha9 watchlist store initializes.
