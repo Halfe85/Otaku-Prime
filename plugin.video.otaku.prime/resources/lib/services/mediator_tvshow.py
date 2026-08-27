@@ -11,6 +11,7 @@ from resources.lib.services.mediator_helper_mal import MALMediatorHelper
 from resources.lib.services.mediator_helper_simkl import (
     MediatorPlacementError,SimklMediatorClient,SimklMediatorHelper,
 )
+from resources.lib.services.remote_identity import persist_watchlist_id_repair
 
 
 LOGGER=get_logger(__name__)
@@ -55,8 +56,25 @@ class TVShowMediatorService:
         raise MediatorPlacementError("; ".join(
             "{}: {}".format(value["provider"],value["error"]) for value in attempts))
 
+    def _apply_identity_repair(self,item,placement):
+        repair=placement.get("identity_repair")
+        if not repair:
+            return item
+        provider=repair["provider"]
+        changed=persist_watchlist_id_repair(
+            self.watchlist_store,item["local_id"],provider,
+            repair.get("old"),repair.get("new"),repair.get("reason"))
+        if not changed:
+            return item
+        updated=dict(item); updated[provider+"_id"]=str(repair["new"])
+        LOGGER.warning(
+            "Mediator repaired stale %s ID for Prime item %s: %s -> %s",
+            provider,item["local_id"],repair.get("old"),repair.get("new"))
+        return updated
+
     def process_item(self,item):
         placement=self.resolve_item(item); provider=placement["provider_path"]
+        item=self._apply_identity_repair(item,placement)
         show=placement["tv_show"]
         series=self.catalog_store.get_or_create_series(
             english_name=show.get("name"),root_simkl_id=show.get("simkl_id"),
