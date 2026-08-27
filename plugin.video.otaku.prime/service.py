@@ -15,9 +15,9 @@ from resources.lib.database.watchlist_accounts import WatchlistAccountStore
 from resources.lib.database.app_logs import AppLogStore
 from resources.lib.database.catalog import CatalogStore
 from resources.lib.services.watchlist_identity import WatchlistIdentityEnrichmentService
-from resources.lib.services.watchlist_watchdog import (
-    WatchlistWatchdogService,
-    WatchlistWatchdogStore,
+from resources.lib.services.watchlist_watchdog import WatchlistWatchdogStore
+from resources.lib.services.watchlist_watchdog_release import (
+    ReleaseAwareWatchlistWatchdogService,
 )
 from resources.lib.services.watchlist_provider_writer import WatchlistProviderWriter
 from resources.lib.services.mediator_tvshow import TVShowMediatorService
@@ -82,13 +82,14 @@ def main() -> None:
     tvshow_mediator = TVShowMediatorService(watchlist_items,catalog)
     identity_enricher = WatchlistIdentityEnrichmentService(watchlist_items)
     provider_writer = WatchlistProviderWriter(watchlist_accounts)
-    watchlist_watchdog = WatchlistWatchdogService(
+    watchlist_watchdog = ReleaseAwareWatchlistWatchdogService(
         watchlist_importers,
         watchlist_items,
         provider_writer,
         identity_enricher=identity_enricher,
         mediator=tvshow_mediator,
         remote_interval_seconds=3600,
+        release_poll_seconds=30,
         error_handler=lambda exc: log(
             "ERROR", "watchlist-watchdog", "Watchlist watchdog failed: {}".format(exc)
         ),
@@ -122,7 +123,7 @@ def main() -> None:
     log(
         "INFO",
         "watchlist-watchdog",
-        "Alpha10 watchlist watchdog active: full boot sync, immediate local changes, hourly remote checks",
+        "Alpha10 watchlist watchdog active: full boot sync, immediate local changes, hourly remote checks, release scheduling",
     )
 
     xbmc.log(
