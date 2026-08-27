@@ -33,9 +33,39 @@ class ReleaseAwareWatchlistWatchdogService(WatchlistWatchdogService):
         self._wake.set()
         return result
 
+    def _refresh_released_items(self, now_epoch):
+        due_getter = getattr(self.release_manager, "due_release_ids", None)
+        refresher = getattr(self.mediator, "refresh_item", None) if self.mediator else None
+        if not due_getter or not refresher:
+            return 0
+        refreshed = 0
+        for local_id in due_getter(now_epoch=now_epoch):
+            try:
+                result = refresher(local_id) or {}
+                if result.get("busy"):
+                    LOGGER.info(
+                        "Mediator busy while refreshing released Prime item %s; using stored schedule",
+                        local_id,
+                    )
+                    continue
+                if result.get("refreshed"):
+                    refreshed += 1
+            except Exception as exc:
+                # Release rollover must still work from the last known catalogue
+                # when a provider is temporarily unavailable.
+                LOGGER.exception(
+                    "Mediator release refresh failed for Prime item %s", local_id
+                )
+                self.error_handler(exc)
+        return refreshed
+
     def _process_release_schedules(self, force=False):
+        now_epoch = int(time.time())
+        self._refresh_released_items(now_epoch)
         try:
-            events = self.release_manager.refresh_due(force=force)
+            events = self.release_manager.refresh_due(
+                now_epoch=now_epoch, force=force
+            )
         except Exception as exc:
             LOGGER.exception("Watchlist release schedule refresh failed")
             self.error_handler(exc)
@@ -47,7 +77,7 @@ class ReleaseAwareWatchlistWatchdogService(WatchlistWatchdogService):
             if (
                 released_episode is not None
                 and previous.get("next_episode_release_epoch")
-                and int(previous["next_episode_release_epoch"]) <= int(time.time())
+                and int(previous["next_episode_release_epoch"]) <= now_epoch
                 and released_episode != current.get("next_episode_number")
             ):
                 LOGGER.info(
