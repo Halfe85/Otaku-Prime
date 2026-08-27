@@ -22,3 +22,11 @@ Otaku Prime 0.1.2 Alpha10
 - Move all foreign-ID-to-Simkl discovery into watchlist identity enrichment and try AniList, MAL, then Kitsu mappings there for every item.
 - Restrict the Simkl mediator to canonical Simkl IDs; AniList, MAL, and Kitsu mediator helpers no longer search Simkl under another provider's name.
 - Requeue terminal results from the older single-ID enrichment algorithm once so existing installations can discover IDs through another provider mapping.
+- Add an Alpha10 watchlist watchdog as the sole runtime owner of watchlist synchronization.
+- Perform a full provider snapshot refresh at Kodi boot and remote watchlist checks every hour while Kodi remains running.
+- Track Prime master update time/source separately from generic database row timestamps and normalize AniList, MAL, Kitsu, and Simkl provider timestamps to UTC epoch seconds.
+- Resolve provider conflicts by newest user update instead of highest progress, with deterministic provider tie-breaking only when timestamps are equal.
+- Wake the watchdog immediately when Prime-local status/progress changes and retain a one-second dirty-row fallback for missed local notifications.
+- Mirror the winning Prime master state back to connected AniList, MAL, Kitsu, and Simkl accounts through provider-specific write adapters.
+- Detect new canonical watchlist items after every remote refresh, run provider-ID enrichment, and start the mediator when enrichment completes.
+- Keep provider removal/deletion propagation conservative for now; the watchdog does not invent deletion timestamps or automatically re-add removed rows from tombstone-free data.
