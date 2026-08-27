@@ -30,3 +30,8 @@ Otaku Prime 0.1.2 Alpha10
 - Mirror the winning Prime master state back to connected AniList, MAL, Kitsu, and Simkl accounts through provider-specific write adapters.
 - Detect new canonical watchlist items after every remote refresh, run provider-ID enrichment, and start the mediator when enrichment completes.
 - Keep provider removal/deletion propagation conservative for now; the watchdog does not invent deletion timestamps or automatically re-add removed rows from tombstone-free data.
+- Promote the watchdog from scheduler to the single public watchlist manager for Prime and all connected providers.
+- Require program-side status/progress changes to enter through WatchlistWatchdogService.update_item() and reject direct master-state writes through the backing store.
+- Add watchdog read helpers plus subscribe/unsubscribe hooks so downstream Prime components do not need provider synchronization knowledge.
+- Emit canonical WATCHLIST_ADDED, WATCHLIST_UPDATED, and WATCHLIST_REMOVED events with source, previous state, current state, changed fields, and Prime local ID.
+- Make the event stream the handoff point for future Kodi library projection: new items proceed through identity enrichment and mediation before catalogue projection, while status/progress updates can be reflected into existing Kodi rows.
