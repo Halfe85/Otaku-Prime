@@ -177,9 +177,16 @@ class CatalogStore:
         with self._connection() as db:
             row=db.execute("SELECT * FROM seasons WHERE watchlist_local_id=?",(watchlist_id,)).fetchone()
             if row:
-                db.execute("""UPDATE seasons SET season_number=?,provider_path=?,placement_source=?,
-                  first_episode=?,last_episode=?,updated_at=CURRENT_TIMESTAMP WHERE local_id=?""",
-                  (season_number,provider_path,placement_source,first_episode,last_episode,row["local_id"]))
+                db.execute("""UPDATE seasons SET related_series_id=?,anilist_id=?,mal_id=?,
+                  kitsu_id=?,simkl_id=?,season_number=?,provider_path=?,placement_source=?,
+                  first_episode=?,last_episode=?,english_name=COALESCE(?,english_name),
+                  romaji_name=COALESCE(?,romaji_name),media_format=COALESCE(?,media_format),
+                  release_date=COALESCE(?,release_date),updated_at=CURRENT_TIMESTAMP WHERE local_id=?""",
+                  (series_id,watchlist_item.get("anilist_id"),watchlist_item.get("mal_id"),
+                   watchlist_item.get("kitsu_id"),watchlist_item.get("simkl_id"),season_number,
+                   provider_path,placement_source,first_episode,last_episode,
+                   watchlist_item.get("english_name"),watchlist_item.get("romaji_name"),
+                   watchlist_item.get("media_format"),watchlist_item.get("release_date"),row["local_id"]))
                 return dict(db.execute("SELECT * FROM seasons WHERE local_id=?",(row["local_id"],)).fetchone())
             if not db.execute("SELECT 1 FROM tv_series WHERE local_id=?",(series_id,)).fetchone():
                 raise KeyError("TV series not found")
@@ -199,23 +206,24 @@ class CatalogStore:
     def add_episode(self,season_id,episode_number,source_episode_number=None,mal_id=None,simkl_id=None,
                     watch_status=False,release_date=None):
         number=int(episode_number)
+        incoming_mal=str(mal_id) if mal_id not in (None,"") else None
+        incoming_simkl=str(simkl_id) if simkl_id not in (None,"") else None
         with self._connection() as db:
             row=db.execute("SELECT * FROM episodes WHERE related_season_id=? AND episode_number=?",
                            (season_id,number)).fetchone()
             if row:
-                db.execute("""UPDATE episodes SET source_episode_number=?,mal_id=COALESCE(mal_id,?),
-                  simkl_id=COALESCE(simkl_id,?),release_date=COALESCE(release_date,?),
+                db.execute("""UPDATE episodes SET source_episode_number=?,mal_id=COALESCE(?,mal_id),
+                  simkl_id=COALESCE(?,simkl_id),release_date=COALESCE(?,release_date),
                   updated_at=CURRENT_TIMESTAMP WHERE local_id=?""",
-                  (int(source_episode_number or number),str(mal_id) if mal_id not in (None,"") else None,
-                   str(simkl_id) if simkl_id not in (None,"") else None,release_date,row["local_id"]))
+                  (int(source_episode_number or number),incoming_mal,incoming_simkl,
+                   release_date,row["local_id"]))
                 return dict(db.execute("SELECT * FROM episodes WHERE local_id=?",(row["local_id"],)).fetchone())
             if not db.execute("SELECT 1 FROM seasons WHERE local_id=?",(season_id,)).fetchone():
                 raise KeyError("season not found")
             local_id=self._new_local_id(db,"episodes",str(season_id))
             db.execute("""INSERT INTO episodes(local_id,related_season_id,episode_number,mal_id,
               simkl_id,watch_status,release_date,source_episode_number) VALUES(?,?,?,?,?,?,?,?)""",
-              (local_id,season_id,number,str(mal_id) if mal_id not in (None,"") else None,
-               str(simkl_id) if simkl_id not in (None,"") else None,
+              (local_id,season_id,number,incoming_mal,incoming_simkl,
                int(bool(watch_status)),release_date,int(source_episode_number or number)))
             return dict(db.execute("SELECT * FROM episodes WHERE local_id=?",(local_id,)).fetchone())
 
