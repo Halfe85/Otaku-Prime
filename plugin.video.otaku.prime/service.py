@@ -11,12 +11,15 @@ import xbmcaddon
 import xbmcvfs
 
 from resources.lib.users import UserStore
-from resources.lib.database.watchlist_items import WatchlistItemStore
 from resources.lib.database.watchlist_accounts import WatchlistAccountStore
 from resources.lib.database.app_logs import AppLogStore
 from resources.lib.database.catalog import CatalogStore
-from resources.lib.services.watchlist_sync import WatchlistSyncService
 from resources.lib.services.watchlist_identity import WatchlistIdentityEnrichmentService
+from resources.lib.services.watchlist_watchdog import (
+    WatchlistWatchdogService,
+    WatchlistWatchdogStore,
+)
+from resources.lib.services.watchlist_provider_writer import WatchlistProviderWriter
 from resources.lib.services.mediator_tvshow import TVShowMediatorService
 from resources.lib.watchlist.anilist_sync import AniListWatchlistImportService
 from resources.lib.watchlist.provider_importers import (
@@ -50,7 +53,7 @@ def main() -> None:
 
     user_store = UserStore(users_db)
     user_store.initialize()
-    watchlist_items = WatchlistItemStore(users_db)
+    watchlist_items = WatchlistWatchdogStore(users_db)
     watchlist_items.initialize()
     watchlist_accounts = WatchlistAccountStore(users_db)
     watchlist_accounts.initialize()
@@ -68,8 +71,8 @@ def main() -> None:
         logger=get_logger(source)
         getattr(logger,{"ERROR":"error","WARNING":"warning"}.get(level,"info"))(message)
 
-    # Accounts only control list/status synchronization. Catalog identities are
-    # enriched independently after the canonical watchlist has been assembled.
+    # Provider importers only read provider snapshots. The watchdog owns when
+    # they run and how those snapshots are reconciled with Prime's master state.
     watchlist_importers = [
         AniListWatchlistImportService(watchlist_accounts, watchlist_items),
         MALWatchlistImportService(watchlist_accounts, watchlist_items),
@@ -77,14 +80,20 @@ def main() -> None:
         SimklWatchlistImportService(watchlist_accounts, watchlist_items),
     ]
     tvshow_mediator = TVShowMediatorService(watchlist_items,catalog)
-    identity_enricher = WatchlistIdentityEnrichmentService(
-        watchlist_items,on_complete=tvshow_mediator.start)
-    watchlist_sync = WatchlistSyncService(
+    identity_enricher = WatchlistIdentityEnrichmentService(watchlist_items)
+    provider_writer = WatchlistProviderWriter(watchlist_accounts)
+    watchlist_watchdog = WatchlistWatchdogService(
         watchlist_importers,
         watchlist_items,
-        error_handler=lambda exc: log("ERROR","watchlist","Watchlist sync failed: {}".format(exc)),
+        provider_writer,
         identity_enricher=identity_enricher,
+        mediator=tvshow_mediator,
+        remote_interval_seconds=3600,
+        error_handler=lambda exc: log(
+            "ERROR", "watchlist-watchdog", "Watchlist watchdog failed: {}".format(exc)
+        ),
     )
+    identity_enricher.on_complete = watchlist_watchdog.identity_complete
 
     try:
         server = create_server(
@@ -92,7 +101,7 @@ def main() -> None:
             WEB_PORT,
             user_store,
             app_logs,
-            on_watchlist_changed=watchlist_sync.run_once,
+            on_watchlist_changed=watchlist_watchdog.request_remote_sync,
         )
     except OSError as exc:
         xbmc.log(
@@ -108,9 +117,13 @@ def main() -> None:
         daemon=True,
     )
     server_thread.start()
-    watchlist_sync.start(run_immediately=True)
+    watchlist_watchdog.start()
     log("INFO","service","Web service started on {}:{}".format(WEB_HOST,WEB_PORT))
-    log("INFO","watchlist","Alpha9 canonical Prime watchlist synchronization is active")
+    log(
+        "INFO",
+        "watchlist-watchdog",
+        "Alpha10 watchlist watchdog active: full boot sync, immediate local changes, hourly remote checks",
+    )
 
     xbmc.log(
         f"OTAKU PRIME: web service started on {WEB_HOST}:{WEB_PORT}",
@@ -125,7 +138,7 @@ def main() -> None:
     monitor.waitForAbort()
 
     server.shutdown()
-    watchlist_sync.stop()
+    watchlist_watchdog.stop()
     tvshow_mediator.stop()
     server.server_close()
     server_thread.join(timeout=5)
