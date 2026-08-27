@@ -48,3 +48,11 @@ Otaku Prime 0.1.2 Alpha10
 - Fall back to provider title lookup when a TVDB ID resolves to the wrong series, and do not persist an unvalidated TVDB mapping as truth.
 - Allow validated Simkl and TVDB series mappings, watchlist-season IDs, and episode remote IDs to refresh without changing Prime local IDs.
 - Reject ambiguous identity repairs, remote-ID collisions, and attempts to silently move an existing hierarchical Prime season to a different Prime series.
+- Add watchdog-owned release scheduling with persistent season release date plus next episode local ID, episode number, source episode number, and release date on each canonical watchlist item.
+- Derive release scheduling from the mediated Prime catalogue instead of provider IDs so Prime local identities remain stable when remote mappings change.
+- Treat date-only episode releases conservatively as released after that UTC calendar day has finished; honour exact provider timestamps when available.
+- Poll release schedules every 30 seconds and automatically advance to the following known episode when the current next episode releases.
+- Emit WATCHLIST_RELEASE_UPDATED with previous and current schedule state so downstream Kodi projection can see which episode just released and which episode is next.
+- Refresh only the affected mediated item when a release becomes due so newly published future episode dates enter the catalogue without reprocessing every series.
+- Retry busy or failed release metadata refreshes independently with backoff while still allowing local release rollover from the last known catalogue.
+- Track a catalogue content signature so same-second episode additions or release-date changes cannot be missed by SQLite timestamp granularity.
