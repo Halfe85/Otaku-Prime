@@ -166,16 +166,18 @@ class WatchlistReleaseManager:
             dated.append((epoch, int(episode["episode_number"]), episode))
         dated.sort(key=lambda value: (value[0], value[1]))
 
-        season_candidates = []
-        if item.get("release_date"):
-            season_candidates.append((release_epoch(item["release_date"]), item["release_date"]))
-        if season and season["release_date"]:
-            season_candidates.append((release_epoch(season["release_date"]), season["release_date"]))
         if dated:
-            season_candidates.append((dated[0][0], dated[0][2]["release_date"]))
-        season_candidates = [value for value in season_candidates if value[0] > 0]
-        season_candidates.sort(key=lambda value: value[0])
-        season_epoch, season_date = season_candidates[0] if season_candidates else (0, None)
+            season_epoch = dated[0][0]
+            season_date = dated[0][2]["release_date"]
+        elif season and season["release_date"] and release_epoch(season["release_date"]):
+            season_epoch = release_epoch(season["release_date"])
+            season_date = season["release_date"]
+        elif item.get("release_date") and release_epoch(item["release_date"]):
+            season_epoch = release_epoch(item["release_date"])
+            season_date = item["release_date"]
+        else:
+            season_epoch = 0
+            season_date = None
 
         next_row = next((value for value in dated if value[0] > int(now_epoch)), None)
         if next_row:
