@@ -6,6 +6,8 @@ import secrets
 import sqlite3
 from contextlib import contextmanager
 
+from resources.lib.services.remote_identity import best_title_similarity
+
 
 HEX_SEGMENT_LENGTH=6
 
@@ -109,17 +111,58 @@ class CatalogStore:
                 return local_id
         raise RuntimeError("could not allocate a unique catalogue ID")
 
+    @staticmethod
+    def _series_name_match(db,english_name=None,romaji_name=None):
+        expected=[value for value in (english_name,romaji_name) if value]
+        if not expected: return None
+        scored=[]
+        for row in db.execute("SELECT * FROM tv_series").fetchall():
+            actual=[value for value in (row["english_name"],row["romaji_name"]) if value]
+            similarity=best_title_similarity(expected,actual)
+            if similarity>=0.88:
+                scored.append((similarity,row))
+        scored.sort(key=lambda value:value[0],reverse=True)
+        if not scored: return None
+        if len(scored)>1 and scored[0][0]-scored[1][0]<0.08:
+            return None
+        return scored[0][1]
+
+    @staticmethod
+    def _assert_remote_id_available(db,column,value,local_id):
+        if value in (None,""): return
+        collision=db.execute(
+            "SELECT local_id FROM tv_series WHERE {}=? AND local_id<>?".format(column),
+            (str(value),str(local_id)),).fetchone()
+        if collision:
+            raise ValueError(
+                "{} {} already belongs to Prime series {}".format(
+                    column,str(value),collision["local_id"]))
+
     def get_or_create_series(self,english_name=None,romaji_name=None,root_simkl_id=None,tvdb_id=None):
+        """Resolve a Prime series while treating remote IDs as replaceable mappings.
+
+        The six-character Prime local_id is permanent. A validated mediator result
+        may replace stale Simkl/TVDB mappings without creating a second Prime series.
+        """
         root=str(root_simkl_id) if root_simkl_id not in (None,"") else None
         tvdb=str(tvdb_id) if tvdb_id not in (None,"") else None
         with self._connection() as db:
-            row=None
-            if root: row=db.execute("SELECT * FROM tv_series WHERE root_simkl_id=?",(root,)).fetchone()
-            if not row and tvdb: row=db.execute("SELECT * FROM tv_series WHERE tvdb_id=?",(tvdb,)).fetchone()
+            root_row=db.execute("SELECT * FROM tv_series WHERE root_simkl_id=?",(root,)).fetchone() if root else None
+            tvdb_row=db.execute("SELECT * FROM tv_series WHERE tvdb_id=?",(tvdb,)).fetchone() if tvdb else None
+            if root_row and tvdb_row and root_row["local_id"]!=tvdb_row["local_id"]:
+                raise ValueError(
+                    "validated remote identities point at different Prime series: {} vs {}".format(
+                        root_row["local_id"],tvdb_row["local_id"]))
+            row=root_row or tvdb_row
+            if not row:
+                row=self._series_name_match(db,english_name,romaji_name)
             if row:
-                db.execute("""UPDATE tv_series SET english_name=COALESCE(english_name,?),
-                  romaji_name=COALESCE(romaji_name,?),root_simkl_id=COALESCE(root_simkl_id,?),
-                  tvdb_id=COALESCE(tvdb_id,?),updated_at=CURRENT_TIMESTAMP WHERE local_id=?""",
+                self._assert_remote_id_available(db,"root_simkl_id",root,row["local_id"])
+                self._assert_remote_id_available(db,"tvdb_id",tvdb,row["local_id"])
+                db.execute("""UPDATE tv_series SET
+                  english_name=COALESCE(?,english_name),romaji_name=COALESCE(?,romaji_name),
+                  root_simkl_id=COALESCE(?,root_simkl_id),tvdb_id=COALESCE(?,tvdb_id),
+                  updated_at=CURRENT_TIMESTAMP WHERE local_id=?""",
                   (english_name,romaji_name,root,tvdb,row["local_id"]))
                 return dict(db.execute("SELECT * FROM tv_series WHERE local_id=?",(row["local_id"],)).fetchone())
             local_id=self._new_local_id(db,"tv_series")
