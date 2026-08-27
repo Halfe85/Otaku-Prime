@@ -413,17 +413,18 @@ class WatchlistWatchdogService:
             )
             provider_epoch = int(newest.get("provider_updated_epoch") or 0)
             master_epoch = int(item.get("master_updated_epoch") or 0)
-            provider_state = (newest["status"], int(newest["progress"]))
-            master_state = (item.get("status"), int(item.get("progress") or 0))
-            if provider_epoch > master_epoch and provider_state != master_state:
+            old_state = (item.get("status"), int(item.get("progress") or 0))
+            if provider_epoch > master_epoch:
                 self.store.apply_provider_master(local_id, newest)
                 item = self.store.item(local_id)
-                LOGGER.info(
-                    "Watchdog accepted newer %s state for %s: %s %s",
-                    newest["provider"], local_id, item["status"], item["progress"],
-                )
+                new_state = (item.get("status"), int(item.get("progress") or 0))
+                if new_state != old_state:
+                    LOGGER.info(
+                        "Watchdog accepted newer %s state for %s: %s %s",
+                        newest["provider"], local_id, item["status"], item["progress"],
+                    )
             # Whether the winning state originated locally or remotely, mirror
-            # that newest state into every connected provider that is older.
+            # that newest state into every connected provider that differs.
             self._sync_master_to_providers(item)
 
     def _process_local_changes(self):
@@ -459,8 +460,7 @@ class WatchlistWatchdogService:
                     entry["status"] == item["status"]
                     and int(entry["progress"]) == int(item.get("progress") or 0)
                 )
-                provider_epoch = int(entry.get("provider_updated_epoch") or 0)
-                if same_state and provider_epoch >= master_epoch:
+                if same_state:
                     continue
             try:
                 result = self.provider_writer.push(provider, item, entry)
