@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Timestamp-driven bidirectional watchlist watchdog for Otaku Prime."""
+"""Single-authority watchlist manager and synchronization watchdog."""
 from __future__ import annotations
 
 import datetime
@@ -17,6 +17,23 @@ from resources.lib.logging_config import get_logger
 
 LOGGER = get_logger(__name__)
 PROVIDER_TIE_PRIORITY = {"anilist": 4, "mal": 3, "kitsu": 2, "simkl": 1}
+WATCHLIST_ADDED = "WATCHLIST_ADDED"
+WATCHLIST_UPDATED = "WATCHLIST_UPDATED"
+WATCHLIST_REMOVED = "WATCHLIST_REMOVED"
+EVENT_COMPARE_FIELDS = (
+    "status",
+    "progress",
+    "anilist_id",
+    "mal_id",
+    "kitsu_id",
+    "simkl_id",
+    "english_name",
+    "romaji_name",
+    "native_name",
+    "episode_count",
+    "media_format",
+    "release_date",
+)
 
 
 def timestamp_epoch(value):
@@ -55,12 +72,14 @@ def epoch_iso(epoch):
     ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-class WatchlistWatchdogStore(WatchlistItemStore):
-    """Watchlist store with explicit Prime master timestamps for arbitration."""
+def changed_fields(previous, current):
+    previous = previous or {}
+    current = current or {}
+    return [name for name in EVENT_COMPARE_FIELDS if previous.get(name) != current.get(name)]
 
-    def __init__(self, db_path):
-        super().__init__(db_path)
-        self._local_change_callback = None
+
+class WatchlistWatchdogStore(WatchlistItemStore):
+    """Persistence used only by the watchlist manager and its provider workers."""
 
     def initialize(self):
         super().initialize()
@@ -109,9 +128,6 @@ class WatchlistWatchdogStore(WatchlistItemStore):
                         "WHERE provider=? AND provider_item_id=?",
                         (epoch, row["provider"], row["provider_item_id"]),
                     )
-
-    def bind_local_change_callback(self, callback):
-        self._local_change_callback = callback
 
     def _upsert_snapshot_row(self, db, provider, entry):
         local_id = super()._upsert_snapshot_row(db, provider, entry)
@@ -169,23 +185,34 @@ class WatchlistWatchdogStore(WatchlistItemStore):
         return {"initialized": initialized, "conflicts": conflicts, "items": len(items)}
 
     def set_master_state(self, local_id, status, progress):
-        """Record a Prime-local user change and wake the watchdog immediately."""
+        raise RuntimeError(
+            "Watchlist state is managed by WatchlistWatchdogService.update_item()"
+        )
+
+    def write_master_state(self, local_id, status, progress, source="prime",
+                           updated_at=None, updated_epoch=None):
+        """Internal write primitive. Call through WatchlistWatchdogService."""
         if status not in STATUSES:
             raise ValueError("unsupported watchlist status")
-        epoch = int(time.time())
-        updated_at = epoch_iso(epoch)
+        epoch = int(updated_epoch or time.time())
+        timestamp = updated_at or epoch_iso(epoch)
         with self._connection() as db:
-            cursor = db.execute("""UPDATE watchlist_items SET status=?,progress=?,
-              master_initialized=1,master_updated_at=?,master_updated_epoch=?,
-              master_updated_source='prime',updated_at=CURRENT_TIMESTAMP WHERE local_id=?""",
-              (status, max(0, int(progress)), updated_at, epoch, local_id))
-            if cursor.rowcount != 1:
+            previous_row = db.execute(
+                "SELECT * FROM watchlist_items WHERE local_id=?", (local_id,)
+            ).fetchone()
+            if not previous_row:
                 raise KeyError("watchlist item not found")
-            db.execute("""UPDATE watchlist_watchdog_state SET last_local_change_at=?,
-              updated_at=CURRENT_TIMESTAMP WHERE singleton=1""", (updated_at,))
-        if self._local_change_callback:
-            self._local_change_callback(local_id)
-        return self.finalize_merge()
+            db.execute("""UPDATE watchlist_items SET status=?,progress=?,
+              master_initialized=1,master_updated_at=?,master_updated_epoch=?,
+              master_updated_source=?,updated_at=CURRENT_TIMESTAMP WHERE local_id=?""",
+              (status, max(0, int(progress)), timestamp, epoch, str(source), local_id))
+            if source == "prime":
+                db.execute("""UPDATE watchlist_watchdog_state SET last_local_change_at=?,
+                  updated_at=CURRENT_TIMESTAMP WHERE singleton=1""", (timestamp,))
+            current_row = db.execute(
+                "SELECT * FROM watchlist_items WHERE local_id=?", (local_id,)
+            ).fetchone()
+            return dict(previous_row), dict(current_row)
 
     def apply_provider_master(self, local_id, provider_row):
         epoch = int(provider_row.get("provider_updated_epoch") or 0)
@@ -275,7 +302,7 @@ class WatchlistWatchdogStore(WatchlistItemStore):
 
 
 class WatchlistWatchdogService:
-    """Own boot sync, hourly remote checks and immediate local reconciliation."""
+    """Single public manager for Prime and provider watchlist state."""
 
     def __init__(self, importers, store, provider_writer, identity_enricher=None,
                  mediator=None, remote_interval_seconds=3600, local_poll_seconds=1.0,
@@ -297,8 +324,61 @@ class WatchlistWatchdogService:
         self._thread = None
         self._last_remote_monotonic = 0.0
         self._retry_after = {}
-        self.store.bind_local_change_callback(self.local_changed)
+        self._subscribers = []
+        self._subscriber_lock = threading.Lock()
 
+    # Public manager API -------------------------------------------------
+    def list_items(self):
+        return self.store.list_all()
+
+    def get_item(self, local_id):
+        return self.store.item(str(local_id))
+
+    def subscribe(self, callback):
+        """Subscribe to canonical ADDED/UPDATED/REMOVED events."""
+        if not callable(callback):
+            raise TypeError("watchlist subscriber must be callable")
+        with self._subscriber_lock:
+            if callback not in self._subscribers:
+                self._subscribers.append(callback)
+        return callback
+
+    def unsubscribe(self, callback):
+        with self._subscriber_lock:
+            if callback in self._subscribers:
+                self._subscribers.remove(callback)
+
+    def update_item(self, local_id, status=None, progress=None, source="prime"):
+        """Only supported program entry point for changing canonical watchlist state."""
+        local_id = str(local_id)
+        current = self.store.item(local_id)
+        if not current:
+            raise KeyError("watchlist item not found")
+        next_status = status if status is not None else current.get("status")
+        next_progress = int(progress if progress is not None else current.get("progress") or 0)
+        if next_status not in STATUSES:
+            raise ValueError("unsupported watchlist status")
+        if current.get("status") == next_status and int(current.get("progress") or 0) == next_progress:
+            return {"changed": False, "item": current}
+        previous, updated = self.store.write_master_state(
+            local_id, next_status, next_progress, source=source
+        )
+        self.local_changed(local_id)
+        self._emit(
+            WATCHLIST_UPDATED,
+            updated,
+            source=source,
+            previous=previous,
+            fields=changed_fields(previous, updated),
+        )
+        return {"changed": True, "item": updated}
+
+    def request_remote_sync(self, *args, **kwargs):
+        """Wake immediately after provider connect/disconnect or explicit refresh."""
+        self._remote_requested.set()
+        return {"scheduled": True}
+
+    # Lifecycle ----------------------------------------------------------
     def start(self):
         if self._thread and self._thread.is_alive():
             return {"scheduled": False, "busy": True}
@@ -318,12 +398,8 @@ class WatchlistWatchdogService:
         if self.identity_enricher:
             self.identity_enricher.stop(timeout=timeout)
 
-    def request_remote_sync(self, *args, **kwargs):
-        """Wake immediately after provider connect/disconnect or explicit refresh."""
-        self._remote_requested.set()
-        return {"scheduled": True}
-
     def local_changed(self, local_id=None):
+        """Internal wake-up used after manager writes or identity enrichment."""
         if local_id:
             with self._local_ids_lock:
                 self._local_ids.add(str(local_id))
@@ -336,6 +412,61 @@ class WatchlistWatchdogService:
         if self.mediator:
             self.mediator.start()
 
+    # Event output -------------------------------------------------------
+    def _emit(self, event_type, item, source, previous=None, fields=None):
+        item_copy = dict(item) if item else None
+        event = {
+            "type": str(event_type),
+            "local_id": (item_copy or previous or {}).get("local_id"),
+            "source": str(source or "watchdog"),
+            "item": item_copy,
+            "previous": dict(previous) if previous else None,
+            "changed_fields": list(fields or []),
+            "emitted_at": epoch_iso(int(time.time())),
+        }
+        with self._subscriber_lock:
+            subscribers = list(self._subscribers)
+        for callback in subscribers:
+            try:
+                callback(event)
+            except Exception:
+                LOGGER.exception("Watchlist event subscriber failed for %s", event_type)
+        return event
+
+    def _emit_remote_diff(self, before, after):
+        before_ids = set(before)
+        after_ids = set(after)
+        for local_id in sorted(after_ids - before_ids):
+            item = after[local_id]
+            self._emit(
+                WATCHLIST_ADDED,
+                item,
+                source=item.get("master_updated_source") or "remote",
+                fields=list(EVENT_COMPARE_FIELDS),
+            )
+        for local_id in sorted(before_ids & after_ids):
+            previous = before[local_id]
+            item = after[local_id]
+            fields = changed_fields(previous, item)
+            if fields:
+                self._emit(
+                    WATCHLIST_UPDATED,
+                    item,
+                    source=item.get("master_updated_source") or "remote",
+                    previous=previous,
+                    fields=fields,
+                )
+        for local_id in sorted(before_ids - after_ids):
+            previous = before[local_id]
+            self._emit(
+                WATCHLIST_REMOVED,
+                None,
+                source="remote",
+                previous=previous,
+                fields=list(EVENT_COMPARE_FIELDS),
+            )
+
+    # Worker -------------------------------------------------------------
     def _run(self):
         self._refresh_remote(boot=True)
         while not self._stop.is_set():
@@ -354,14 +485,12 @@ class WatchlistWatchdogService:
         if not self._run_lock.acquire(blocking=False):
             return {"busy": True}
         try:
-            before = {row["local_id"] for row in self.store.list_all()}
+            before_rows = {row["local_id"]: row for row in self.store.list_all()}
             results = []
             for importer in self.importers:
                 if self._stop.is_set():
                     break
                 try:
-                    # Boot must be a complete snapshot. Simkl otherwise uses its
-                    # persisted activity cursor and may correctly decide nothing changed.
                     if boot and getattr(importer, "provider", None) == "simkl":
                         clear = getattr(importer, "_clear_state", None)
                         if clear:
@@ -376,17 +505,18 @@ class WatchlistWatchdogService:
                     self.error_handler(exc)
                     results.append({"error": str(exc)})
             merge = self.store.finalize_merge()
-            after_rows = self.store.list_all()
-            after = {row["local_id"] for row in after_rows}
-            new_ids = sorted(after - before)
-            self._reconcile_remote_rows(after_rows)
+            imported_rows = self.store.list_all()
+            self._reconcile_remote_rows(imported_rows)
+            final_rows = {row["local_id"]: row for row in self.store.list_all()}
+            new_ids = sorted(set(final_rows) - set(before_rows))
+            self._emit_remote_diff(before_rows, final_rows)
             self.store.record_watchdog_sync(
                 boot=boot, interval_seconds=self.remote_interval_seconds
             )
             self._last_remote_monotonic = time.monotonic()
             LOGGER.info(
                 "Watchlist watchdog remote sync complete: items=%s new=%s conflicts=%s",
-                len(after_rows), len(new_ids), merge.get("conflicts", 0),
+                len(final_rows), len(new_ids), merge.get("conflicts", 0),
             )
             if new_ids:
                 LOGGER.info("Watchlist watchdog discovered %s new Prime items", len(new_ids))
@@ -423,23 +553,16 @@ class WatchlistWatchdogService:
                         "Watchdog accepted newer %s state for %s: %s %s",
                         newest["provider"], local_id, item["status"], item["progress"],
                     )
-            # Whether the winning state originated locally or remotely, mirror
-            # that newest state into every connected provider that differs.
             self._sync_master_to_providers(item)
 
     def _process_local_changes(self):
         now = time.time()
         with self._local_ids_lock:
-            requested = set(self._local_ids)
             self._local_ids.clear()
         self._local_requested.clear()
         dirty = self.store.dirty_master_items()
         for item in dirty:
             local_id = item["local_id"]
-            if requested and local_id not in requested and item.get("master_updated_source") == "prime":
-                # Still process it: dirty rows are the crash/restart fallback for
-                # a local notification that could have been missed.
-                pass
             if self._retry_after.get(local_id, 0) > now:
                 continue
             self._sync_master_to_providers(item)
@@ -485,6 +608,5 @@ class WatchlistWatchdogService:
             self.store.mark_watchdog_checked(item["local_id"], master_epoch)
             self._retry_after.pop(item["local_id"], None)
         else:
-            # Avoid one broken provider becoming a one-request-per-second loop.
             self._retry_after[item["local_id"]] = time.time() + 60
         return wrote_any
