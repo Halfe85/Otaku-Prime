@@ -254,6 +254,21 @@ class WatchlistReleaseManager:
             "changed_fields": fields,
         }
 
+    def due_release_ids(self, now_epoch=None):
+        """Return Prime items whose currently advertised next episode has released."""
+        now_epoch = int(now_epoch if now_epoch is not None else time.time())
+        with self.store._connection() as db:
+            return [
+                str(row["local_id"])
+                for row in db.execute(
+                    """SELECT local_id FROM watchlist_items
+                    WHERE next_episode_release_epoch>0
+                      AND next_episode_release_epoch<=?
+                    ORDER BY next_episode_release_epoch,local_id""",
+                    (now_epoch,),
+                )
+            ]
+
     def refresh_due(self, now_epoch=None, force=False):
         """Refresh schedules whose catalogue changed or whose next release passed."""
         now_epoch = int(now_epoch if now_epoch is not None else time.time())
