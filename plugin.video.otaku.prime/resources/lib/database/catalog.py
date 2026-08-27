@@ -177,12 +177,18 @@ class CatalogStore:
         with self._connection() as db:
             row=db.execute("SELECT * FROM seasons WHERE watchlist_local_id=?",(watchlist_id,)).fetchone()
             if row:
-                db.execute("""UPDATE seasons SET related_series_id=?,anilist_id=?,mal_id=?,
-                  kitsu_id=?,simkl_id=?,season_number=?,provider_path=?,placement_source=?,
-                  first_episode=?,last_episode=?,english_name=COALESCE(?,english_name),
-                  romaji_name=COALESCE(?,romaji_name),media_format=COALESCE(?,media_format),
-                  release_date=COALESCE(?,release_date),updated_at=CURRENT_TIMESTAMP WHERE local_id=?""",
-                  (series_id,watchlist_item.get("anilist_id"),watchlist_item.get("mal_id"),
+                if str(row["related_series_id"])!=str(series_id):
+                    raise ValueError(
+                        "existing Prime season cannot move from series {} to {}".format(
+                            row["related_series_id"],series_id))
+                db.execute("""UPDATE seasons SET
+                  anilist_id=COALESCE(?,anilist_id),mal_id=COALESCE(?,mal_id),
+                  kitsu_id=COALESCE(?,kitsu_id),simkl_id=COALESCE(?,simkl_id),
+                  season_number=?,provider_path=?,placement_source=?,first_episode=?,last_episode=?,
+                  english_name=COALESCE(?,english_name),romaji_name=COALESCE(?,romaji_name),
+                  media_format=COALESCE(?,media_format),release_date=COALESCE(?,release_date),
+                  updated_at=CURRENT_TIMESTAMP WHERE local_id=?""",
+                  (watchlist_item.get("anilist_id"),watchlist_item.get("mal_id"),
                    watchlist_item.get("kitsu_id"),watchlist_item.get("simkl_id"),season_number,
                    provider_path,placement_source,first_episode,last_episode,
                    watchlist_item.get("english_name"),watchlist_item.get("romaji_name"),
