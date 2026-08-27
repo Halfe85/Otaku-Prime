@@ -141,5 +141,55 @@ class RemoteIdentityRepairTests(unittest.TestCase):
                 try: os.unlink(handle.name+suffix)
                 except FileNotFoundError: pass
 
+    def test_season_and_episode_remote_ids_refresh_without_changing_local_ids(self):
+        handle=tempfile.NamedTemporaryFile(delete=False); handle.close()
+        try:
+            store=WatchlistItemStore(handle.name); store.initialize()
+            store.replace_provider_snapshot("anilist",[{
+                "provider_item_id":"101506","ids":{"anilist":"101506","simkl":"10"},
+                "english_name":"UzaMaid!","list_status":"CURRENT","progress":1,
+            }])
+            item=store.list_all()[0]
+            catalog=CatalogStore(handle.name,SegmentFactory()); catalog.initialize()
+            series=catalog.get_or_create_series("UzaMaid!",root_simkl_id="1")
+            season=catalog.add_watchlist_season(series["local_id"],item,season_number=1)
+            episode=catalog.add_episode(season["local_id"],1,simkl_id="1001",mal_id="2001")
+
+            repaired=dict(item); repaired["simkl_id"]="20"; repaired["mal_id"]="3000"
+            season2=catalog.add_watchlist_season(series["local_id"],repaired,season_number=1)
+            episode2=catalog.add_episode(season["local_id"],1,simkl_id="1002",mal_id="2002")
+
+            self.assertEqual(season["local_id"],season2["local_id"])
+            self.assertEqual("20",season2["simkl_id"])
+            self.assertEqual("3000",season2["mal_id"])
+            self.assertEqual(episode["local_id"],episode2["local_id"])
+            self.assertEqual("1002",episode2["simkl_id"])
+            self.assertEqual("2002",episode2["mal_id"])
+        finally:
+            for suffix in ("","-wal","-shm"):
+                try: os.unlink(handle.name+suffix)
+                except FileNotFoundError: pass
+
+    def test_existing_season_cannot_be_silently_reparented(self):
+        handle=tempfile.NamedTemporaryFile(delete=False); handle.close()
+        try:
+            store=WatchlistItemStore(handle.name); store.initialize()
+            store.replace_provider_snapshot("anilist",[{
+                "provider_item_id":"101506","ids":{"anilist":"101506"},
+                "english_name":"UzaMaid!","list_status":"CURRENT","progress":1,
+            }])
+            item=store.list_all()[0]
+            catalog=CatalogStore(handle.name,SegmentFactory()); catalog.initialize()
+            first=catalog.get_or_create_series("UzaMaid!",root_simkl_id="1")
+            season=catalog.add_watchlist_season(first["local_id"],item,season_number=1)
+            second=catalog.get_or_create_series("Different Franchise",root_simkl_id="2")
+            with self.assertRaises(ValueError):
+                catalog.add_watchlist_season(second["local_id"],item,season_number=1)
+            self.assertEqual(first["local_id"],season["local_id"][:6])
+        finally:
+            for suffix in ("","-wal","-shm"):
+                try: os.unlink(handle.name+suffix)
+                except FileNotFoundError: pass
+
 
 if __name__=="__main__": unittest.main()
