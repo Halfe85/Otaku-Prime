@@ -74,6 +74,7 @@ class WatchlistWatchdogManagerTests(unittest.TestCase):
         self.assertTrue(result["changed"])
         saved = self.store.item(self.item["local_id"])
         self.assertEqual(saved["progress"], 2)
+        self.assertEqual(saved["master_updated_source"], "prime")
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["type"], WATCHLIST_UPDATED)
         self.assertEqual(events[0]["local_id"], self.item["local_id"])
