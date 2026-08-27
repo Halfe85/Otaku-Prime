@@ -2,7 +2,6 @@
   var rows = document.getElementById("watchlist-rows");
   if (!rows) return;
 
-  var search = document.getElementById("watchlist-search");
   var status = document.getElementById("watchlist-status");
   var previous = document.getElementById("watchlist-previous");
   var next = document.getElementById("watchlist-next");
@@ -12,12 +11,14 @@
   var page = 1;
   var pageSize = 8;
   var returnFocus = null;
+  var searchTerm = "";
+  var currentEntry = null;
 
   var providers = [
-    { id: "anilist", label: "AniList", color: "#4ba3ff", url: "https://anilist.co/anime/" },
-    { id: "mal", label: "MyAnimeList", color: "#5d78d6", url: "https://myanimelist.net/anime/" },
-    { id: "kitsu", label: "Kitsu", color: "#f36f5d", url: "https://kitsu.app/anime/" },
-    { id: "simkl", label: "Simkl", color: "#24b4c7", url: "https://simkl.com/anime/" }
+    { id: "anilist", label: "AniList", icon: "/ui/components/watchlist-management/assets/anilist.png", url: "https://anilist.co/anime/" },
+    { id: "mal", label: "MyAnimeList", icon: "/ui/components/watchlist-management/assets/mal.png", url: "https://myanimelist.net/anime/" },
+    { id: "kitsu", label: "Kitsu", icon: "/ui/components/watchlist-management/assets/kitsu.png", url: "https://kitsu.app/anime/" },
+    { id: "simkl", label: "Simkl", icon: "/ui/components/watchlist-management/assets/simkl.png", url: "https://simkl.com/anime/" }
   ];
 
   function value(value, fallback) {
@@ -37,7 +38,7 @@
   }
 
   function titleOf(entry) {
-    return entry.english_name || entry.romaji_name || entry.native_name || "Untitled";
+    return entry.english_name || "Untitled";
   }
 
   function visiblePageSize() {
@@ -49,13 +50,16 @@
     var id = entry[provider.id + "_id"];
     var link = document.createElement(id ? "a" : "div");
     link.className = "provider-link" + (id ? "" : " unavailable");
-    link.style.setProperty("--provider-color", provider.color);
     if (id) {
       link.href = provider.url + encodeURIComponent(String(id));
       link.target = "_blank";
       link.rel = "noopener noreferrer";
       link.setAttribute("aria-label", "Open " + titleOf(entry) + " on " + provider.label);
     }
+    var icon = document.createElement("img");
+    icon.className = "provider-icon";
+    icon.src = provider.icon;
+    icon.alt = "";
     var label = document.createElement("span");
     label.className = "provider-link-label";
     var name = document.createElement("span");
@@ -68,15 +72,16 @@
     arrow.className = "provider-link-arrow";
     arrow.setAttribute("aria-hidden", "true");
     arrow.textContent = id ? "↗" : "—";
+    link.appendChild(icon);
     link.appendChild(label);
     link.appendChild(arrow);
     return link;
   }
 
   function openModal(entry, trigger) {
+    currentEntry = entry;
     returnFocus = trigger;
     setText("series-modal-title", titleOf(entry));
-    setText("series-modal-summary", entry.romaji_name && entry.romaji_name !== titleOf(entry) ? entry.romaji_name : entry.native_name || "Canonical Prime watchlist identity");
     setText("series-modal-status", entry.status);
     setText("series-modal-progress", String(entry.progress || 0) + (entry.episode_count != null ? " / " + entry.episode_count : " episodes"));
     setText("series-modal-format", entry.media_format || "Unknown");
@@ -84,7 +89,6 @@
     setText("series-modal-english", entry.english_name);
     setText("series-modal-romaji", entry.romaji_name);
     setText("series-modal-native", entry.native_name);
-    setText("series-modal-sources", value(entry.connected_providers, "No connected sources").split(",").filter(Boolean).length + " connected");
     setText("series-modal-local-id", "Prime ID  " + entry.local_id);
     document.getElementById("series-modal-conflict").hidden = !entry.has_conflict;
     var identityConflict = document.getElementById("series-modal-identity-conflict");
@@ -96,7 +100,9 @@
       : "";
     var links = document.getElementById("series-modal-provider-links");
     links.textContent = "";
-    providers.forEach(function (provider) { links.appendChild(providerLink(provider, entry)); });
+    providers.forEach(function (provider) {
+      if (entry[provider.id + "_id"]) links.appendChild(providerLink(provider, entry));
+    });
     modal.hidden = false;
     document.querySelector(".series-modal-close").focus();
   }
@@ -106,10 +112,29 @@
     modal.hidden = true;
     if (returnFocus && document.contains(returnFocus)) returnFocus.focus();
     returnFocus = null;
+    currentEntry = null;
+  }
+
+  function connectedProviders(entry) {
+    var connected = String(entry.connected_providers || "").split(",");
+    return providers.filter(function (provider) { return connected.indexOf(provider.id) !== -1; });
+  }
+
+  function providerIcons(entry) {
+    var group = document.createElement("span");
+    group.className = "provider-icons";
+    connectedProviders(entry).forEach(function (provider) {
+      var icon = document.createElement("img");
+      icon.src = provider.icon;
+      icon.alt = provider.label;
+      icon.title = provider.label;
+      group.appendChild(icon);
+    });
+    return group;
   }
 
   function render() {
-    var term = search.value.trim().toLowerCase();
+    var term = searchTerm.trim().toLowerCase();
     var wanted = status.value;
     var visible = entries.filter(function (entry) {
       var haystack = [titleOf(entry), entry.romaji_name, entry.native_name, entry.anilist_id,
@@ -123,7 +148,7 @@
     rows.textContent = "";
     if (!pageEntries.length) {
       var empty = document.createElement("tr");
-      textCell(empty, "No matching watchlist entries.", "muted").colSpan = 6;
+      textCell(empty, "No matching watchlist entries.", "muted").colSpan = 5;
       rows.appendChild(empty);
     }
     pageEntries.forEach(function (entry) {
@@ -142,18 +167,14 @@
       title.className = "watchlist-title";
       var strong = document.createElement("strong");
       strong.textContent = titleOf(entry);
-      var sub = document.createElement("span");
-      sub.textContent = entry.romaji_name && entry.romaji_name !== strong.textContent ? entry.romaji_name : (entry.release_date || "Open details");
       title.appendChild(strong);
-      title.appendChild(sub);
       row.appendChild(title);
-      var idText = [entry.anilist_id ? "AL " + entry.anilist_id : "", entry.mal_id ? "MAL " + entry.mal_id : "",
-        entry.kitsu_id ? "Kitsu " + entry.kitsu_id : "", entry.simkl_id ? "Simkl " + entry.simkl_id : ""].filter(Boolean).join(" · ");
-      textCell(row, idText, "provider-item");
+      var providerCell = document.createElement("td");
+      providerCell.appendChild(providerIcons(entry));
+      row.appendChild(providerCell);
       textCell(row, entry.media_format || "Unknown");
       textCell(row, entry.status);
       textCell(row, String(entry.progress || 0) + (entry.episode_count != null ? " / " + entry.episode_count : ""));
-      textCell(row, entry.connected_providers + (entry.has_conflict ? " · conflict" : ""));
       rows.appendChild(row);
     });
     pageStatus.textContent = "Page " + page + " of " + pages + " · " + visible.length + " items";
@@ -161,13 +182,70 @@
     next.disabled = page >= pages;
   }
 
-  search.addEventListener("input", function () { page = 1; render(); });
+  window.addEventListener("prime:search", function (event) {
+    if (!event.detail || event.detail.context !== "watchlist-management") return;
+    searchTerm = event.detail.value || "";
+    page = 1;
+    render();
+  });
   status.addEventListener("change", function () { page = 1; render(); });
   previous.addEventListener("click", function () { if (page > 1) { page -= 1; render(); } });
   next.addEventListener("click", function () { page += 1; render(); });
   window.addEventListener("resize", render);
   modal.addEventListener("click", function (event) {
     if (event.target.hasAttribute("data-modal-close")) closeModal();
+  });
+  document.getElementById("series-modal-progress").addEventListener("click", function () {
+    if (!currentEntry) return;
+    var editingEntry = currentEntry;
+    var button = this;
+    var input = document.createElement("input");
+    input.type = "number";
+    input.className = "series-progress-input";
+    input.min = "0";
+    if (editingEntry.episode_count != null) input.max = String(editingEntry.episode_count);
+    input.value = String(editingEntry.progress || 0);
+    button.replaceWith(input);
+    input.focus();
+    input.select();
+    function restore() {
+      input.replaceWith(button);
+      button.textContent = String(editingEntry.progress || 0) +
+        (editingEntry.episode_count != null ? " / " + editingEntry.episode_count : " episodes");
+    }
+    function save() {
+      var progress = Number(input.value);
+      if (!Number.isInteger(progress) || progress < 0 ||
+          (editingEntry.episode_count != null && progress > Number(editingEntry.episode_count))) {
+        input.setCustomValidity("Enter a valid episode number.");
+        input.reportValidity();
+        return;
+      }
+      input.disabled = true;
+      fetch("/api/watchlist/items/" + encodeURIComponent(editingEntry.local_id) + "/progress", {
+        method: "POST",
+        headers: { "Accept": "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ progress: progress })
+      }).then(function (response) {
+        return response.json().then(function (payload) {
+          if (!response.ok) throw new Error(payload.message || "Could not update progress");
+          return payload;
+        });
+      }).then(function (payload) {
+        editingEntry.progress = payload.item.progress;
+        restore();
+        render();
+      }).catch(function (error) {
+        input.disabled = false;
+        input.setCustomValidity(error.message);
+        input.reportValidity();
+      });
+    }
+    input.addEventListener("keydown", function (event) {
+      if (event.key === "Enter") { event.preventDefault(); save(); }
+      if (event.key === "Escape") { event.preventDefault(); restore(); button.focus(); }
+    });
+    input.addEventListener("blur", function () { if (!input.disabled) restore(); });
   });
   document.addEventListener("keydown", function (event) {
     if (event.key === "Escape" && !modal.hidden) closeModal();
@@ -186,7 +264,7 @@
     .catch(function (error) {
       rows.textContent = "";
       var row = document.createElement("tr");
-      textCell(row, error.message, "muted").colSpan = 6;
+      textCell(row, error.message, "muted").colSpan = 5;
       rows.appendChild(row);
     });
 }());

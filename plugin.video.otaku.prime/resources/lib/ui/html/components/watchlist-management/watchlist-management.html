@@ -1,10 +1,9 @@
 <section class="watchlist-tools" aria-label="Watchlist filters">
-  <label>Search<input id="watchlist-search" type="search" placeholder="Series title"></label>
   <label>List status<select id="watchlist-status"><option value="">All statuses</option><option value="CURRENT">Watching</option><option value="COMPLETED">Completed</option><option value="PAUSED">Paused</option><option value="DROPPED">Dropped</option><option value="PLANNING">Planning</option></select></label>
 </section>
 <p class="notice" id="watchlist-message" hidden></p>
 <div class="watchlist-table-wrap">
-  <table class="watchlist-table"><thead><tr><th>Title</th><th>Provider IDs</th><th>Format</th><th>Prime status</th><th>Progress</th><th>Sources</th></tr></thead><tbody id="watchlist-rows"><tr><td colspan="6" class="muted">Loading watchlist…</td></tr></tbody></table>
+  <table class="watchlist-table"><thead><tr><th>Title</th><th>Providers</th><th>Format</th><th>Prime status</th><th>Progress</th></tr></thead><tbody id="watchlist-rows"><tr><td colspan="5" class="muted">Loading watchlist…</td></tr></tbody></table>
 </div>
 <nav class="watchlist-pagination" id="watchlist-pagination" aria-label="Watchlist pages">
   <button class="button secondary" id="watchlist-previous" type="button">Previous</button>
@@ -14,12 +13,10 @@
 
 <div class="series-modal" id="series-modal" hidden>
   <div class="series-modal-backdrop" data-modal-close></div>
-  <section class="series-modal-card" role="dialog" aria-modal="true" aria-labelledby="series-modal-title" aria-describedby="series-modal-summary">
+  <section class="series-modal-card" role="dialog" aria-modal="true" aria-labelledby="series-modal-title">
     <header class="series-modal-header">
       <div>
-        <span class="series-modal-eyebrow">Prime watchlist item</span>
         <h2 id="series-modal-title">Series details</h2>
-        <p id="series-modal-summary" class="muted"></p>
       </div>
       <button class="series-modal-close" type="button" data-modal-close aria-label="Close series details">&times;</button>
     </header>
@@ -27,7 +24,7 @@
     <div class="series-modal-body">
       <section class="series-state-card">
         <div><span>Prime status</span><strong id="series-modal-status">—</strong></div>
-        <div><span>Progress</span><strong id="series-modal-progress">—</strong></div>
+        <div><span>Progress</span><button class="series-progress-button" id="series-modal-progress" type="button" aria-label="Edit progress">—</button></div>
         <div><span>Format</span><strong id="series-modal-format">—</strong></div>
         <div><span>First release</span><strong id="series-modal-release">—</strong></div>
       </section>
@@ -39,7 +36,7 @@
 
       <section class="series-detail-section">
         <h3>Titles</h3>
-        <dl class="series-title-list">
+        <dl class="series-detail-list series-title-list">
           <div><dt>English</dt><dd id="series-modal-english">—</dd></div>
           <div><dt>Romaji</dt><dd id="series-modal-romaji">—</dd></div>
           <div><dt>Native</dt><dd id="series-modal-native">—</dd></div>
@@ -47,11 +44,8 @@
       </section>
 
       <section class="series-detail-section">
-        <div class="series-section-heading">
-          <div><h3>Provider identities</h3><p>Open this exact item on its tracking provider.</p></div>
-          <span id="series-modal-sources" class="series-source-count"></span>
-        </div>
-        <div class="provider-link-grid" id="series-modal-provider-links"></div>
+        <h3>Provider identities</h3>
+        <div class="provider-link-list" id="series-modal-provider-links"></div>
       </section>
     </div>
 

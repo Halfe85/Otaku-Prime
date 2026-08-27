@@ -13,7 +13,7 @@ HTML_ROOT = Path(__file__).resolve().parent / "html"
 SETTINGS_CATEGORIES = (
     ("accounts", "Admin Account", "Manage the local Otaku Prime administrator login."),
     ("watchlist", "Watchlist Accounts", "Connect AniList, MyAnimeList, Kitsu, and Simkl."),
-    ("watchlist-management", "Watchlist Management", "Browse raw items fetched from connected watchlists."),
+    ("watchlist-management", "Watchlist Management", ""),
 )
 
 
@@ -175,7 +175,11 @@ def render_home(user: dict, message: str = "", active_tab: str = "watchlist", wa
                 + _template("components/watchlist-management/watchlist-management.html")
                 + '<script src="/ui/components/watchlist-management/watchlist-management.js" defer></script>'
             )
-        panels.append('<section class="panel" id="panel-{}" role="tabpanel"{}><header class="panel-header"><h2>{}</h2><p>{}</p></header>{}</section>'.format(category_id, "" if selected else " hidden", html.escape(label), html.escape(description), panel_content))
+        panel_header = "" if category_id == "watchlist-management" else (
+            '<header class="panel-header"><h2>{}</h2><p>{}</p></header>'.format(
+                html.escape(label),html.escape(description)))
+        panels.append('<section class="panel" id="panel-{}" role="tabpanel"{}>{}{}</section>'.format(
+            category_id,"" if selected else " hidden",panel_header,panel_content))
     content = _fill(_template("components/main-container/main-container.html"), USERNAME=html.escape(user["username"]), TABS="".join(tabs), PANELS="".join(panels))
     return _document("Settings - Otaku Prime", content, "settings-page", "main-container")
 
@@ -183,7 +187,7 @@ def render_home(user: dict, message: str = "", active_tab: str = "watchlist", wa
 def read_static_asset(relative_path: str) -> Optional[Tuple[str, bytes]]:
     """Return an allow-listed CSS or JavaScript file below the UI root."""
     path = PurePosixPath(relative_path)
-    if path.is_absolute() or ".." in path.parts or path.suffix not in (".css", ".js"):
+    if path.is_absolute() or ".." in path.parts or path.suffix not in (".css", ".js", ".png"):
         return None
     candidate = (HTML_ROOT / Path(*path.parts)).resolve()
     try:
@@ -192,5 +196,9 @@ def read_static_asset(relative_path: str) -> Optional[Tuple[str, bytes]]:
         return None
     if not candidate.is_file():
         return None
-    content_type = "text/css; charset=utf-8" if path.suffix == ".css" else "text/javascript; charset=utf-8"
+    content_type = {
+        ".css":"text/css; charset=utf-8",
+        ".js":"text/javascript; charset=utf-8",
+        ".png":"image/png",
+    }[path.suffix]
     return content_type, candidate.read_bytes()

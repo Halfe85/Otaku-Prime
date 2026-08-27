@@ -33,7 +33,7 @@ MAX_FORM_BYTES = 16 * 1024
 
 
 def create_server(host: str, port: int, user_store, app_log_store=None,
-                  on_watchlist_changed=None) -> ThreadingHTTPServer:
+                  on_watchlist_changed=None,on_watchlist_state_changed=None) -> ThreadingHTTPServer:
     auth = AuthService(user_store)
     authenticator_api = AuthenticatorAPI()
     watchlist_accounts = WatchlistAccountStore(user_store.db_path)
@@ -409,6 +409,37 @@ def create_server(host: str, port: int, user_store, app_log_store=None,
 
         def do_POST(self):
             path = self.path.split("?", 1)[0]
+
+            if path.startswith("/api/watchlist/items/") and path.endswith("/progress"):
+                if not self._current_user():
+                    self._send_json(401,{"ok":False,"message":"Sign in again."}); return
+                local_id=path[len("/api/watchlist/items/"):-len("/progress")].strip("/")
+                if len(local_id)!=32 or any(char not in "0123456789abcdef" for char in local_id):
+                    self._send_json(400,{"ok":False,"message":"Invalid Prime watchlist ID."}); return
+                payload=self._read_api_payload()
+                try: progress=int(payload.get("progress"))
+                except (TypeError,ValueError):
+                    self._send_json(400,{"ok":False,"message":"Progress must be a whole number."}); return
+                current=next((item for item in watchlist_items.list_all()
+                              if item["local_id"]==local_id),None)
+                if not current:
+                    self._send_json(404,{"ok":False,"message":"Watchlist item not found."}); return
+                if progress<0 or (current.get("episode_count") is not None
+                                  and progress>int(current["episode_count"])):
+                    self._send_json(400,{"ok":False,"message":"Progress is outside this item's episode range."}); return
+                if not on_watchlist_state_changed:
+                    self._send_json(503,{"ok":False,"message":"Watchlist manager is unavailable."}); return
+                try:
+                    result=on_watchlist_state_changed(
+                        local_id,progress=progress,source="web-ui")
+                except (KeyError,ValueError) as exc:
+                    self._send_json(400,{"ok":False,"message":str(exc)}); return
+                except Exception:
+                    LOGGER.exception("Watchlist progress update failed for %s",local_id)
+                    self._send_json(500,{"ok":False,"message":"Could not update progress."}); return
+                self._send_json(200,{"ok":True,"changed":bool(result.get("changed")),
+                                     "item":result["item"]})
+                return
 
             if path == "/api/auth/anilist/verify":
                 user = self._current_user()

@@ -1,58 +1,13 @@
-Otaku Prime 0.1.2 Alpha10
+Otaku Prime 0.1.2 Alpha11
 =========================
 
-- Add persistent TV-series, season, and episode catalogue tables as the watchlist-to-database boundary.
-- Generate opaque six-character hexadecimal TV-series IDs.
-- Build 12-character season IDs from the related TV-series ID plus a new six-character segment.
-- Build 18-character episode IDs from the related season ID plus a new six-character segment.
-- Enforce hierarchical ID prefixes, parent foreign keys, episode numbering, and watch-status constraints in SQLite.
-- Store AniList, MAL, Kitsu, and Simkl identities on watchlist-owned seasons.
-- Store MAL context and Simkl episode identities on episodes.
-- Preserve Alpha10 catalogue tables when the Alpha9 watchlist store initializes.
-- Add a read-only Simkl mediator diagnostic that loads Prime watchlist IDs, dispatches through Simkl/AniList/MAL/Kitsu priority paths, walks direct prequel relations, and reports proposed franchise, season, and episode placement.
-- Report exact TVDB franchise episode ranges, coordinate gaps, and unmapped source episodes instead of reporting only episode totals.
-- Add the production TV-show mediator with Simkl, AniList, MAL, and Kitsu provider paths in strict priority order.
-- Resolve each watchlist item into a franchise, season number, and exact contiguous franchise episode range before inserting catalogue records.
-- Preserve source episode numbers separately from franchise coordinates, allowing split cours such as 1-12 to map to S02E13-S02E24 and franchise continuations to start above E01.
-- Start TV-show mediation after provider-ID enrichment and leave incomplete, conflicting, or unmapped placements out of the catalogue.
-- Keep supplemental specials attached to ordinary TV entries out of the catalogue; map Season 00 content only when that movie, OVA, ONA, or special is itself a watchlist item.
-- Try every provider identity present on an item in Simkl, AniList, MAL, then Kitsu order instead of stopping after the first provider failure.
-- Persist resolved or unresolved mediator state, successful provider path, failure reason, and check time on each canonical watchlist item.
-- Log an unavailable higher-priority provider as a normal fallback when a later provider resolves the item; reserve failure reporting for items where every available path fails.
-- Move all foreign-ID-to-Simkl discovery into watchlist identity enrichment and try AniList, MAL, then Kitsu mappings there for every item.
-- Restrict the Simkl mediator to canonical Simkl IDs; AniList, MAL, and Kitsu mediator helpers no longer search Simkl under another provider's name.
-- Requeue terminal results from the older single-ID enrichment algorithm once so existing installations can discover IDs through another provider mapping.
-- Add an Alpha10 watchlist watchdog as the sole runtime owner of watchlist synchronization.
-- Perform a full provider snapshot refresh at Kodi boot and remote watchlist checks every hour while Kodi remains running.
-- Track Prime master update time/source separately from generic database row timestamps and normalize AniList, MAL, Kitsu, and Simkl provider timestamps to UTC epoch seconds.
-- Resolve provider conflicts by newest user update instead of highest progress, with deterministic provider tie-breaking only when timestamps are equal.
-- Wake the watchdog immediately when Prime-local status/progress changes and retain a one-second dirty-row fallback for missed local notifications.
-- Mirror the winning Prime master state back to connected AniList, MAL, Kitsu, and Simkl accounts through provider-specific write adapters.
-- Detect new canonical watchlist items after every remote refresh, run provider-ID enrichment, and start the mediator when enrichment completes.
-- Keep provider removal/deletion propagation conservative for now; the watchdog does not invent deletion timestamps or automatically re-add removed rows from tombstone-free data.
-- Promote the watchdog from scheduler to the single public watchlist manager for Prime and all connected providers.
-- Require program-side status/progress changes to enter through WatchlistWatchdogService.update_item() and reject direct master-state writes through the backing store.
-- Add watchdog read helpers plus subscribe/unsubscribe hooks so downstream Prime components do not need provider synchronization knowledge.
-- Emit canonical WATCHLIST_ADDED, WATCHLIST_UPDATED, and WATCHLIST_REMOVED events with source, previous state, current state, changed fields, and Prime local ID.
-- Make the event stream the handoff point for future Kodi library projection: new items proceed through identity enrichment and mediation before catalogue projection, while status/progress updates can be reflected into existing Kodi rows.
-- Remove the superseded WatchlistSyncService now that the watchdog owns boot, periodic, and immediate synchronization.
-- Remove the obsolete AniList UI compatibility shim, empty connector scaffolding, and unused Alpha preview-card template.
-- Remove unused package re-export side effects from the watchlist and endpoint package initializers.
-- Remove orphaned watchdog local-ID bookkeeping and replace the ineffective local-change flag with one real wake event.
-- Consolidate remote and local master-state writes through one watchdog-store write primitive.
-- Keep Prime as the stored authority for all local program changes while preserving the originating component, such as kodi-playback or web-ui, on emitted events.
-- Treat remote IDs as mutable mappings rather than permanent identity; Prime local IDs remain authoritative and stable.
-- Validate stored Simkl IDs against Prime title, year, media type, episode count, and known tracker IDs before using them for mediation.
-- Fall back from stale or wrong-name Simkl mappings to exact tracker-ID lookup and then title search, accepting only a clearly superior match.
-- Validate Simkl-to-TVDB franchise mappings by franchise name and corroborating IDs instead of accepting the first TVDB hit blindly.
-- Fall back to provider title lookup when a TVDB ID resolves to the wrong series, and do not persist an unvalidated TVDB mapping as truth.
-- Allow validated Simkl and TVDB series mappings, watchlist-season IDs, and episode remote IDs to refresh without changing Prime local IDs.
-- Reject ambiguous identity repairs, remote-ID collisions, and attempts to silently move an existing hierarchical Prime season to a different Prime series.
-- Add watchdog-owned release scheduling with persistent season release date plus next episode local ID, episode number, source episode number, and release date on each canonical watchlist item.
-- Derive release scheduling from the mediated Prime catalogue instead of provider IDs so Prime local identities remain stable when remote mappings change.
-- Treat date-only episode releases conservatively as released after that UTC calendar day has finished; honour exact provider timestamps when available.
-- Poll release schedules every 30 seconds and automatically advance to the following known episode when the current next episode releases.
-- Emit WATCHLIST_RELEASE_UPDATED with previous and current schedule state so downstream Kodi projection can see which episode just released and which episode is next.
-- Refresh only the affected mediated item when a release becomes due so newly published future episode dates enter the catalogue without reprocessing every series.
-- Retry busy or failed release metadata refreshes independently with backoff while still allowing local release rollover from the last known catalogue.
-- Track a catalogue content signature so same-second episode additions or release-date changes cannot be missed by SQLite timestamp granularity.
+- Redesign Watchlist Management around a compact English-title table.
+- Show only connected watchlist providers as icons in the table.
+- Reuse the AniList, MyAnimeList, Kitsu, and Simkl icon artwork from the original Otaku project.
+- Move search into the fixed top bar and make it context-aware for future multipurpose use.
+- Search English, Romaji, and native titles while displaying only the English title in the table.
+- Remove the redundant Watchlist Management heading and raw-watchlist description.
+- Simplify the watchlist modal and remove the Prime watchlist item eyebrow.
+- Present alternate titles and provider identities as vertical rows instead of cards.
+- Place provider icons beside their linked provider IDs in the modal.
+- Make progress editable from the modal and route updates through the authoritative watchlist watchdog.

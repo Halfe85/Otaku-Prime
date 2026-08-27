@@ -103,6 +103,7 @@ def main() -> None:
             user_store,
             app_logs,
             on_watchlist_changed=watchlist_watchdog.request_remote_sync,
+            on_watchlist_state_changed=watchlist_watchdog.update_item,
         )
     except OSError as exc:
         xbmc.log(
