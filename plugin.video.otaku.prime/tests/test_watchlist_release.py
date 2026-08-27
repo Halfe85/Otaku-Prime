@@ -132,12 +132,31 @@ class WatchlistReleaseTests(unittest.TestCase):
         self.assertIsNone(item["next_episode_release_date"])
         self.assertEqual(0, item["next_episode_release_epoch"])
 
-    def test_watchdog_emits_release_schedule_event(self):
+    def test_catalogue_date_change_refreshes_schedule_even_with_same_episode_count(self):
+        self.release.refresh_due(
+            now_epoch=release_epoch("2030-01-05T12:00:00Z"), force=True
+        )
+        self.catalog.add_episode(
+            self.season["local_id"], 2, source_episode_number=2,
+            simkl_id="202", release_date="2030-01-09",
+        )
+        events = self.release.refresh_due(
+            now_epoch=release_epoch("2030-01-05T12:00:00Z")
+        )
+        self.assertEqual(1, len(events))
+        item = self.store.item(self.item["local_id"])
+        self.assertEqual(2, item["next_episode_number"])
+        self.assertEqual("2030-01-09", item["next_episode_release_date"])
+
+    def test_watchdog_refreshes_due_item_then_emits_release_event(self):
         class FakeReleaseManager:
             def initialize(self):
                 pass
 
-            def refresh_due(self, force=False):
+            def due_release_ids(self, now_epoch=None):
+                return [self_item["local_id"]]
+
+            def refresh_due(self, now_epoch=None, force=False):
                 previous = dict(self_item)
                 previous["next_episode_number"] = 2
                 previous["next_episode_release_epoch"] = 1
@@ -153,14 +172,25 @@ class WatchlistReleaseTests(unittest.TestCase):
                     ],
                 }]
 
+        class FakeMediator:
+            def __init__(self):
+                self.calls = []
+
+            def refresh_item(self, local_id):
+                self.calls.append(local_id)
+                return {"refreshed": True, "busy": False}
+
         self_item = self.store.item(self.item["local_id"])
+        mediator = FakeMediator()
         watchdog = ReleaseAwareWatchlistWatchdogService(
-            [], self.store, _Writer(), release_manager=FakeReleaseManager()
+            [], self.store, _Writer(), mediator=mediator,
+            release_manager=FakeReleaseManager(),
         )
         events = []
         watchdog.subscribe(events.append)
         count = watchdog._process_release_schedules(force=True)
         self.assertEqual(1, count)
+        self.assertEqual([self.item["local_id"]], mediator.calls)
         self.assertEqual(1, len(events))
         self.assertEqual(WATCHLIST_RELEASE_UPDATED, events[0]["type"])
         self.assertEqual(self.item["local_id"], events[0]["local_id"])
