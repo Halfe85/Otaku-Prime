@@ -105,15 +105,21 @@ class TVShowMediatorService:
                      if str(row["local_id"])==str(local_id)),None)
 
     def _invalidate_release_cache(self,item):
-        """Force provider episode data to be fetched again for release rollover."""
+        """Force provider data to be fetched again for release rollover."""
         simkl_id=item.get("simkl_id") if item else None
-        if simkl_id in (None,""):
-            return
-        key=str(simkl_id)
-        for name in ("_episode_cache","_anime_cache"):
+        if simkl_id not in (None,""):
+            key=str(simkl_id)
+            for name in ("_episode_cache","_anime_cache"):
+                cache=getattr(self.client,name,None)
+                if isinstance(cache,dict):
+                    cache.pop(key,None)
+        # Search and TV cross-map results can also change between episodes.
+        # A release refresh is deliberately narrow (one Prime item), so clearing
+        # these small shared caches is preferable to preserving stale mappings.
+        for name in ("_search_cache","_tv_cache"):
             cache=getattr(self.client,name,None)
             if isinstance(cache,dict):
-                cache.pop(key,None)
+                cache.clear()
 
     def refresh_item(self,local_id):
         """Refresh one already-mediated item when its next release becomes due.
