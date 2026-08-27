@@ -42,12 +42,15 @@ class TVShowMediatorService:
                 placement=self.helpers[provider].resolve(item,self.client)
                 placement["provider_path"]=provider
                 placement["provider_attempts"]=list(attempts)
+                if attempts:
+                    LOGGER.info(
+                        "Mediator resolved Prime item %s through %s after unavailable paths: %s",
+                        item["local_id"],provider,", ".join(
+                            value["provider"] for value in attempts))
                 return placement
             except Exception as exc:
                 attempts.append({"provider":provider,"provider_id":str(provider_id),
                                  "error":str(exc)})
-                LOGGER.warning("Mediator %s path failed for Prime item %s: %s",
-                               provider,item["local_id"],exc)
         if not attempts: raise MediatorPlacementError("Prime item has no supported provider ID")
         raise MediatorPlacementError("; ".join(
             "{}: {}".format(value["provider"],value["error"]) for value in attempts))

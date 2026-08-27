@@ -43,6 +43,7 @@ class WatchlistItemStore:
           identity_resolution_status TEXT,
           identity_resolution_error TEXT,
           identity_checked_at TEXT,
+          identity_resolution_version INTEGER NOT NULL DEFAULT 2,
           mediator_status TEXT,
           mediator_provider TEXT,
           mediator_error TEXT,
@@ -78,6 +79,9 @@ class WatchlistItemStore:
                 db.execute("ALTER TABLE watchlist_items RENAME TO watchlist_items_alpha8")
             self._create_schema(db)
             columns={row[1] for row in db.execute("PRAGMA table_info(watchlist_items)")}
+            if "identity_resolution_version" not in columns:
+                db.execute("""ALTER TABLE watchlist_items ADD COLUMN
+                  identity_resolution_version INTEGER NOT NULL DEFAULT 1""")
             for column,declaration in (
                 ("identity_resolution_status","TEXT"),
                 ("identity_resolution_error","TEXT"),
@@ -89,6 +93,11 @@ class WatchlistItemStore:
             ):
                 if column not in columns:
                     db.execute("ALTER TABLE watchlist_items ADD COLUMN {} {}".format(column,declaration))
+            # Resolver v2 tries every known foreign ID. Revisit terminal
+            # results produced by the old single-ID resolver exactly once.
+            db.execute("""UPDATE watchlist_items SET identity_resolution_status='PENDING',
+              identity_resolution_error=NULL,identity_resolution_version=2
+              WHERE identity_resolution_version<2""")
             # Redirect-only Alpha9 conflicts predate exact external-ID fallback.
             # Revisit them once; confirmed exact-search conflicts use a new state.
             db.execute("""UPDATE watchlist_items SET identity_resolution_status='PENDING',
@@ -233,7 +242,7 @@ class WatchlistItemStore:
         with self._connection() as db:
             cursor=db.execute("""UPDATE watchlist_items SET identity_resolution_status=?,
               identity_resolution_error=?,identity_checked_at=CURRENT_TIMESTAMP,
-              updated_at=CURRENT_TIMESTAMP WHERE local_id=?""",
+              identity_resolution_version=2,updated_at=CURRENT_TIMESTAMP WHERE local_id=?""",
               (str(status),str(error) if error else None,local_id))
             if cursor.rowcount!=1: raise KeyError("watchlist item not found")
 

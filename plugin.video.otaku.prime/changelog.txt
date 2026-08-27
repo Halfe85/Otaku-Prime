@@ -18,3 +18,7 @@ Otaku Prime 0.1.2 Alpha10
 - Keep supplemental specials attached to ordinary TV entries out of the catalogue; map Season 00 content only when that movie, OVA, ONA, or special is itself a watchlist item.
 - Try every provider identity present on an item in Simkl, AniList, MAL, then Kitsu order instead of stopping after the first provider failure.
 - Persist resolved or unresolved mediator state, successful provider path, failure reason, and check time on each canonical watchlist item.
+- Log an unavailable higher-priority provider as a normal fallback when a later provider resolves the item; reserve failure reporting for items where every available path fails.
+- Move all foreign-ID-to-Simkl discovery into watchlist identity enrichment and try AniList, MAL, then Kitsu mappings there for every item.
+- Restrict the Simkl mediator to canonical Simkl IDs; AniList, MAL, and Kitsu mediator helpers no longer search Simkl under another provider's name.
+- Requeue terminal results from the older single-ID enrichment algorithm once so existing installations can discover IDs through another provider mapping.

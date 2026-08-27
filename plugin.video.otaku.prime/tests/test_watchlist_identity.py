@@ -79,7 +79,7 @@ class WatchlistIdentityTests(unittest.TestCase):
 
     def test_simkl_client_recovers_exact_special_after_parent_redirect(self):
         class Client(SimklIdentityClient):
-            def _simkl_id(self,ids): return "31"
+            def _simkl_ids(self,ids): return ["31"]
             def _detail(self,simkl_id):
                 if simkl_id=="31":
                     return {"ids":{"simkl":31,"anilist":3958,"mal":3958}}
@@ -88,6 +88,27 @@ class WatchlistIdentityTests(unittest.TestCase):
                 return [{"type":"anime","ids":{"simkl":32}}]
         result=Client().resolve({"anilist_id":"5978","mal_id":"5978"})
         self.assertEqual({"simkl":"32","anilist":"5978","mal":"5978","kitsu":"99"},result)
+
+    def test_watchlist_enrichment_tries_mal_when_anilist_has_no_simkl_mapping(self):
+        class Client(SimklIdentityClient):
+            def _redirect_simkl_id(self,provider,value):
+                return None if provider=="anilist" else "40634" if provider=="mal" else None
+            def _detail(self,simkl_id):
+                return {"ids":{"simkl":"40634","anilist":"8861","mal":"8861"}}
+        result=Client().resolve({"anilist_id":"8861","mal_id":"8861"})
+        self.assertEqual({"simkl":"40634","anilist":"8861","mal":"8861"},result)
+
+    def test_v1_terminal_identity_rows_are_requeued_once(self):
+        self.items.replace_provider_snapshot("anilist",[{
+          "provider_item_id":"8861","ids":{"anilist":"8861","mal":"8861"},
+          "english_name":"Yosuga no Sora","list_status":"COMPLETED","progress":12}])
+        row=self.items.list_all()[0]
+        with self.items._connection() as db:
+            db.execute("""UPDATE watchlist_items SET identity_resolution_status='NOT_FOUND',
+              identity_resolution_version=1 WHERE local_id=?""",(row["local_id"],))
+        self.items.initialize(); migrated=self.items.list_all()[0]
+        self.assertEqual("PENDING",migrated["identity_resolution_status"])
+        self.assertEqual(2,migrated["identity_resolution_version"])
 
 
 if __name__=="__main__": unittest.main()

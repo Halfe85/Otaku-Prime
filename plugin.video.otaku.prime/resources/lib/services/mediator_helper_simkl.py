@@ -74,18 +74,6 @@ class SimklMediatorClient:
             self._tv_cache[key]=payload
         return self._tv_cache[key]
 
-    def exact_simkl_id(self,provider,provider_id):
-        if provider=="simkl": return str(provider_id)
-        payload=self._get("/search/id",{provider:str(provider_id)})
-        for match in payload or []:
-            if match.get("type")!="anime": continue
-            simkl_id=(match.get("ids") or {}).get("simkl")
-            if simkl_id in (None,""): continue
-            ids=self.anime(simkl_id).get("ids") or {}
-            if str(ids.get(provider) or "")==str(provider_id): return str(simkl_id)
-        raise MediatorPlacementError(
-            "Simkl returned no exact {} identity for {}".format(provider,provider_id))
-
     def tv_franchise(self,anime_detail):
         anime_ids=anime_detail.get("ids") or {}; tvdb_id=anime_ids.get("tvdb")
         tmdb_id=anime_ids.get("tmdb")
@@ -205,7 +193,7 @@ class SimklMediatorHelper:
         value=item.get(self.provider+"_id")
         if value in (None,""):
             raise MediatorPlacementError("watchlist item has no {} ID".format(self.provider))
-        return client.exact_simkl_id(self.provider,value)
+        return str(value)
 
     def resolve(self,item,client):
         simkl_id=self.resolve_simkl_id(item,client); target=client.anime(simkl_id)

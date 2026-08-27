@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Kitsu entry path into the Simkl-backed Prime mediator."""
-from resources.lib.services.mediator_helper_simkl import SimklMediatorHelper
+"""Native Kitsu fallback path for Prime mediation."""
+from resources.lib.services.mediator_helper_simkl import MediatorPlacementError
 
 
-class KitsuMediatorHelper(SimklMediatorHelper):
+class KitsuMediatorHelper:
     provider="kitsu"
+    def resolve(self,item,client=None):
+        raise MediatorPlacementError("Native Kitsu structural mediation is not implemented yet")

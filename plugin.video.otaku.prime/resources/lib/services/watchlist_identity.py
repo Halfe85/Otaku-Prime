@@ -52,12 +52,8 @@ class SimklIdentityClient:
         except (URLError,TimeoutError,OSError,ValueError,json.JSONDecodeError) as exc:
             raise RuntimeError("Simkl identity request failed: {}".format(exc)) from exc
 
-    def _simkl_id(self,ids):
-        if ids.get("simkl"): return str(ids["simkl"])
-        source=next(((name,str(ids[name])) for name in ("anilist","mal","kitsu")
-                     if ids.get(name)),None)
-        if not source: return None
-        url=SIMKL_API_URL+"/redirect?"+self._params({"to":"simkl",source[0]:source[1]})
+    def _redirect_simkl_id(self,provider,value):
+        url=SIMKL_API_URL+"/redirect?"+self._params({"to":"simkl",provider:str(value)})
         request=Request(url,headers=self._headers())
         location=None
         try:
@@ -69,6 +65,16 @@ class SimklIdentityClient:
         if not location: return None
         match=re.search(r"/(?:anime|tv)/(\d+)(?:/|$)",urlparse(location).path)
         return match.group(1) if match else None
+
+    def _simkl_ids(self,ids):
+        """Try every known source identity during watchlist enrichment."""
+        if ids.get("simkl"): return [str(ids["simkl"])]
+        values=[]
+        for provider in ("anilist","mal","kitsu"):
+            if not ids.get(provider): continue
+            simkl_id=self._redirect_simkl_id(provider,ids[provider])
+            if simkl_id and simkl_id not in values: values.append(simkl_id)
+        return values
 
     def _detail(self,simkl_id):
         url=SIMKL_API_URL+"/anime/{}?{}".format(simkl_id,self._params())
@@ -92,10 +98,13 @@ class SimklIdentityClient:
 
     def resolve(self,item):
         known={name:item.get(name+"_id") for name in PROVIDERS}
-        simkl_id=self._simkl_id(known)
-        if not simkl_id: return {}
-        resolved=self._resolved_ids(self._detail(simkl_id),simkl_id)
-        disagreements=self._disagreements(known,resolved)
+        candidates=self._simkl_ids(known)
+        if not candidates: return {}
+        disagreements={}
+        for simkl_id in candidates:
+            resolved=self._resolved_ids(self._detail(simkl_id),simkl_id)
+            disagreements=self._disagreements(known,resolved)
+            if not disagreements: return resolved
         # Redirect deliberately falls back to parent titles for some specials,
         # OVAs and films. Search each authoritative native ID only in that case,
         # then require the detail record to agree with every ID already known.
@@ -115,7 +124,7 @@ class SimklIdentityClient:
             details=", ".join("{} {} != {}".format(name,*values)
                               for name,values in sorted(disagreements.items()))
             raise IdentityMappingConflict("Simkl resolved a different anime item: "+details)
-        return resolved
+        return {}
 
 
 class WatchlistIdentityEnrichmentService:

@@ -6,6 +6,7 @@ from resources.lib.database.catalog import CatalogStore
 from resources.lib.database.watchlist_items import WatchlistItemStore
 from resources.lib.services.mediator_tvshow import TVShowMediatorService
 from resources.lib.services.mediator_helper_simkl import _episodes
+from resources.lib.services.mediator_helper_simkl import SimklMediatorHelper
 
 
 class SegmentFactory:
@@ -88,6 +89,7 @@ class WatchlistTVShowMediatorTests(unittest.TestCase):
         self.assertEqual([self.prime_id],helpers["simkl"].calls)
         self.assertEqual([self.prime_id],helpers["anilist"].calls)
         self.assertEqual("simkl",placement["provider_attempts"][0]["provider"])
+        self.assertIn("unavailable",placement["provider_attempts"][0]["error"])
 
     def test_special_rows_are_selected_only_for_a_special_watchlist_item(self):
         rows=[
@@ -98,6 +100,13 @@ class WatchlistTVShowMediatorTests(unittest.TestCase):
         ]
         self.assertEqual(["1"],[row["simkl_id"] for row in _episodes(rows,False)])
         self.assertEqual(["1","2"],[row["simkl_id"] for row in _episodes(rows,True)])
+
+    def test_simkl_mediator_uses_only_the_canonical_simkl_id(self):
+        class Client:
+            def exact_simkl_id(self,*args):
+                raise AssertionError("mediator must not search Simkl with a foreign ID")
+        self.assertEqual("2671730",SimklMediatorHelper().resolve_simkl_id(
+            {"simkl_id":"2671730","anilist_id":"185874"},Client()))
 
 
 if __name__=="__main__": unittest.main()
