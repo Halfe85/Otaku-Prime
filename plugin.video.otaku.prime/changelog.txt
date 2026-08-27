@@ -35,3 +35,9 @@ Otaku Prime 0.1.2 Alpha10
 - Add watchdog read helpers plus subscribe/unsubscribe hooks so downstream Prime components do not need provider synchronization knowledge.
 - Emit canonical WATCHLIST_ADDED, WATCHLIST_UPDATED, and WATCHLIST_REMOVED events with source, previous state, current state, changed fields, and Prime local ID.
 - Make the event stream the handoff point for future Kodi library projection: new items proceed through identity enrichment and mediation before catalogue projection, while status/progress updates can be reflected into existing Kodi rows.
+- Remove the superseded WatchlistSyncService now that the watchdog owns boot, periodic, and immediate synchronization.
+- Remove the obsolete AniList UI compatibility shim, empty connector scaffolding, and unused Alpha preview-card template.
+- Remove unused package re-export side effects from the watchlist and endpoint package initializers.
+- Remove orphaned watchdog local-ID bookkeeping and replace the ineffective local-change flag with one real wake event.
+- Consolidate remote and local master-state writes through one watchdog-store write primitive.
+- Keep Prime as the stored authority for all local program changes while preserving the originating component, such as kodi-playback or web-ui, on emitted events.
