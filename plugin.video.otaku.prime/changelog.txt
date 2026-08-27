@@ -41,3 +41,10 @@ Otaku Prime 0.1.2 Alpha10
 - Remove orphaned watchdog local-ID bookkeeping and replace the ineffective local-change flag with one real wake event.
 - Consolidate remote and local master-state writes through one watchdog-store write primitive.
 - Keep Prime as the stored authority for all local program changes while preserving the originating component, such as kodi-playback or web-ui, on emitted events.
+- Treat remote IDs as mutable mappings rather than permanent identity; Prime local IDs remain authoritative and stable.
+- Validate stored Simkl IDs against Prime title, year, media type, episode count, and known tracker IDs before using them for mediation.
+- Fall back from stale or wrong-name Simkl mappings to exact tracker-ID lookup and then title search, accepting only a clearly superior match.
+- Validate Simkl-to-TVDB franchise mappings by franchise name and corroborating IDs instead of accepting the first TVDB hit blindly.
+- Fall back to provider title lookup when a TVDB ID resolves to the wrong series, and do not persist an unvalidated TVDB mapping as truth.
+- Allow validated Simkl and TVDB series mappings, watchlist-season IDs, and episode remote IDs to refresh without changing Prime local IDs.
+- Reject ambiguous identity repairs, remote-ID collisions, and attempts to silently move an existing hierarchical Prime season to a different Prime series.
