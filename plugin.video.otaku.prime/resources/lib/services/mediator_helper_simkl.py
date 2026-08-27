@@ -9,6 +9,15 @@ from urllib.error import HTTPError,URLError
 from urllib.parse import urlencode
 from urllib.request import Request,urlopen
 
+from resources.lib.services.remote_identity import (
+    RemoteIdentityError,
+    best_title_similarity,
+    candidate_is_confident,
+    choose_candidate,
+    item_titles,
+    payload_titles,
+    score_candidate,
+)
 from resources.lib.watchlist.simkl import PACKAGED_CLIENT_ID,SIMKL_API_URL
 
 
@@ -26,7 +35,7 @@ class SimklMediatorClient:
         self.client_id=str(client_id or PACKAGED_CLIENT_ID).strip()
         self.timeout=int(timeout); self.request_delay=max(0,float(request_delay))
         self._open=opener or urlopen; self._last_request=0.0; self._lock=threading.Lock()
-        self._anime_cache={}; self._tv_cache={}; self._episode_cache={}
+        self._anime_cache={}; self._tv_cache={}; self._episode_cache={}; self._search_cache={}
 
     def _get(self,path,params=None):
         query={"client_id":self.client_id,"app-name":"otaku-prime","app-version":"0.1.2"}
@@ -74,43 +83,174 @@ class SimklMediatorClient:
             self._tv_cache[key]=payload
         return self._tv_cache[key]
 
-    def tv_franchise(self,anime_detail):
+    def search_id(self,provider,value):
+        key=("id",str(provider),str(value))
+        if key not in self._search_cache:
+            payload=self._get("/search/id",{str(provider):str(value)})
+            self._search_cache[key]=payload if isinstance(payload,list) else []
+        return self._search_cache[key]
+
+    def search_anime(self,query,limit=20):
+        key=("anime",str(query).casefold(),int(limit))
+        if key not in self._search_cache:
+            payload=self._get("/search/anime",{
+                "q":str(query),"extended":"full","limit":int(limit)})
+            self._search_cache[key]=payload if isinstance(payload,list) else []
+        return self._search_cache[key]
+
+    def _candidate_details(self,item,exclude=None):
+        exclude={str(value) for value in (exclude or []) if value not in (None,"")}
+        candidate_ids=[]
+        for provider in ("anilist","mal","kitsu"):
+            value=item.get(provider+"_id")
+            if value in (None,""): continue
+            for row in self.search_id(provider,value):
+                if row.get("type")!="anime": continue
+                simkl_id=(row.get("ids") or {}).get("simkl")
+                if simkl_id not in (None,"") and str(simkl_id) not in candidate_ids:
+                    candidate_ids.append(str(simkl_id))
+        for title in item_titles(item):
+            for row in self.search_anime(title):
+                if row.get("type") not in (None,"anime"): continue
+                ids=row.get("ids") or {}
+                simkl_id=ids.get("simkl") or ids.get("simkl_id")
+                if simkl_id not in (None,"") and str(simkl_id) not in candidate_ids:
+                    candidate_ids.append(str(simkl_id))
+        details=[]
+        for simkl_id in candidate_ids[:30]:
+            if simkl_id in exclude: continue
+            try: details.append(self.anime(simkl_id))
+            except MediatorPlacementError: continue
+        return details
+
+    def resolve_anime_identity(self,item,stored_simkl_id):
+        """Validate a stored Simkl ID and repair it by lookup when necessary."""
+        old_id=str(stored_simkl_id)
+        current=None; current_score=None; current_error=None
+        try:
+            current=self.anime(old_id)
+            current_score=score_candidate(item,current,ignore_provider="simkl")
+        except MediatorPlacementError as exc:
+            current_error=str(exc)
+
+        # A title mismatch is intentionally suspicious even when a foreign ID
+        # happens to agree. Search again so stale/crossed mappings can recover.
+        if current is not None and candidate_is_confident(current_score) and (
+            current_score["title_similarity"] >= 0.65 or current_score["matched_ids"] >= 2
+        ):
+            resolved_id=str((current.get("ids") or {}).get("simkl") or old_id)
+            repair=None
+            if resolved_id!=old_id:
+                repair={"provider":"simkl","old":old_id,"new":resolved_id,
+                        "reason":"Simkl detail canonicalized the stored ID"}
+            return current,repair,current_score
+
+        candidates=[]
+        if current is not None:
+            candidates.append(current)
+        candidates.extend(self._candidate_details(item))
+        try:
+            selected,score=choose_candidate(item,candidates,ignore_provider="simkl")
+        except RemoteIdentityError as exc:
+            detail="stored Simkl ID {} did not match Prime".format(old_id)
+            if current_error: detail+=" ({})".format(current_error)
+            raise MediatorPlacementError("{}; lookup failed: {}".format(detail,exc)) from exc
+        new_id=str((selected.get("ids") or {}).get("simkl") or "")
+        if not new_id:
+            raise MediatorPlacementError("Simkl identity lookup returned a candidate without a Simkl ID")
+        repair=None
+        if new_id!=old_id:
+            repair={"provider":"simkl","old":old_id,"new":new_id,
+                    "reason":"Stored Simkl ID failed Prime identity validation"}
+        return selected,repair,score
+
+    @staticmethod
+    def _franchise_titles(root_detail,anime_detail):
+        values=[]
+        for payload in (root_detail or {},anime_detail or {}):
+            values.extend(payload_titles(payload))
+        return list(dict.fromkeys(values))
+
+    @staticmethod
+    def _tv_title_ok(expected_titles,detail,row=None):
+        actual=payload_titles(detail)
+        if row: actual.extend(payload_titles(row))
+        return best_title_similarity(expected_titles,actual)>=0.62
+
+    def tv_franchise(self,anime_detail,root_detail=None):
+        """Resolve a TV franchise without blindly trusting the anime TVDB ID."""
         anime_ids=anime_detail.get("ids") or {}; tvdb_id=anime_ids.get("tvdb")
         tmdb_id=anime_ids.get("tmdb")
-        if tvdb_id in (None,""): return None
-        payload=self._get("/search/id",{"tvdb":str(tvdb_id)})
-        for row in payload or []:
-            if row.get("type")!="tv": continue
-            simkl_id=(row.get("ids") or {}).get("simkl")
-            if simkl_id not in (None,""):
-                detail=self.tv(simkl_id)
-                return {"name":detail.get("en_title") or detail.get("title") or row.get("title"),
-                        "simkl_id":str(simkl_id),"tvdb_id":str(tvdb_id),
-                        "source":"simkl_tvdb_crossmap"}
-        anime_rows=[row for row in (payload or []) if row.get("type")=="anime"
-                    and str(row.get("anime_type") or "").lower()=="tv"]
-        if anime_rows:
-            anchor=sorted(anime_rows,key=lambda row:(
-                int(row.get("year") or 9999),int((row.get("ids") or {}).get("simkl") or 0)))[0]
-            simkl_id=(anchor.get("ids") or {}).get("simkl")
-            detail=self.anime(simkl_id)
-            return {"name":detail.get("en_title") or detail.get("title") or anchor.get("title"),
-                    "simkl_id":str(simkl_id),"tvdb_id":str(tvdb_id),
-                    "source":"simkl_tvdb_anime_group"}
-        queries=[]
-        if anime_ids.get("tvdbslug"): queries.append(str(anime_ids["tvdbslug"]).replace("-"," "))
-        queries.extend(value for value in
-                       (anime_detail.get("en_title"),anime_detail.get("title")) if value)
-        for query in queries:
-            for row in self._get("/search/tv",{"q":query,"limit":50}) or []:
-                ids=row.get("ids") or {}
-                if tmdb_id in (None,"") or str(ids.get("tmdb") or "")!=str(tmdb_id): continue
-                simkl_id=ids.get("simkl_id")
+        expected_titles=self._franchise_titles(root_detail,anime_detail)
+
+        # First validate the advertised TVDB mapping. A hit whose title does not
+        # resemble Prime's franchise is rejected and triggers title lookup.
+        if tvdb_id not in (None,""):
+            payload=self.search_id("tvdb",tvdb_id)
+            for row in payload or []:
+                if row.get("type")!="tv": continue
+                simkl_id=(row.get("ids") or {}).get("simkl")
                 if simkl_id in (None,""): continue
                 detail=self.tv(simkl_id)
+                if not self._tv_title_ok(expected_titles,detail,row):
+                    continue
+                ids=detail.get("ids") or {}; row_ids=row.get("ids") or {}
                 return {"name":detail.get("en_title") or detail.get("title") or row.get("title"),
-                        "simkl_id":str(simkl_id),"tvdb_id":str(tvdb_id),
-                        "source":"simkl_tmdb_tv_match"}
+                        "simkl_id":str(simkl_id),
+                        "tvdb_id":str(ids.get("tvdb") or row_ids.get("tvdb") or tvdb_id),
+                        "source":"simkl_tvdb_crossmap_validated"}
+            anime_rows=[row for row in (payload or []) if row.get("type")=="anime"
+                        and str(row.get("anime_type") or "").lower()=="tv"]
+            valid=[]
+            for row in anime_rows:
+                simkl_id=(row.get("ids") or {}).get("simkl")
+                if simkl_id in (None,""): continue
+                detail=self.anime(simkl_id)
+                if self._tv_title_ok(expected_titles,detail,row):
+                    valid.append((row,detail))
+            if valid:
+                row,detail=sorted(valid,key=lambda value:(
+                    int(value[0].get("year") or 9999),
+                    int((value[0].get("ids") or {}).get("simkl") or 0)))[0]
+                simkl_id=(row.get("ids") or {}).get("simkl")
+                ids=detail.get("ids") or {}; row_ids=row.get("ids") or {}
+                return {"name":detail.get("en_title") or detail.get("title") or row.get("title"),
+                        "simkl_id":str(simkl_id),
+                        "tvdb_id":str(ids.get("tvdb") or row_ids.get("tvdb") or tvdb_id),
+                        "source":"simkl_tvdb_anime_group_validated"}
+
+        # The stored TVDB ID is missing or suspicious. Search by Prime/root name
+        # and prefer a corroborating TMDB ID; otherwise require a strong title.
+        queries=[]
+        root_ids=(root_detail or {}).get("ids") or {}
+        if root_ids.get("tvdbslug"): queries.append(str(root_ids["tvdbslug"]).replace("-"," "))
+        if anime_ids.get("tvdbslug"): queries.append(str(anime_ids["tvdbslug"]).replace("-"," "))
+        queries.extend(self._franchise_titles(root_detail,anime_detail))
+        seen=set(); candidates=[]
+        for query in queries:
+            if not query or query.casefold() in seen: continue
+            seen.add(query.casefold())
+            for row in self._get("/search/tv",{"q":query,"limit":50}) or []:
+                ids=row.get("ids") or {}
+                simkl_id=ids.get("simkl") or ids.get("simkl_id")
+                if simkl_id in (None,""): continue
+                detail=self.tv(simkl_id)
+                similarity=best_title_similarity(expected_titles,payload_titles(detail)+payload_titles(row))
+                tmdb_match=tmdb_id not in (None,"") and str(ids.get("tmdb") or "")==str(tmdb_id)
+                if not tmdb_match and similarity<0.82: continue
+                candidates.append((1 if tmdb_match else 0,similarity,row,detail))
+        if candidates:
+            candidates.sort(key=lambda value:(value[0],value[1]),reverse=True)
+            best=candidates[0]
+            if len(candidates)>1 and best[0]==candidates[1][0] and best[1]-candidates[1][1]<0.05:
+                return None
+            _,_,row,detail=best; ids=detail.get("ids") or {}; row_ids=row.get("ids") or {}
+            simkl_id=ids.get("simkl") or row_ids.get("simkl") or row_ids.get("simkl_id")
+            resolved_tvdb=ids.get("tvdb") or row_ids.get("tvdb")
+            return {"name":detail.get("en_title") or detail.get("title") or row.get("title"),
+                    "simkl_id":str(simkl_id),
+                    "tvdb_id":str(resolved_tvdb) if resolved_tvdb not in (None,"") else None,
+                    "source":"simkl_franchise_lookup_repaired"}
         return None
 
 
@@ -139,9 +279,12 @@ def _find_root(client,target):
             candidate_id=(relation.get("ids") or {}).get("simkl")
             if relation_type!="prequel" or candidate_id in (None,"") or str(candidate_id) in seen: continue
             detail=client.anime(candidate_id)
-            if franchise_tvdb and str((detail.get("ids") or {}).get("tvdb") or "")!=franchise_tvdb:
-                continue
-            value=dict(relation); value["_detail"]=detail; candidates.append(value)
+            # TVDB is useful corroboration, but it is no longer an absolute
+            # franchise boundary because remote mappings can be stale.
+            if franchise_tvdb and str((detail.get("ids") or {}).get("tvdb") or "")==franchise_tvdb:
+                value=dict(relation); value["_detail"]=detail; candidates.append(value); continue
+            if best_title_similarity(payload_titles(current),payload_titles(detail))>=0.30:
+                value=dict(relation); value["_detail"]=detail; candidates.append(value)
         if not candidates: break
         relation=sorted(candidates,key=lambda row:(
             0 if _direct(row.get("is_direct")) else 1,
@@ -196,13 +339,16 @@ class SimklMediatorHelper:
         return str(value)
 
     def resolve(self,item,client):
-        simkl_id=self.resolve_simkl_id(item,client); target=client.anime(simkl_id)
+        stored_id=self.resolve_simkl_id(item,client)
+        target,identity_repair,identity_score=client.resolve_anime_identity(item,stored_id)
+        simkl_id=str((target.get("ids") or {}).get("simkl") or stored_id)
         root,path=_find_root(client,target)
-        franchise=client.tv_franchise(target) or {
+        franchise=client.tv_franchise(target,root_detail=root) or {
             "name":root.get("en_title") or root.get("title"),
             "simkl_id":str((root.get("ids") or {}).get("simkl")),
-            "tvdb_id":str((root.get("ids") or {}).get("tvdb") or "") or None,
-            "source":"relation_fallback"}
+            # An unvalidated TVDB mapping must not be persisted as truth.
+            "tvdb_id":None,
+            "source":"relation_fallback_unmapped"}
         season_number,number_source=_season_number(target,path)
         target_type=str(target.get("anime_type") or "").lower()
         episodes=_episodes(client.episodes(simkl_id),target_type in SPECIAL_MEDIA_TYPES)
@@ -218,7 +364,8 @@ class SimklMediatorHelper:
         numbers=sorted(row["episode_number"] for row in episodes)
         expected=list(range(numbers[0],numbers[-1]+1))
         if numbers!=expected: raise MediatorPlacementError("Franchise episode coordinates contain gaps")
-        return {"provider_path":self.provider,"provider_id":str(item[self.provider+"_id"]),
+        return {"provider_path":self.provider,"provider_id":simkl_id,
+                "identity_repair":identity_repair,"identity_score":identity_score,
                 "tv_show":franchise,
                 "season":{"number":season_number,"number_source":number_source,
                           "name":target.get("en_title") or target.get("title"),
