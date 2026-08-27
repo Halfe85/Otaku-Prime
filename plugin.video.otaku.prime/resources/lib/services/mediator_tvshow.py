@@ -97,6 +97,43 @@ class TVShowMediatorService:
             self.watchlist_store.record_mediator_resolution(item["local_id"],"RESOLVED",provider=provider)
         return placement
 
+    def _item(self,local_id):
+        getter=getattr(self.watchlist_store,"item",None)
+        if getter:
+            return getter(str(local_id))
+        return next((row for row in self.watchlist_store.list_all()
+                     if str(row["local_id"])==str(local_id)),None)
+
+    def _invalidate_release_cache(self,item):
+        """Force provider episode data to be fetched again for release rollover."""
+        simkl_id=item.get("simkl_id") if item else None
+        if simkl_id in (None,""):
+            return
+        key=str(simkl_id)
+        for name in ("_episode_cache","_anime_cache"):
+            cache=getattr(self.client,name,None)
+            if isinstance(cache,dict):
+                cache.pop(key,None)
+
+    def refresh_item(self,local_id):
+        """Refresh one already-mediated item when its next release becomes due.
+
+        The watchdog uses this before rolling to the next episode so newly
+        published future dates can enter Prime's catalogue without reprocessing
+        every series.
+        """
+        if not self._lock.acquire(blocking=False):
+            return {"refreshed":False,"busy":True}
+        try:
+            item=self._item(local_id)
+            if not item:
+                raise KeyError("Prime watchlist item not found")
+            self._invalidate_release_cache(item)
+            placement=self.process_item(item)
+            return {"refreshed":True,"busy":False,"placement":placement}
+        finally:
+            self._lock.release()
+
     def run_once(self):
         if not self._lock.acquire(blocking=False): return {"scheduled":False,"busy":True}
         placed=existing=failed=0
