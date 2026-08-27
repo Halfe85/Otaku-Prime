@@ -24,6 +24,7 @@ class ReleaseAwareWatchlistWatchdogService(WatchlistWatchdogService):
         self.release_manager.initialize()
         self.release_poll_seconds = max(1.0, float(release_poll_seconds))
         self._last_release_monotonic = 0.0
+        self._release_refresh_retry = {}
 
     def identity_complete(self):
         result = super().identity_complete()
@@ -38,21 +39,32 @@ class ReleaseAwareWatchlistWatchdogService(WatchlistWatchdogService):
         refresher = getattr(self.mediator, "refresh_item", None) if self.mediator else None
         if not due_getter or not refresher:
             return 0
+        candidates = set(due_getter(now_epoch=now_epoch))
+        candidates.update(
+            local_id for local_id, retry_at in self._release_refresh_retry.items()
+            if int(retry_at) <= int(now_epoch)
+        )
         refreshed = 0
-        for local_id in due_getter(now_epoch=now_epoch):
+        for local_id in sorted(candidates):
             try:
                 result = refresher(local_id) or {}
                 if result.get("busy"):
+                    self._release_refresh_retry[local_id] = int(now_epoch) + 30
                     LOGGER.info(
-                        "Mediator busy while refreshing released Prime item %s; using stored schedule",
+                        "Mediator busy while refreshing released Prime item %s; retrying",
                         local_id,
                     )
                     continue
                 if result.get("refreshed"):
                     refreshed += 1
+                    self._release_refresh_retry.pop(local_id, None)
+                else:
+                    self._release_refresh_retry[local_id] = int(now_epoch) + 60
             except Exception as exc:
                 # Release rollover must still work from the last known catalogue
-                # when a provider is temporarily unavailable.
+                # when a provider is temporarily unavailable. The remote refresh
+                # is retried independently even after the local schedule advances.
+                self._release_refresh_retry[local_id] = int(now_epoch) + 60
                 LOGGER.exception(
                     "Mediator release refresh failed for Prime item %s", local_id
                 )
