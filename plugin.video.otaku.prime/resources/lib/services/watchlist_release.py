@@ -12,6 +12,7 @@ Prime's mediated catalogue, so provider IDs are never used as local keys here.
 from __future__ import annotations
 
 import datetime
+import hashlib
 import re
 import time
 
@@ -91,6 +92,7 @@ class WatchlistReleaseManager:
                 ("release_schedule_source", "TEXT"),
                 ("release_schedule_checked_at", "TEXT"),
                 ("release_catalog_updated_at", "TEXT"),
+                ("release_catalog_signature", "TEXT"),
             ):
                 if column not in columns:
                     db.execute(
@@ -133,6 +135,25 @@ class WatchlistReleaseManager:
             values.append(str(season["updated_at"]))
         values.extend(str(row["updated_at"]) for row in episodes if row["updated_at"])
         return max(values) if values else None
+
+    @staticmethod
+    def _catalog_signature(season, episodes):
+        if not season:
+            return None
+        parts = [
+            str(season["local_id"]),
+            str(season["release_date"] or ""),
+            str(season["updated_at"] or ""),
+        ]
+        for row in episodes:
+            parts.extend((
+                str(row["local_id"]),
+                str(row["episode_number"]),
+                str(row["source_episode_number"]),
+                str(row["release_date"] or ""),
+                str(row["updated_at"] or ""),
+            ))
+        return hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()
 
     @staticmethod
     def _schedule(item, season, episodes, now_epoch):
@@ -182,6 +203,9 @@ class WatchlistReleaseManager:
             "release_catalog_updated_at": WatchlistReleaseManager._catalog_updated_at(
                 season, episodes
             ),
+            "release_catalog_signature": WatchlistReleaseManager._catalog_signature(
+                season, episodes
+            ),
         }
 
     @staticmethod
@@ -199,8 +223,8 @@ class WatchlistReleaseManager:
               season_release_date=?,season_release_epoch=?,next_episode_local_id=?,
               next_episode_number=?,next_source_episode_number=?,next_episode_release_date=?,
               next_episode_release_epoch=?,release_schedule_source=?,
-              release_schedule_checked_at=CURRENT_TIMESTAMP,release_catalog_updated_at=?
-              WHERE local_id=?""",
+              release_schedule_checked_at=CURRENT_TIMESTAMP,release_catalog_updated_at=?,
+              release_catalog_signature=? WHERE local_id=?""",
             (
                 schedule["season_release_date"],
                 schedule["season_release_epoch"],
@@ -211,6 +235,7 @@ class WatchlistReleaseManager:
                 schedule["next_episode_release_epoch"],
                 schedule["release_schedule_source"],
                 schedule["release_catalog_updated_at"],
+                schedule["release_catalog_signature"],
                 item["local_id"],
             ),
         )
@@ -237,11 +262,11 @@ class WatchlistReleaseManager:
             rows = [dict(row) for row in db.execute("SELECT * FROM watchlist_items")]
             for item in rows:
                 season, episodes = self._catalog_rows(db, item["local_id"])
-                catalog_updated = self._catalog_updated_at(season, episodes)
+                catalog_signature = self._catalog_signature(season, episodes)
                 due = bool(force or not item.get("release_schedule_checked_at"))
                 if int(item.get("next_episode_release_epoch") or 0) > 0:
                     due = due or int(item["next_episode_release_epoch"]) <= now_epoch
-                due = due or catalog_updated != item.get("release_catalog_updated_at")
+                due = due or catalog_signature != item.get("release_catalog_signature")
                 if not due:
                     continue
                 schedule = self._schedule(item, season, episodes, now_epoch)
