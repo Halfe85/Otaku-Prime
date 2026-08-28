@@ -1,0 +1,96 @@
+<section class="library-shell" aria-labelledby="library-heading">
+  <header class="library-heading-row">
+    <div>
+      <h2 id="library-heading">Library</h2>
+      <p>Live view of series, seasons, and episodes resolved by the mediator.</p>
+    </div>
+    <div class="library-live-state" aria-live="polite">
+      <span class="library-live-dot" aria-hidden="true"></span>
+      <span id="library-count">Loading library…</span>
+    </div>
+  </header>
+
+  <p class="notice" id="library-message" hidden></p>
+  <div class="library-grid" id="library-grid" aria-live="polite">
+    <div class="library-empty">Loading mediated catalogue…</div>
+  </div>
+</section>
+
+<div class="library-series-modal" id="library-series-modal" hidden>
+  <div class="library-modal-backdrop" data-library-series-close></div>
+  <section class="library-series-card" role="dialog" aria-modal="true" aria-labelledby="library-series-title">
+    <header class="library-modal-header">
+      <div>
+        <span class="library-modal-kicker">Prime library</span>
+        <h2 id="library-series-title">Series</h2>
+        <p id="library-series-subtitle">—</p>
+      </div>
+      <button class="library-modal-close" type="button" data-library-series-close aria-label="Close series">&times;</button>
+    </header>
+
+    <div class="library-modal-body">
+      <section class="library-facts" aria-label="Series facts">
+        <div><span>English title</span><strong id="library-series-english">—</strong></div>
+        <div><span>Published</span><strong id="library-series-year">—</strong></div>
+        <div><span>Runtime</span><strong id="library-series-runtime">—</strong></div>
+        <div><span>Airing</span><strong id="library-series-airing">—</strong></div>
+      </section>
+
+      <section class="library-section">
+        <h3>Series trivia</h3>
+        <p class="library-overview" id="library-series-overview">Metadata has not been resolved yet.</p>
+      </section>
+
+      <section class="library-section">
+        <div class="library-section-heading">
+          <h3>Actors</h3>
+          <span id="library-cast-count" class="library-section-note"></span>
+        </div>
+        <div class="library-cast" id="library-series-cast">
+          <p class="library-muted">No cast metadata resolved yet.</p>
+        </div>
+      </section>
+
+      <section class="library-section">
+        <div class="library-section-heading">
+          <h3>Seasons &amp; episodes</h3>
+          <span id="library-season-count" class="library-section-note"></span>
+        </div>
+        <div class="library-seasons" id="library-series-seasons"></div>
+      </section>
+    </div>
+
+    <footer class="library-modal-footer">
+      <span class="library-local-id" id="library-series-local-id"></span>
+      <button class="button secondary" type="button" data-library-series-close>Close</button>
+    </footer>
+  </section>
+</div>
+
+<div class="library-episode-modal" id="library-episode-modal" hidden>
+  <div class="library-episode-backdrop" data-library-episode-close></div>
+  <section class="library-episode-card" role="dialog" aria-modal="true" aria-labelledby="library-episode-title">
+    <header class="library-modal-header compact">
+      <div>
+        <span class="library-modal-kicker" id="library-episode-series">Series</span>
+        <h2 id="library-episode-title">Episode</h2>
+        <p id="library-episode-number">—</p>
+      </div>
+      <button class="library-modal-close" type="button" data-library-episode-close aria-label="Close episode">&times;</button>
+    </header>
+    <div class="library-episode-body">
+      <section class="library-facts episode-facts">
+        <div><span>Release</span><strong id="library-episode-release">—</strong></div>
+        <div><span>Runtime</span><strong id="library-episode-runtime">—</strong></div>
+      </section>
+      <section class="library-section episode-trivia">
+        <h3>Episode trivia</h3>
+        <p class="library-overview" id="library-episode-overview">Metadata has not been resolved yet.</p>
+      </section>
+    </div>
+    <footer class="library-modal-footer">
+      <span class="library-local-id" id="library-episode-local-id"></span>
+      <button class="button secondary" type="button" data-library-episode-close>Close episode</button>
+    </footer>
+  </section>
+</div>
