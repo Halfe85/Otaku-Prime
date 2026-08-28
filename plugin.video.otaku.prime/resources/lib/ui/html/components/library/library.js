@@ -180,23 +180,92 @@
     if (node) node.textContent = text(value, fallback);
   }
 
-  function renderCast(cast) {
-    var root = document.getElementById("library-series-cast");
-    var castCount = document.getElementById("library-cast-count");
+  function castEntries(value) {
+    return Array.isArray(value) ? value.filter(Boolean) : [];
+  }
+
+  function fallbackCastCard(entry) {
+    var card = element("div", "library-cast-card-fallback");
+    var character = entry && entry.character && entry.character.name
+      ? entry.character.name : entry && entry.character_name;
+    var person = entry && entry.person && entry.person.name
+      ? entry.person.name : entry && entry.person_name;
+    card.appendChild(element("strong", "", text(character, "Character not resolved")));
+    card.appendChild(element("span", "", text(person, "Unknown actor")));
+    return card;
+  }
+
+  function castTile(entry) {
+    if (window.PrimeUIElements && typeof window.PrimeUIElements.createCastTile === "function") {
+      return window.PrimeUIElements.createCastTile(entry);
+    }
+    return fallbackCastCard(entry);
+  }
+
+  function fillCastRoot(root, cast, emptyMessage) {
     if (!root) return;
     root.replaceChildren();
-    cast = Array.isArray(cast) ? cast : [];
-    if (castCount) castCount.textContent = cast.length ? cast.length + " credited" : "";
+    cast = castEntries(cast);
     if (!cast.length) {
-      root.appendChild(element("p", "library-muted", "No cast metadata resolved yet."));
+      root.appendChild(element("p", "library-muted", emptyMessage || "No cast metadata resolved yet."));
       return;
     }
     cast.forEach(function (entry) {
-      var card = element("div", "library-cast-card");
-      card.appendChild(element("strong", "", text(entry.person_name, "Unknown actor")));
-      card.appendChild(element("span", "", text(entry.character_name, "Character not resolved")));
-      root.appendChild(card);
+      root.appendChild(castTile(entry));
     });
+  }
+
+  function renderSeriesCast(cast) {
+    var root = document.getElementById("library-series-cast");
+    var castCount = document.getElementById("library-cast-count");
+    cast = castEntries(cast);
+    if (castCount) castCount.textContent = cast.length ? cast.length + " credited" : "";
+    fillCastRoot(root, cast);
+  }
+
+  function resolveSeasonCast(series, season) {
+    var seasonCast = castEntries(season && season.cast);
+    if (seasonCast.length) return { entries: seasonCast, label: "Season cast", inherited: false };
+
+    var seriesCast = castEntries(series && series.cast);
+    if (seriesCast.length) return { entries: seriesCast, label: "Inherited from series", inherited: true };
+
+    return { entries: [], label: "", inherited: false };
+  }
+
+  function resolveEpisodeCast(series, season, episode) {
+    var episodeCast = castEntries(episode && episode.cast);
+    if (episodeCast.length) return { entries: episodeCast, label: "Episode cast" };
+
+    var seasonCast = castEntries(season && season.cast);
+    if (seasonCast.length) return { entries: seasonCast, label: "Inherited from season" };
+
+    var seriesCast = castEntries(series && series.cast);
+    if (seriesCast.length) return { entries: seriesCast, label: "Inherited from series" };
+
+    return { entries: [], label: "" };
+  }
+
+  function seasonCastBlock(series, season) {
+    var resolved = resolveSeasonCast(series, season);
+    var block = element("section", "library-season-cast");
+    var heading = element("div", "library-section-heading compact");
+    heading.appendChild(element("h4", "", "Actors"));
+    heading.appendChild(element("span", "library-section-note", resolved.label));
+    block.appendChild(heading);
+
+    var root = element("div", "library-cast compact");
+    fillCastRoot(root, resolved.entries, "No cast metadata resolved for this season.");
+    block.appendChild(root);
+    return block;
+  }
+
+  function renderEpisodeCast(series, season, episode) {
+    var resolved = resolveEpisodeCast(series, season, episode);
+    var root = document.getElementById("library-episode-cast");
+    var scope = document.getElementById("library-episode-cast-scope");
+    if (scope) scope.textContent = resolved.label;
+    fillCastRoot(root, resolved.entries, "No cast metadata resolved for this episode.");
   }
 
   function episodeButton(series, season, episode) {
@@ -251,6 +320,7 @@
 
       var episodeRoot = element("div", "library-episodes");
       episodeRoot.hidden = !open;
+      episodeRoot.appendChild(seasonCastBlock(series, season));
       episodes.forEach(function (episode) {
         episodeRoot.appendChild(episodeButton(series, season, episode));
       });
@@ -282,7 +352,7 @@
     setSeriesText("library-series-airing", airingLabel(series));
     setSeriesText("library-series-overview", series.overview, "Metadata has not been resolved yet.");
     setSeriesText("library-series-local-id", "Prime series · " + series.local_id);
-    renderCast(series.cast);
+    renderSeriesCast(series.cast);
     renderSeasons(series);
   }
 
@@ -329,6 +399,7 @@
     setSeriesText("library-episode-runtime", runtime(episode.runtime_minutes));
     setSeriesText("library-episode-overview", episode.overview, "Metadata has not been resolved yet.");
     setSeriesText("library-episode-local-id", "Prime episode · " + episode.local_id + " · Season " + text(season.season_number, "?"));
+    renderEpisodeCast(series, season, episode);
     episodeModal.hidden = false;
   }
 
