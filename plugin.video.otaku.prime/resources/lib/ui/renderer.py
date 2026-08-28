@@ -11,6 +11,7 @@ from typing import Optional, Tuple
 
 HTML_ROOT = Path(__file__).resolve().parent / "html"
 SETTINGS_CATEGORIES = (
+    ("library", "Library", ""),
     ("accounts", "Admin Account", "Manage the local Otaku Prime administrator login."),
     ("watchlist", "Watchlist Accounts", "Connect AniList, MyAnimeList, Kitsu, and Simkl."),
     ("watchlist-management", "Watchlist Management", ""),
@@ -157,15 +158,21 @@ def _watchlist_content(accounts: dict) -> str:
     )
 
 
-def render_home(user: dict, message: str = "", active_tab: str = "watchlist", watchlist_accounts: Optional[dict] = None) -> str:
+def render_home(user: dict, message: str = "", active_tab: str = "library", watchlist_accounts: Optional[dict] = None) -> str:
     watchlist_accounts = watchlist_accounts or {}
     if active_tab not in {item[0] for item in SETTINGS_CATEGORIES}:
-        active_tab = "watchlist"
+        active_tab = "library"
     tabs, panels = [], []
     for category_id, label, description in SETTINGS_CATEGORIES:
         selected = category_id == active_tab
         tabs.append('<button class="tab{}" type="button" role="tab" aria-selected="{}" aria-controls="panel-{}" data-tab="{}">{}</button>'.format(" active" if selected else "", "true" if selected else "false", category_id, category_id, html.escape(label)))
-        if category_id == "accounts":
+        if category_id == "library":
+            panel_content = (
+                '<link rel="stylesheet" href="/ui/components/library/library.css">'
+                + _template("components/library/library.html")
+                + '<script src="/ui/components/library/library.js" defer></script>'
+            )
+        elif category_id == "accounts":
             panel_content = _accounts_content(user, message)
         elif category_id == "watchlist":
             panel_content = _watchlist_content(watchlist_accounts)
@@ -175,13 +182,13 @@ def render_home(user: dict, message: str = "", active_tab: str = "watchlist", wa
                 + _template("components/watchlist-management/watchlist-management.html")
                 + '<script src="/ui/components/watchlist-management/watchlist-management.js" defer></script>'
             )
-        panel_header = "" if category_id == "watchlist-management" else (
+        panel_header = "" if category_id in ("library","watchlist-management") else (
             '<header class="panel-header"><h2>{}</h2><p>{}</p></header>'.format(
                 html.escape(label),html.escape(description)))
         panels.append('<section class="panel" id="panel-{}" role="tabpanel"{}>{}{}</section>'.format(
             category_id,"" if selected else " hidden",panel_header,panel_content))
     content = _fill(_template("components/main-container/main-container.html"), USERNAME=html.escape(user["username"]), TABS="".join(tabs), PANELS="".join(panels))
-    return _document("Settings - Otaku Prime", content, "settings-page", "main-container")
+    return _document("Library - Otaku Prime", content, "settings-page", "main-container")
 
 
 def read_static_asset(relative_path: str) -> Optional[Tuple[str, bytes]]:
