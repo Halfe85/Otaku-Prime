@@ -28,6 +28,7 @@ class AniListMediatorClient:
         self._rate_limited = opener is None
         self._media_cache = {}
         self._schedule_cache = {}
+        self._cast_cache = {}
 
     def _query(self, query, variables):
         request = Request(
@@ -72,12 +73,12 @@ class AniListMediatorClient:
         if key not in self._media_cache:
             data = self._query(
                 """query($id:Int!){Media(id:$id,type:ANIME){
-                  id idMal format episodes status
+                  id idMal format episodes status duration description(asHtml:false)
                   title{english romaji native}
                   startDate{year month day} endDate{year month day}
                   nextAiringEpisode{episode airingAt}
                   relations{edges{relationType(version:2) node{
-                    id idMal type format episodes status
+                    id idMal type format episodes status duration description(asHtml:false)
                     title{english romaji native}
                     startDate{year month day} endDate{year month day}
                   }}}
@@ -115,6 +116,53 @@ class AniListMediatorClient:
                 raise MediatorPlacementError("AniList airing schedule exceeded its safety limit")
         self._schedule_cache[key] = rows
         return rows
+
+    def cast(self, anilist_id):
+        """Return original Japanese voice actor -> character pairs for this anime."""
+        key = str(anilist_id)
+        if key in self._cast_cache:
+            return self._cast_cache[key]
+        page = 1
+        result = []
+        seen = set()
+        while True:
+            data = self._query(
+                """query($id:Int!,$page:Int!){Media(id:$id,type:ANIME){
+                  characters(page:$page,perPage:25){
+                    pageInfo{hasNextPage}
+                    edges{
+                      node{name{full}}
+                      voiceActors(language:JAPANESE){name{full}}
+                    }
+                  }
+                }}""",
+                {"id": int(key), "page": page},
+            )
+            connection = ((data.get("Media") or {}).get("characters") or {})
+            for edge in connection.get("edges") or []:
+                character = (((edge or {}).get("node") or {}).get("name") or {}).get("full")
+                if not character:
+                    continue
+                for actor in (edge or {}).get("voiceActors") or []:
+                    person = ((actor or {}).get("name") or {}).get("full")
+                    if not person:
+                        continue
+                    marker = (str(person), str(character))
+                    if marker in seen:
+                        continue
+                    seen.add(marker)
+                    result.append({
+                        "person_name": str(person),
+                        "character_name": str(character),
+                        "sort_order": len(result),
+                    })
+            if not (connection.get("pageInfo") or {}).get("hasNextPage"):
+                break
+            page += 1
+            if page > 50:
+                raise MediatorPlacementError("AniList character list exceeded its safety limit")
+        self._cast_cache[key] = result
+        return result
 
 
 def _date_key(media):
@@ -158,12 +206,7 @@ def _prequel_ids(media):
 
 
 def _find_bottom_root(client, target):
-    """Return the terminal PREQUEL root and its exact root-to-target path.
-
-    AniList's relation chain is authoritative here. We deliberately do not
-    replace an OVA/ONA/movie root with a later TV title. If the bottom node is
-    an OVA, that OVA is the franchise source.
-    """
+    """Return the terminal PREQUEL root and its exact root-to-target path."""
     target_id = str(target["id"])
     frontier = [(target, [target], {target_id})]
     terminal_paths = []
@@ -259,6 +302,21 @@ def _release_dates(target, schedule):
     return dates
 
 
+def _year(media):
+    try:
+        return int((media.get("startDate") or {}).get("year"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _runtime(media):
+    try:
+        value = int(media.get("duration"))
+        return value if value > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
 class AniListMediatorHelper:
     provider = "anilist"
 
@@ -286,6 +344,9 @@ class AniListMediatorHelper:
                 "season_number": season_number,
                 "simkl_id": None,
                 "mal_id": None,
+                "title": None,
+                "overview": None,
+                "runtime_minutes": _runtime(target),
                 "release_date": dates.get(source_number),
             })
         root_titles = _titles(root)
@@ -303,6 +364,11 @@ class AniListMediatorHelper:
                 "anilist_id": str(root["id"]),
                 "source_format": root_format,
                 "source": "anilist_bottom_relation",
+                "publish_year": _year(root) or _year(target),
+                "overview": target.get("description") or root.get("description"),
+                "runtime_minutes": _runtime(target) or _runtime(root),
+                "air_status": target.get("status") or root.get("status"),
+                "cast": self.client.cast(value),
             },
             "season": {
                 "number": season_number,
