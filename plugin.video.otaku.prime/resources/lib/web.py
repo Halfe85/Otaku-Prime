@@ -15,6 +15,7 @@ from resources.lib.auth import AuthService
 from resources.lib.database.watchlist_accounts import WatchlistAccountStore
 from resources.lib.database.watchlist_items import WatchlistItemStore
 from resources.lib.database.app_logs import AppLogStore
+from resources.lib.database.catalog import CatalogStore
 from resources.lib.endpoints.auth_service import AuthenticatorAPI, AuthenticatorAPIError
 from resources.lib.logging_config import get_logger
 LOGGER=get_logger(__name__)
@@ -40,6 +41,8 @@ def create_server(host: str, port: int, user_store, app_log_store=None,
     watchlist_accounts.initialize()
     watchlist_items = WatchlistItemStore(user_store.db_path)
     watchlist_items.initialize()
+    catalog = CatalogStore(user_store.db_path)
+    catalog.initialize()
     app_log_store = app_log_store or AppLogStore(user_store.db_path)
     app_log_store.initialize()
     simkl_flows = {}
@@ -213,7 +216,7 @@ def create_server(host: str, port: int, user_store, app_log_store=None,
                 ),
             )
 
-        def _home_page(self, user: dict, message: str = "", active_tab: str = "watchlist") -> str:
+        def _home_page(self, user: dict, message: str = "", active_tab: str = "library") -> str:
             accounts = {
                 "anilist": watchlist_accounts.get(user["id"], "anilist"),
                 "kitsu": watchlist_accounts.get(user["id"], "kitsu"),
@@ -261,6 +264,24 @@ def create_server(host: str, port: int, user_store, app_log_store=None,
                 if not self._current_user():
                     self._send_json(401,{"ok":False,"message":"Sign in again."}); return
                 self._send_json(200,{"ok":True,"entries":watchlist_items.list_all()})
+                return
+
+            if path == "/api/library/series":
+                if not self._current_user():
+                    self._send_json(401,{"ok":False,"message":"Sign in again."}); return
+                self._send_json(200,{"ok":True,"series":catalog.library_series()})
+                return
+
+            if path.startswith("/api/library/series/"):
+                if not self._current_user():
+                    self._send_json(401,{"ok":False,"message":"Sign in again."}); return
+                local_id=path[len("/api/library/series/"):].strip("/").lower()
+                if len(local_id)!=6 or any(char not in "0123456789abcdef" for char in local_id):
+                    self._send_json(400,{"ok":False,"message":"Invalid Prime series ID."}); return
+                detail=catalog.library_series_detail(local_id)
+                if not detail:
+                    self._send_json(404,{"ok":False,"message":"Series not found."}); return
+                self._send_json(200,{"ok":True,"series":detail})
                 return
 
             if path == "/api/auth/anilist/info":
