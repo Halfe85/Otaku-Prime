@@ -15,6 +15,7 @@ Otaku Prime 0.1.2 Alpha11
 - Add authenticated read-only library APIs for the series index and complete per-series catalogue detail.
 - Extend the catalogue with publish year, series overview, runtime, airing status, cast, episode titles, episode overview, and episode runtime without changing Prime local IDs.
 - Pass through library metadata from mediator results only when a provider actually supplies it; unresolved fields remain explicitly pending.
+- Populate native AniList library metadata with description, runtime, release status, and Japanese voice actor-to-character pairs through AniList's character connection.
 - Show Running with the watchdog's next episode number and air date, and show Finished airing only when a mediator supplies a finished/ended status.
 - Add the full series modal with English title, publish year, series trivia, runtime, airing information, actors and character names, and the mediated season/episode hierarchy.
 - Add animated expandable season rows and clickable episode rows.
