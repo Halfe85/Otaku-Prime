@@ -77,8 +77,10 @@ class TVShowMediatorService:
         item=self._apply_identity_repair(item,placement)
         show=placement["tv_show"]
         series=self.catalog_store.get_or_create_series(
-            english_name=show.get("name"),root_simkl_id=show.get("simkl_id"),
-            tvdb_id=show.get("tvdb_id"))
+            english_name=show.get("name"),romaji_name=show.get("romaji_name"),
+            root_simkl_id=show.get("simkl_id"),tvdb_id=show.get("tvdb_id"),
+            root_anilist_id=show.get("anilist_id"),source_provider=provider,
+            source_media_format=show.get("source_format"))
         season_data=placement["season"]
         season=self.catalog_store.add_watchlist_season(
             series["local_id"],item,season_number=season_data["number"],
