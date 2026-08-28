@@ -52,8 +52,10 @@
 .library-season-name span,.library-season-meta { color:var(--muted); font-size:12px; }
 .library-season-chevron { color:#9d93fb; font-size:18px; transition:transform .16s ease; }
 .library-season.expanded .library-season-chevron { transform:rotate(90deg); }
-.library-episodes { border-top:1px solid var(--border); }
+.library-episodes { border-top:1px solid var(--border); transform-origin:top; }
 .library-episodes[hidden] { display:none; }
+.library-episodes:not([hidden]) { animation:library-season-slide .2s ease-out both; }
+@keyframes library-season-slide { from { opacity:0; transform:translateY(-8px) scaleY(.96); } to { opacity:1; transform:translateY(0) scaleY(1); } }
 .library-episode-row { width:100%; min-height:48px; padding:9px 14px; border:0; border-bottom:1px solid rgba(43,51,72,.58); background:transparent; color:var(--text); display:grid; grid-template-columns:58px minmax(0,1fr) 120px; gap:12px; align-items:center; text-align:left; cursor:pointer; }
 .library-episode-row:last-child { border-bottom:0; }
 .library-episode-row:hover,.library-episode-row:focus-visible { background:rgba(139,124,255,.08); outline:none; }
@@ -68,6 +70,7 @@
 .episode-facts { grid-template-columns:repeat(2,minmax(0,1fr)); }
 .episode-trivia { padding-bottom:0; }
 
+@media (prefers-reduced-motion:reduce) { .library-episodes:not([hidden]) { animation:none; } }
 @media (max-width:760px) {
   .library-heading-row { display:grid; }
   .library-live-state { justify-self:start; }
