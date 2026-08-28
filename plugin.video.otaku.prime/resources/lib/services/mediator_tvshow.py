@@ -80,7 +80,11 @@ class TVShowMediatorService:
             english_name=show.get("name"),romaji_name=show.get("romaji_name"),
             root_simkl_id=show.get("simkl_id"),tvdb_id=show.get("tvdb_id"),
             root_anilist_id=show.get("anilist_id"),source_provider=provider,
-            source_media_format=show.get("source_format"))
+            source_media_format=show.get("source_format"),publish_year=show.get("publish_year"),
+            overview=show.get("overview"),runtime_minutes=show.get("runtime_minutes"),
+            air_status=show.get("air_status"))
+        self.catalog_store.replace_series_cast(
+            series["local_id"],show.get("cast"),source_provider=provider)
         season_data=placement["season"]
         season=self.catalog_store.add_watchlist_season(
             series["local_id"],item,season_number=season_data["number"],
@@ -91,7 +95,8 @@ class TVShowMediatorService:
                 season["local_id"],episode["episode_number"],
                 source_episode_number=episode["source_episode_number"],
                 mal_id=episode.get("mal_id"),simkl_id=episode.get("simkl_id"),
-                release_date=episode.get("release_date"))
+                release_date=episode.get("release_date"),title=episode.get("title"),
+                overview=episode.get("overview"),runtime_minutes=episode.get("runtime_minutes"))
         LOGGER.info("Mediator placed Prime item %s through %s as %s S%02dE%02d-E%02d",
                     item["local_id"],provider,show.get("name"),season_data["number"],
                     season_data["first_episode"],season_data["last_episode"])
@@ -115,21 +120,13 @@ class TVShowMediatorService:
                 cache=getattr(self.client,name,None)
                 if isinstance(cache,dict):
                     cache.pop(key,None)
-        # Search and TV cross-map results can also change between episodes.
-        # A release refresh is deliberately narrow (one Prime item), so clearing
-        # these small shared caches is preferable to preserving stale mappings.
         for name in ("_search_cache","_tv_cache"):
             cache=getattr(self.client,name,None)
             if isinstance(cache,dict):
                 cache.clear()
 
     def refresh_item(self,local_id):
-        """Refresh one already-mediated item when its next release becomes due.
-
-        The watchdog uses this before rolling to the next episode so newly
-        published future dates can enter Prime's catalogue without reprocessing
-        every series.
-        """
+        """Refresh one already-mediated item when its next release becomes due."""
         if not self._lock.acquire(blocking=False):
             return {"refreshed":False,"busy":True}
         try:
