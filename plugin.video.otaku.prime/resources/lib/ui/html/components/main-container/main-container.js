@@ -1,7 +1,10 @@
 (function () {
   var tabs = Array.prototype.slice.call(document.querySelectorAll("[data-tab]"));
   var search = document.getElementById("prime-search");
-  var searchContexts = { "watchlist-management": "Search watchlist titles" };
+  var searchContexts = {
+    "library": "Search library titles",
+    "watchlist-management": "Search watchlist titles"
+  };
   function selectTab(id) {
     tabs.forEach(function (tab) {
       var selected = tab.getAttribute("data-tab") === id;
