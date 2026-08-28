@@ -51,5 +51,17 @@ class Alpha10CatalogTests(unittest.TestCase):
         self.assertEqual(1,len(self.catalog.list_series()))
         self.assertEqual(1,len(self.catalog.list_seasons(series["local_id"])))
 
+    def test_catalog_decodes_entities_on_write_and_repairs_existing_rows(self):
+        series=self.catalog.get_or_create_series(
+            "An Archdemon&#039;s Dilemma",overview="It&#039;s encoded")
+        self.assertEqual("An Archdemon's Dilemma",series["english_name"])
+        self.assertEqual("It's encoded",series["overview"])
+        with self.catalog._connection() as db:
+            db.execute("UPDATE tv_series SET english_name=? WHERE local_id=?",
+                       ("A Gatherer&#039;s Adventure",series["local_id"]))
+        CatalogStore(self.path).initialize()
+        repaired=self.catalog.list_series()[0]
+        self.assertEqual("A Gatherer's Adventure",repaired["english_name"])
+
 
 if __name__=="__main__": unittest.main()

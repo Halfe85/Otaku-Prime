@@ -7,7 +7,10 @@ from resources.lib.database.watchlist_items import WatchlistItemStore
 from resources.lib.services.mediator_helper_simkl import SimklMediatorClient
 from resources.lib.services.remote_identity import (
     RemoteIdentityAmbiguous,
+    best_title_similarity,
+    clean_remote_text,
     choose_candidate,
+    normalize_title,
     persist_watchlist_id_repair,
 )
 
@@ -47,6 +50,13 @@ def good_detail(simkl_id="20"):
 
 
 class RemoteIdentityRepairTests(unittest.TestCase):
+    def test_remote_entities_are_decoded_and_non_latin_titles_are_preserved(self):
+        self.assertEqual("A Gatherer's Adventure",clean_remote_text(
+            "A Gatherer&#039;s Adventure"))
+        japanese="不死身な僕の日常 シーズン4"
+        self.assertNotEqual("4",normalize_title(japanese))
+        self.assertLess(best_title_similarity([japanese],["4"]),0.82)
+
     def test_lookup_prefers_prime_identity_over_stored_remote_id(self):
         bad={
             "title":"Completely Different Show","year":2024,"anime_type":"tv",
@@ -123,6 +133,21 @@ class RemoteIdentityRepairTests(unittest.TestCase):
         result=Client().tv_franchise(anime,root_detail=anime)
         self.assertEqual("352839",result["tvdb_id"])
         self.assertEqual("simkl_franchise_lookup_repaired",result["source"])
+
+    def test_tvdb_crossmap_accepts_an_ona_franchise(self):
+        class Client(SimklMediatorClient):
+            def search_id(self,provider,value):
+                return [{"type":"anime","anime_type":"ona","title":"Gatherer",
+                         "ids":{"simkl":"300","tvdb":"376751"}}]
+            def anime(self,simkl_id):
+                return {"title":"Gatherer","en_title":"A Gatherer&#039;s Adventure",
+                        "anime_type":"ona","ids":{"simkl":"300","tvdb":"376751"}}
+        target={"title":"Gatherer","en_title":"A Gatherer&#039;s Adventure",
+                "anime_type":"ona","ids":{"simkl":"301","tvdb":"376751"}}
+        result=Client().tv_franchise(target,root_detail=target)
+        self.assertEqual("A Gatherer's Adventure",result["name"])
+        self.assertEqual("300",result["simkl_id"])
+        self.assertEqual("simkl_tvdb_anime_group_validated",result["source"])
 
     def test_catalog_remote_id_change_keeps_series_local_id(self):
         handle=tempfile.NamedTemporaryFile(delete=False); handle.close()

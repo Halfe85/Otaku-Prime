@@ -6,7 +6,7 @@ import secrets
 import sqlite3
 from contextlib import contextmanager
 
-from resources.lib.services.remote_identity import best_title_similarity
+from resources.lib.services.remote_identity import best_title_similarity,clean_remote_text
 
 
 HEX_SEGMENT_LENGTH=6
@@ -125,6 +125,26 @@ class CatalogStore:
               ON tv_series(tvdb_id) WHERE tvdb_id IS NOT NULL""")
             db.execute("""CREATE UNIQUE INDEX IF NOT EXISTS ux_tv_series_anilist
               ON tv_series(root_anilist_id) WHERE root_anilist_id IS NOT NULL""")
+            self._repair_encoded_text(db)
+
+    @staticmethod
+    def _repair_encoded_text(db):
+        targets={
+            "tv_series":("english_name","romaji_name","overview"),
+            "seasons":("english_name","romaji_name"),
+            "episodes":("title","overview"),
+        }
+        for table,columns in targets.items():
+            selection=",".join(columns)
+            for row in db.execute(
+                "SELECT rowid AS source_rowid,{} FROM {}".format(selection,table)
+            ).fetchall():
+                values=[clean_remote_text(row[name]) for name in columns]
+                if any(values[index]!=row[name] for index,name in enumerate(columns)):
+                    assignments=",".join("{}=?".format(name) for name in columns)
+                    db.execute(
+                        "UPDATE {} SET {},updated_at=CURRENT_TIMESTAMP WHERE rowid=?".format(
+                            table,assignments),tuple(values)+(row["source_rowid"],))
 
     @staticmethod
     def _add_columns(db,table,columns):
@@ -178,6 +198,9 @@ class CatalogStore:
         root=str(root_simkl_id) if root_simkl_id not in (None,"") else None
         tvdb=str(tvdb_id) if tvdb_id not in (None,"") else None
         anilist=str(root_anilist_id) if root_anilist_id not in (None,"") else None
+        english_name=clean_remote_text(english_name)
+        romaji_name=clean_remote_text(romaji_name)
+        overview=clean_remote_text(overview)
         year=int(publish_year) if publish_year not in (None,"") else None
         runtime=int(runtime_minutes) if runtime_minutes not in (None,"") else None
         with self._connection() as db:
@@ -228,10 +251,10 @@ class CatalogStore:
                 raise KeyError("TV series not found")
             db.execute("DELETE FROM series_cast WHERE related_series_id=?",(series_id,))
             for index,entry in enumerate(cast_entries):
-                person=str((entry or {}).get("person_name") or "").strip()
+                person=str(clean_remote_text((entry or {}).get("person_name")) or "").strip()
                 if not person:
                     continue
-                character=str((entry or {}).get("character_name") or "").strip() or None
+                character=str(clean_remote_text((entry or {}).get("character_name")) or "").strip() or None
                 db.execute("""INSERT OR REPLACE INTO series_cast(
                   related_series_id,person_name,character_name,sort_order,source_provider,updated_at)
                   VALUES(?,?,?,?,?,CURRENT_TIMESTAMP)""",
@@ -279,6 +302,8 @@ class CatalogStore:
     def add_episode(self,season_id,episode_number,source_episode_number=None,mal_id=None,simkl_id=None,
                     watch_status=False,release_date=None,title=None,overview=None,runtime_minutes=None):
         number=int(episode_number)
+        title=clean_remote_text(title)
+        overview=clean_remote_text(overview)
         incoming_mal=str(mal_id) if mal_id not in (None,"") else None
         incoming_simkl=str(simkl_id) if simkl_id not in (None,"") else None
         runtime=int(runtime_minutes) if runtime_minutes not in (None,"") else None

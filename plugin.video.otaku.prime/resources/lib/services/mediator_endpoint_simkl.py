@@ -13,6 +13,7 @@ from resources.lib.services.mediator_helper_simkl import (
     _find_root,
     _int_or_none,
     _overview,
+    _remote_title,
     _season_number,
 )
 
@@ -33,14 +34,14 @@ class SimklMediatorEndpoint:
     @staticmethod
     def _franchise(client,target,root):
         franchise=client.tv_franchise(target,root_detail=root) or {
-            "name":root.get("en_title") or root.get("title"),
+            "name":_remote_title(root),
             "simkl_id":str((root.get("ids") or {}).get("simkl")),
             "tvdb_id":None,
             "source":"relation_fallback_unmapped",
         }
         root_ids=root.get("ids") or {}
         franchise.update({
-            "romaji_name":root.get("title") or target.get("title"),
+            "romaji_name":_remote_title({"title":root.get("title") or target.get("title")}),
             "anilist_id":str(root_ids.get("anilist")) if root_ids.get("anilist") not in (None,"") else None,
             "source_format":str(root.get("anime_type") or target.get("anime_type") or "").upper() or None,
             "publish_year":_int_or_none(root.get("year") or target.get("year")),
@@ -77,7 +78,7 @@ class SimklMediatorEndpoint:
             "provider_path":"simkl","provider_id":simkl_id,"provider_reference_id":None,
             "tv_show":franchise,
             "season":{"number":season_number,"number_source":number_source,
-                      "name":target.get("en_title") or target.get("title"),
+                      "name":_remote_title(target),
                       "media_type":target_type,"first_episode":numbers[0],"last_episode":numbers[-1]},
             "episodes":episodes,
             "relation_path":[str((node.get("ids") or {}).get("simkl")) for node in path],

@@ -8,6 +8,8 @@ import sqlite3
 import uuid
 from contextlib import contextmanager
 
+from resources.lib.services.remote_identity import clean_remote_text
+
 SUPPORTED_WATCHLIST_PROVIDERS=("anilist","mal","kitsu","simkl")
 ID_COLUMNS={provider:provider+"_id" for provider in SUPPORTED_WATCHLIST_PROVIDERS}
 STATUSES=("CURRENT","COMPLETED","PAUSED","DROPPED","PLANNING")
@@ -130,6 +132,19 @@ class WatchlistItemStore:
                 "watch_status_outbox","provider_list_entries","anilist_import_staging",
                 "movies","metadata_resolver_config","watchlist_preferences",
             ): db.execute("DROP TABLE IF EXISTS "+table_name)
+            self._repair_encoded_text(db)
+
+    @staticmethod
+    def _repair_encoded_text(db):
+        columns=("english_name","romaji_name","native_name")
+        for row in db.execute(
+            "SELECT local_id,english_name,romaji_name,native_name FROM watchlist_items"
+        ).fetchall():
+            values={name:clean_remote_text(row[name]) for name in columns}
+            if any(values[name]!=row[name] for name in columns):
+                db.execute("""UPDATE watchlist_items SET english_name=?,romaji_name=?,
+                  native_name=?,updated_at=CURRENT_TIMESTAMP WHERE local_id=?""",
+                  tuple(values[name] for name in columns)+(row["local_id"],))
 
     @staticmethod
     def _clean_ids(provider,entry):
@@ -179,7 +194,10 @@ class WatchlistItemStore:
         for name,value in ids.items():
             assignments.append("{}=COALESCE({},?)".format(ID_COLUMNS[name],ID_COLUMNS[name])); values.append(value)
         for column in ("english_name","romaji_name","native_name","episode_count","media_format","release_date"):
-            assignments.append("{}=COALESCE({},?)".format(column,column)); values.append(entry.get(column))
+            value=entry.get(column)
+            if column in ("english_name","romaji_name","native_name"):
+                value=clean_remote_text(value)
+            assignments.append("{}=COALESCE({},?)".format(column,column)); values.append(value)
         assignments.extend(("is_adult=MAX(is_adult,?)","updated_at=CURRENT_TIMESTAMP")); values.append(int(bool(entry.get("is_adult"))))
         db.execute("UPDATE watchlist_items SET {} WHERE local_id=?".format(",".join(assignments)),tuple(values)+(local_id,))
         raw=entry.get("raw") if entry.get("raw") is not None else entry

@@ -14,6 +14,7 @@ from resources.lib.services.remote_identity import (
     RemoteIdentityError,
     best_title_similarity,
     candidate_is_confident,
+    clean_remote_text,
     choose_candidate,
     item_titles,
     payload_titles,
@@ -192,12 +193,12 @@ class SimklMediatorClient:
                 if not self._tv_title_ok(expected_titles,detail,row):
                     continue
                 ids=detail.get("ids") or {}; row_ids=row.get("ids") or {}
-                return {"name":detail.get("en_title") or detail.get("title") or row.get("title"),
+                return {"name":_remote_title(detail) or _remote_title(row),
                         "simkl_id":str(simkl_id),
                         "tvdb_id":str(ids.get("tvdb") or row_ids.get("tvdb") or tvdb_id),
                         "source":"simkl_tvdb_crossmap_validated"}
             anime_rows=[row for row in (payload or []) if row.get("type")=="anime"
-                        and str(row.get("anime_type") or "").lower()=="tv"]
+                        and str(row.get("anime_type") or "").lower() in ("tv","tv short","tv_short","ona")]
             valid=[]
             for row in anime_rows:
                 simkl_id=(row.get("ids") or {}).get("simkl")
@@ -211,7 +212,7 @@ class SimklMediatorClient:
                     int((value[0].get("ids") or {}).get("simkl") or 0)))[0]
                 simkl_id=(row.get("ids") or {}).get("simkl")
                 ids=detail.get("ids") or {}; row_ids=row.get("ids") or {}
-                return {"name":detail.get("en_title") or detail.get("title") or row.get("title"),
+                return {"name":_remote_title(detail) or _remote_title(row),
                         "simkl_id":str(simkl_id),
                         "tvdb_id":str(ids.get("tvdb") or row_ids.get("tvdb") or tvdb_id),
                         "source":"simkl_tvdb_anime_group_validated"}
@@ -230,8 +231,14 @@ class SimklMediatorClient:
                 simkl_id=ids.get("simkl") or ids.get("simkl_id")
                 if simkl_id in (None,""): continue
                 detail=self.tv(simkl_id)
+                detail_ids=detail.get("ids") or {}
+                candidate_tvdb=detail_ids.get("tvdb") or ids.get("tvdb")
+                candidate_tmdb=detail_ids.get("tmdb") or ids.get("tmdb")
+                tmdb_match=tmdb_id not in (None,"") and str(candidate_tmdb or "")==str(tmdb_id)
+                if (tvdb_id not in (None,"") and candidate_tvdb not in (None,"")
+                        and str(candidate_tvdb)!=str(tvdb_id) and not tmdb_match):
+                    continue
                 similarity=best_title_similarity(expected_titles,payload_titles(detail)+payload_titles(row))
-                tmdb_match=tmdb_id not in (None,"") and str(ids.get("tmdb") or "")==str(tmdb_id)
                 if not tmdb_match and similarity<0.82: continue
                 candidates.append((1 if tmdb_match else 0,similarity,row,detail))
         if candidates:
@@ -242,7 +249,7 @@ class SimklMediatorClient:
             _,_,row,detail=best; ids=detail.get("ids") or {}; row_ids=row.get("ids") or {}
             simkl_id=ids.get("simkl") or row_ids.get("simkl") or row_ids.get("simkl_id")
             resolved_tvdb=ids.get("tvdb") or row_ids.get("tvdb")
-            return {"name":detail.get("en_title") or detail.get("title") or row.get("title"),
+            return {"name":_remote_title(detail) or _remote_title(row),
                     "simkl_id":str(simkl_id),
                     "tvdb_id":str(resolved_tvdb) if resolved_tvdb not in (None,"") else None,
                     "source":"simkl_franchise_lookup_repaired"}
@@ -306,11 +313,15 @@ def _int_or_none(value):
     return int(match.group(0)) if match else None
 
 
+def _remote_title(payload):
+    return clean_remote_text((payload or {}).get("en_title") or (payload or {}).get("title"))
+
+
 def _overview(payload):
     for key in ("overview","description","synopsis","plot"):
         value=(payload or {}).get(key)
         if value:
-            return str(value).strip()
+            return clean_remote_text(value).strip()
     return None
 
 
@@ -333,8 +344,8 @@ def _cast_entries(payload):
         character=row.get("character") or row.get("role") or row.get("character_name")
         if isinstance(character,dict): character=character.get("name")
         if actor:
-            result.append({"person_name":str(actor),
-                           "character_name":str(character) if character else None,
+            result.append({"person_name":clean_remote_text(actor),
+                           "character_name":clean_remote_text(character) if character else None,
                            "sort_order":index})
     return result
 
@@ -355,7 +366,7 @@ def _episodes(rows,watchlist_item_is_special=False):
                        "season_number":int(tvdb["season"]) if tvdb.get("season") is not None else None,
                        "simkl_id":str(ids["simkl_id"]) if ids.get("simkl_id") not in (None,"") else None,
                        "mal_id":str(ids["mal"]) if ids.get("mal") not in (None,"") else None,
-                       "title":row.get("title") or row.get("name"),
+                       "title":clean_remote_text(row.get("title") or row.get("name")),
                        "overview":_overview(row),
                        "runtime_minutes":_int_or_none(row.get("runtime") or row.get("runtime_minutes")),
                        "release_date":row.get("date") or row.get("first_aired")})
@@ -376,13 +387,13 @@ class SimklMediatorHelper:
         simkl_id=str((target.get("ids") or {}).get("simkl") or stored_id)
         root,path=_find_root(client,target)
         franchise=client.tv_franchise(target,root_detail=root) or {
-            "name":root.get("en_title") or root.get("title"),
+            "name":_remote_title(root),
             "simkl_id":str((root.get("ids") or {}).get("simkl")),
             "tvdb_id":None,
             "source":"relation_fallback_unmapped"}
         root_ids=root.get("ids") or {}
         franchise.update({
-            "romaji_name":root.get("title") or target.get("title"),
+            "romaji_name":clean_remote_text(root.get("title") or target.get("title")),
             "anilist_id":str(root_ids.get("anilist")) if root_ids.get("anilist") not in (None,"") else None,
             "source_format":str(root.get("anime_type") or target.get("anime_type") or "").upper() or None,
             "publish_year":_int_or_none(root.get("year") or target.get("year")),
@@ -412,7 +423,7 @@ class SimklMediatorHelper:
                 "identity_repair":identity_repair,"identity_score":identity_score,
                 "tv_show":franchise,
                 "season":{"number":season_number,"number_source":number_source,
-                          "name":target.get("en_title") or target.get("title"),
+                          "name":_remote_title(target),
                           "media_type":target_type,
                           "first_episode":numbers[0],"last_episode":numbers[-1]},
                 "episodes":episodes,

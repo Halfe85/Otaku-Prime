@@ -7,6 +7,7 @@ mappings that must be verified before they are trusted for catalogue writes.
 from __future__ import annotations
 
 from difflib import SequenceMatcher
+from html import unescape
 import re
 import unicodedata
 
@@ -26,11 +27,29 @@ class RemoteIdentityConflict(RemoteIdentityError):
     pass
 
 
+def clean_remote_text(value):
+    """Decode provider HTML entities without interpreting the text as markup."""
+    if value in (None, ""):
+        return value
+    text = str(value)
+    # A few provider records contain nested encoding such as ``&amp;#039;``.
+    # Bound the loop so malformed input cannot keep this worker busy.
+    for _ in range(3):
+        decoded = unescape(text)
+        if decoded == text:
+            break
+        text = decoded
+    return text
+
+
 def normalize_title(value):
-    text = unicodedata.normalize("NFKD", str(value or "")).casefold()
+    text = unicodedata.normalize("NFKD", str(clean_remote_text(value) or "")).casefold()
     text = "".join(character for character in text if not unicodedata.combining(character))
     text = text.replace("&", " and ")
-    text = re.sub(r"[^a-z0-9]+", " ", text)
+    # Python's Unicode-aware ``\w`` retains Japanese, Chinese and other title
+    # scripts. The previous ASCII-only expression reduced titles such as
+    # ``不死身な僕の日常 シーズン4`` to just ``4`` and caused false matches.
+    text = re.sub(r"[^\w]+", " ", text, flags=re.UNICODE).replace("_", " ")
     return " ".join(text.split())
 
 
@@ -39,18 +58,18 @@ def payload_titles(payload):
     for key in ("en_title", "title", "name", "english_name", "romaji_name", "native_name"):
         value = (payload or {}).get(key)
         if value:
-            values.append(str(value))
+            values.append(clean_remote_text(value))
     for value in (payload or {}).get("alt_titles") or []:
         if isinstance(value, dict):
             value = value.get("name") or value.get("title")
         if value:
-            values.append(str(value))
+            values.append(clean_remote_text(value))
     return list(dict.fromkeys(values))
 
 
 def item_titles(item):
     values = [item.get("english_name"), item.get("romaji_name"), item.get("native_name")]
-    return [str(value) for value in values if value]
+    return [clean_remote_text(value) for value in values if value]
 
 
 def _year(value):

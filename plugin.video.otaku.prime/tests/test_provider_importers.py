@@ -64,5 +64,10 @@ class ProviderImporterTests(unittest.TestCase):
         self.assertEqual("31",rows[0]["provider_item_id"])
         self.assertEqual(1,rows[0]["ids"]["anilist"])
 
+    def test_simkl_titles_are_html_entity_decoded(self):
+        rows=SimklWatchlistImportService._normalize([{"status":"watching",
+          "anime":{"title":"A Gatherer&#039;s Adventure","ids":{"simkl":31}}}])
+        self.assertEqual("A Gatherer's Adventure",rows[0]["english_name"])
+
 
 if __name__=="__main__": unittest.main()

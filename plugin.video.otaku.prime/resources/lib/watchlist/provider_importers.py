@@ -10,6 +10,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from resources.lib.services.remote_identity import clean_remote_text
 from resources.lib.watchlist.mal import MAL_API_URL, MALAuthenticator
 from resources.lib.watchlist.kitsu import KitsuAuthenticator
 from resources.lib.watchlist.simkl import PACKAGED_CLIENT_ID, SIMKL_API_URL
@@ -361,8 +362,8 @@ class SimklWatchlistImportService:
             normalized.append({
                 "provider_item_id": str(ids["simkl"]),
                 "ids":{name:ids.get(name) for name in ("anilist","mal","kitsu","simkl")},
-                "english_name": show.get("title"),
-                "romaji_name": show.get("title"),
+                "english_name": clean_remote_text(show.get("title")),
+                "romaji_name": clean_remote_text(show.get("title")),
                 "native_name": None,
                 "list_status": status,
                 "provider_status": row.get("status"),
