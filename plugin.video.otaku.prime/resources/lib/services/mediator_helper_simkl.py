@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 from urllib.error import HTTPError,URLError
@@ -133,8 +134,6 @@ class SimklMediatorClient:
         except MediatorPlacementError as exc:
             current_error=str(exc)
 
-        # A title mismatch is intentionally suspicious even when a foreign ID
-        # happens to agree. Search again so stale/crossed mappings can recover.
         if current is not None and candidate_is_confident(current_score) and (
             current_score["title_similarity"] >= 0.65 or current_score["matched_ids"] >= 2
         ):
@@ -183,8 +182,6 @@ class SimklMediatorClient:
         tmdb_id=anime_ids.get("tmdb")
         expected_titles=self._franchise_titles(root_detail,anime_detail)
 
-        # First validate the advertised TVDB mapping. A hit whose title does not
-        # resemble Prime's franchise is rejected and triggers title lookup.
         if tvdb_id not in (None,""):
             payload=self.search_id("tvdb",tvdb_id)
             for row in payload or []:
@@ -219,8 +216,6 @@ class SimklMediatorClient:
                         "tvdb_id":str(ids.get("tvdb") or row_ids.get("tvdb") or tvdb_id),
                         "source":"simkl_tvdb_anime_group_validated"}
 
-        # The stored TVDB ID is missing or suspicious. Search by Prime/root name
-        # and prefer a corroborating TMDB ID; otherwise require a strong title.
         queries=[]
         root_ids=(root_detail or {}).get("ids") or {}
         if root_ids.get("tvdbslug"): queries.append(str(root_ids["tvdbslug"]).replace("-"," "))
@@ -279,8 +274,6 @@ def _find_root(client,target):
             candidate_id=(relation.get("ids") or {}).get("simkl")
             if relation_type!="prequel" or candidate_id in (None,"") or str(candidate_id) in seen: continue
             detail=client.anime(candidate_id)
-            # TVDB is useful corroboration, but it is no longer an absolute
-            # franchise boundary because remote mappings can be stale.
             if franchise_tvdb and str((detail.get("ids") or {}).get("tvdb") or "")==franchise_tvdb:
                 value=dict(relation); value["_detail"]=detail; candidates.append(value); continue
             if best_title_similarity(payload_titles(current),payload_titles(detail))>=0.30:
@@ -305,13 +298,49 @@ def _season_number(detail,path):
     return max(1,len(main_tv)),"direct_prequel_position"
 
 
-def _episodes(rows,watchlist_item_is_special=False):
-    """Return only episodes belonging to the requested watchlist item.
+def _int_or_none(value):
+    if value in (None,""): return None
+    if isinstance(value,bool): return None
+    if isinstance(value,(int,float)): return int(value)
+    match=re.search(r"\d+",str(value))
+    return int(match.group(0)) if match else None
 
-    Simkl can attach bonus specials to an ordinary TV entry. Those rows are
-    supplemental franchise data and must not enter Prime unless the canonical
-    watchlist item itself is a movie, OVA, ONA, or special.
-    """
+
+def _overview(payload):
+    for key in ("overview","description","synopsis","plot"):
+        value=(payload or {}).get(key)
+        if value:
+            return str(value).strip()
+    return None
+
+
+def _cast_entries(payload):
+    """Accept cast-shaped provider data without assuming every provider supplies it."""
+    marker=None
+    for key in ("cast","actors"):
+        if key in (payload or {}):
+            marker=(payload or {}).get(key)
+            break
+    if marker is None:
+        return None
+    if not isinstance(marker,list):
+        return []
+    result=[]
+    for index,row in enumerate(marker):
+        if not isinstance(row,dict): continue
+        actor=row.get("person") or row.get("actor") or row.get("name")
+        if isinstance(actor,dict): actor=actor.get("name") or actor.get("full_name")
+        character=row.get("character") or row.get("role") or row.get("character_name")
+        if isinstance(character,dict): character=character.get("name")
+        if actor:
+            result.append({"person_name":str(actor),
+                           "character_name":str(character) if character else None,
+                           "sort_order":index})
+    return result
+
+
+def _episodes(rows,watchlist_item_is_special=False):
+    """Return only episodes belonging to the requested watchlist item."""
     result=[]
     for index,row in enumerate(rows,1):
         row_type=str(row.get("type") or "episode").lower()
@@ -326,6 +355,9 @@ def _episodes(rows,watchlist_item_is_special=False):
                        "season_number":int(tvdb["season"]) if tvdb.get("season") is not None else None,
                        "simkl_id":str(ids["simkl_id"]) if ids.get("simkl_id") not in (None,"") else None,
                        "mal_id":str(ids["mal"]) if ids.get("mal") not in (None,"") else None,
+                       "title":row.get("title") or row.get("name"),
+                       "overview":_overview(row),
+                       "runtime_minutes":_int_or_none(row.get("runtime") or row.get("runtime_minutes")),
                        "release_date":row.get("date") or row.get("first_aired")})
     return result
 
@@ -346,9 +378,21 @@ class SimklMediatorHelper:
         franchise=client.tv_franchise(target,root_detail=root) or {
             "name":root.get("en_title") or root.get("title"),
             "simkl_id":str((root.get("ids") or {}).get("simkl")),
-            # An unvalidated TVDB mapping must not be persisted as truth.
             "tvdb_id":None,
             "source":"relation_fallback_unmapped"}
+        root_ids=root.get("ids") or {}
+        franchise.update({
+            "romaji_name":root.get("title") or target.get("title"),
+            "anilist_id":str(root_ids.get("anilist")) if root_ids.get("anilist") not in (None,"") else None,
+            "source_format":str(root.get("anime_type") or target.get("anime_type") or "").upper() or None,
+            "publish_year":_int_or_none(root.get("year") or target.get("year")),
+            "overview":_overview(root) or _overview(target),
+            "runtime_minutes":_int_or_none(target.get("runtime") or root.get("runtime") or
+                                            target.get("runtime_minutes") or root.get("runtime_minutes")),
+            "air_status":target.get("status") or target.get("release_status") or
+                         root.get("status") or root.get("release_status"),
+            "cast":_cast_entries(target) if _cast_entries(target) is not None else _cast_entries(root),
+        })
         season_number,number_source=_season_number(target,path)
         target_type=str(target.get("anime_type") or "").lower()
         episodes=_episodes(client.episodes(simkl_id),target_type in SPECIAL_MEDIA_TYPES)
