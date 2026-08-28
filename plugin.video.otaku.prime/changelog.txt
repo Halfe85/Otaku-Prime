@@ -11,3 +11,13 @@ Otaku Prime 0.1.2 Alpha11
 - Present alternate titles and provider identities as vertical rows instead of cards.
 - Place provider icons beside their linked provider IDs in the modal.
 - Make progress editable from the modal and route updates through the authoritative watchlist watchdog.
+- Add a live Library tab backed by Prime's mediated catalogue, with tiles appearing as series are resolved.
+- Add authenticated read-only library APIs for the series index and complete per-series catalogue detail.
+- Extend the catalogue with publish year, series overview, runtime, airing status, cast, episode titles, episode overview, and episode runtime without changing Prime local IDs.
+- Pass through library metadata from mediator results only when a provider actually supplies it; unresolved fields remain explicitly pending.
+- Show Running with the watchdog's next episode number and air date, and show Finished airing only when a mediator supplies a finished/ended status.
+- Add the full series modal with English title, publish year, series trivia, runtime, airing information, actors and character names, and the mediated season/episode hierarchy.
+- Add animated expandable season rows and clickable episode rows.
+- Add a second episode modal above the series modal with Series Title (year), episode title/number, release/runtime, and episode trivia.
+- Refresh library tiles and an open series modal every three seconds so mediator and release-watchdog changes appear without reloading the page.
+- Make the fixed top-bar search filter Library titles as well as Watchlist Management.
