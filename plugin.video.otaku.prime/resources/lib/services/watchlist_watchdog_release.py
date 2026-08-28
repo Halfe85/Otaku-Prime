@@ -26,6 +26,17 @@ class ReleaseAwareWatchlistWatchdogService(WatchlistWatchdogService):
         self._last_release_monotonic = 0.0
         self._release_refresh_retry = {}
 
+    def identity_progress(self,progress=None):
+        """Wake the mediator whenever another ten-percent Watchdog batch is ready."""
+        if self.mediator:
+            self.mediator.start()
+        self._last_release_monotonic = 0.0
+        self._wake.set()
+        if progress:
+            LOGGER.info("Watchdog released mediator batch: %s/%s (%s%%)",
+                        progress.get("processed"),progress.get("total"),progress.get("percent"))
+        return progress or {"scheduled":True}
+
     def identity_complete(self):
         result = super().identity_complete()
         # The mediator runs asynchronously after identity completion. Resetting
@@ -61,9 +72,6 @@ class ReleaseAwareWatchlistWatchdogService(WatchlistWatchdogService):
                 else:
                     self._release_refresh_retry[local_id] = int(now_epoch) + 60
             except Exception as exc:
-                # Release rollover must still work from the last known catalogue
-                # when a provider is temporarily unavailable. The remote refresh
-                # is retried independently even after the local schedule advances.
                 self._release_refresh_retry[local_id] = int(now_epoch) + 60
                 LOGGER.exception(
                     "Mediator release refresh failed for Prime item %s", local_id

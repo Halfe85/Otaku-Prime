@@ -1,3 +1,4 @@
+<link rel="stylesheet" href="/ui/components/watchlist-management/watchlist-library-state.css">
 <section class="watchlist-tools" aria-label="Watchlist filters">
   <label>List status<select id="watchlist-status"><option value="">All statuses</option><option value="CURRENT">Watching</option><option value="COMPLETED">Completed</option><option value="PAUSED">Paused</option><option value="DROPPED">Dropped</option><option value="PLANNING">Planning</option></select></label>
 </section>
@@ -15,9 +16,7 @@
   <div class="series-modal-backdrop" data-modal-close></div>
   <section class="series-modal-card" role="dialog" aria-modal="true" aria-labelledby="series-modal-title">
     <header class="series-modal-header">
-      <div>
-        <h2 id="series-modal-title">Series details</h2>
-      </div>
+      <div><h2 id="series-modal-title">Series details</h2></div>
       <button class="series-modal-close" type="button" data-modal-close aria-label="Close series details">&times;</button>
     </header>
 
@@ -55,3 +54,4 @@
     </footer>
   </section>
 </div>
+<script src="/ui/components/watchlist-management/watchlist-library-state.js" defer></script>

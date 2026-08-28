@@ -71,8 +71,6 @@ def main() -> None:
         logger=get_logger(source)
         getattr(logger,{"ERROR":"error","WARNING":"warning"}.get(level,"info"))(message)
 
-    # Provider importers only read provider snapshots. The watchdog owns when
-    # they run and how those snapshots are reconciled with Prime's master state.
     watchlist_importers = [
         AniListWatchlistImportService(watchlist_accounts, watchlist_items),
         MALWatchlistImportService(watchlist_accounts, watchlist_items),
@@ -94,6 +92,7 @@ def main() -> None:
             "ERROR", "watchlist-watchdog", "Watchlist watchdog failed: {}".format(exc)
         ),
     )
+    identity_enricher.on_progress = watchlist_watchdog.identity_progress
     identity_enricher.on_complete = watchlist_watchdog.identity_complete
 
     try:
@@ -124,7 +123,7 @@ def main() -> None:
     log(
         "INFO",
         "watchlist-watchdog",
-        "Alpha10 watchlist watchdog active: full boot sync, immediate local changes, hourly remote checks, release scheduling",
+        "Watchlist watchdog active: provider sync, #->Z identity work, 10% mediator batches, release scheduling",
     )
 
     xbmc.log(
