@@ -20,6 +20,7 @@
       window.dispatchEvent(new CustomEvent("prime:search", { detail: { context: id, value: "" } }));
     }
     if (history.replaceState) history.replaceState(null, "", "#" + id);
+    window.dispatchEvent(new CustomEvent("prime:tabchange", { detail: { id: id } }));
   }
   tabs.forEach(function (tab) {
     tab.addEventListener("click", function () { selectTab(tab.getAttribute("data-tab")); });

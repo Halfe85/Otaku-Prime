@@ -263,7 +263,13 @@ def create_server(host: str, port: int, user_store, app_log_store=None,
             if path == "/api/watchlist/items":
                 if not self._current_user():
                     self._send_json(401,{"ok":False,"message":"Sign in again."}); return
-                self._send_json(200,{"ok":True,"entries":watchlist_items.list_all()})
+                self._send_json(200,{"ok":True,"entries":watchlist_items.list_ui_items()})
+                return
+
+            if path == "/api/watchlist/states":
+                if not self._current_user():
+                    self._send_json(401,{"ok":False,"message":"Sign in again."}); return
+                self._send_json(200,{"ok":True,"entries":watchlist_items.list_ui_library_states()})
                 return
 
             if path == "/api/library/series":

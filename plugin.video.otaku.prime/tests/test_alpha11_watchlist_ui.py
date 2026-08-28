@@ -31,6 +31,51 @@ class Alpha11WatchlistUITests(unittest.TestCase):
             self.assertEqual("image/png",asset[0])
             self.assertTrue(asset[1].startswith(b"\x89PNG"))
 
+    def test_watchlist_state_polling_cannot_observe_its_own_dom_writes(self):
+        asset=read_static_asset(
+            "components/watchlist-management/watchlist-library-state.js")
+        self.assertIsNotNone(asset)
+        script=asset[1].decode("utf-8")
+        self.assertNotIn("MutationObserver",script)
+        self.assertIn('fetch("/api/watchlist/states"',script)
+        self.assertIn('prime:watchlist-rendered',script)
+        self.assertIn('prime:tabchange',script)
+
+    def test_hidden_tabs_do_not_run_full_pollers(self):
+        library=read_static_asset("components/library/library.js")[1].decode("utf-8")
+        watchlist=read_static_asset(
+            "components/watchlist-management/watchlist-management.js")[1].decode("utf-8")
+        self.assertIn("function active()",library)
+        self.assertIn("function active()",watchlist)
+        self.assertIn("AbortController",library)
+        self.assertIn("AbortController",watchlist)
+        self.assertIn("window.setInterval(loadTiles, 10000)",library)
+
+    def test_watchlist_ui_projection_excludes_background_bookkeeping(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database=os.path.join(directory,"users.sqlite")
+            items=WatchlistItemStore(database); items.initialize()
+            items.replace_provider_snapshot("anilist",[{
+                "provider_item_id":"1","ids":{"anilist":"1"},
+                "english_name":"Series","episode_count":12,
+                "list_status":"CURRENT","progress":1,"raw":{}}])
+            items.finalize_merge()
+            local_id=items.list_all()[0]["local_id"]
+            items.mark_mediator_ready(local_id,True)
+
+            row=items.list_ui_items()[0]
+            state=items.list_ui_library_states()[0]
+
+            self.assertEqual(local_id,row["local_id"])
+            self.assertEqual("anilist",row["connected_providers"])
+            self.assertNotIn("created_at",row)
+            self.assertNotIn("identity_checked_at",row)
+            self.assertEqual({
+                "local_id","added_to_library","mediator_ready","mediator_status",
+                "mediator_provider","simkl_reference_id","special_locator",
+            },set(state))
+            self.assertEqual(1,state["mediator_ready"])
+
     def test_progress_api_uses_the_watchlist_manager_callback(self):
         with tempfile.TemporaryDirectory() as directory:
             database=os.path.join(directory,"users.sqlite")

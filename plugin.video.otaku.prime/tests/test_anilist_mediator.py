@@ -144,6 +144,7 @@ class AniListMediatorTests(unittest.TestCase):
                 "raw": {},
             }])
             watchlist.finalize_merge()
+            watchlist.mark_mediator_ready(watchlist.list_all()[0]["local_id"],True)
             catalog = CatalogStore(handle.name, SegmentFactory())
             catalog.initialize()
             root = media(100, "Original OVA", "OVA", 2, year=1990)

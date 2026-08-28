@@ -252,6 +252,37 @@ class WatchlistItemStore:
               CASE WHEN COALESCE(item.english_name,item.romaji_name,item.native_name,'') GLOB '[A-Za-z]*' THEN 1 ELSE 0 END,
               LOWER(COALESCE(item.english_name,item.romaji_name,item.native_name,'')),item.local_id""")]
 
+    def list_ui_items(self):
+        """Return only fields used by Watchlist Management.
+
+        Background bookkeeping must not be serialized into the browser on each
+        page load. The complete rows remain available to watchdog services via
+        ``list_all``.
+        """
+        with self._connection() as db:
+            return [dict(row) for row in db.execute("""SELECT
+              item.local_id,item.anilist_id,item.mal_id,item.kitsu_id,item.simkl_id,
+              item.simkl_reference_id,item.special_locator,
+              item.english_name,item.romaji_name,item.native_name,
+              item.status,item.progress,item.episode_count,item.media_format,item.release_date,
+              item.has_conflict,item.identity_resolution_status,item.identity_resolution_error,
+              item.mediator_status,item.mediator_provider,item.mediator_error,
+              item.mediator_ready,item.added_to_library,
+              GROUP_CONCAT(entry.provider,',') AS connected_providers
+              FROM watchlist_items item
+              JOIN watchlist_provider_entries entry ON entry.local_id=item.local_id
+              GROUP BY item.local_id ORDER BY
+              CASE WHEN COALESCE(item.english_name,item.romaji_name,item.native_name,'') GLOB '[A-Za-z]*' THEN 1 ELSE 0 END,
+              LOWER(COALESCE(item.english_name,item.romaji_name,item.native_name,'')),item.local_id""")]
+
+    def list_ui_library_states(self):
+        """Return the small mediator-state delta polled by the visible UI tab."""
+        with self._connection() as db:
+            return [dict(row) for row in db.execute("""SELECT local_id,
+              added_to_library,mediator_ready,mediator_status,mediator_provider,
+              simkl_reference_id,special_locator
+              FROM watchlist_items ORDER BY local_id""")]
+
     def item(self,local_id):
         with self._connection() as db:
             row=db.execute("SELECT * FROM watchlist_items WHERE local_id=?",(str(local_id),)).fetchone()

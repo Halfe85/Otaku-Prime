@@ -16,8 +16,14 @@
     detail: null,
     busyTiles: false,
     busyDetail: false,
-    stopped: false
+    stopped: false,
+    tileSignature: ""
   };
+
+  function active() {
+    var panel = document.getElementById("panel-library");
+    return !state.stopped && !document.hidden && panel && !panel.hidden;
+  }
 
   function text(value, fallback) {
     if (value === null || value === undefined || String(value).trim() === "") {
@@ -92,13 +98,27 @@
   }
 
   async function fetchJson(url) {
-    var response = await fetch(url, { headers: { "Accept": "application/json" }, cache: "no-store" });
-    var payload = null;
-    try { payload = await response.json(); } catch (_) { payload = {}; }
-    if (!response.ok || !payload.ok) {
-      throw new Error(payload.message || "Prime library request failed.");
+    var controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    var timeout = window.setTimeout(function () { if (controller) controller.abort(); }, 8000);
+    try {
+      var response = await fetch(url, {
+        headers: { "Accept": "application/json" }, cache: "no-store",
+        signal: controller ? controller.signal : undefined
+      });
+      var payload = null;
+      try { payload = await response.json(); } catch (_) { payload = {}; }
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.message || "Prime library request failed.");
+      }
+      return payload;
+    } catch (error) {
+      if (error && error.name === "AbortError") {
+        throw new Error("Prime library request timed out.");
+      }
+      throw error;
+    } finally {
+      window.clearTimeout(timeout);
     }
-    return payload;
   }
 
   function filteredSeries() {
@@ -160,12 +180,17 @@
   }
 
   async function loadTiles() {
-    if (state.busyTiles || state.stopped || document.hidden) return;
+    if (state.busyTiles || !active()) return;
     state.busyTiles = true;
     try {
       var payload = await fetchJson("/api/library/series");
-      state.series = Array.isArray(payload.series) ? payload.series : [];
-      renderTiles();
+      var nextSeries = Array.isArray(payload.series) ? payload.series : [];
+      var signature = JSON.stringify(nextSeries);
+      if (signature !== state.tileSignature) {
+        state.series = nextSeries;
+        state.tileSignature = signature;
+        renderTiles();
+      }
       showMessage("");
       if (state.openSeriesId) await loadSeriesDetail(state.openSeriesId, true);
     } catch (error) {
@@ -426,10 +451,13 @@
   });
 
   document.addEventListener("visibilitychange", function () {
-    if (!document.hidden) loadTiles();
+    if (active()) loadTiles();
+  });
+  window.addEventListener("prime:tabchange", function (event) {
+    if (event.detail && event.detail.id === "library") loadTiles();
   });
   window.addEventListener("beforeunload", function () { state.stopped = true; });
 
   loadTiles();
-  window.setInterval(loadTiles, 3000);
+  window.setInterval(loadTiles, 10000);
 }());

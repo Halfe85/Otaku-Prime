@@ -13,6 +13,9 @@
   var returnFocus = null;
   var searchTerm = "";
   var currentEntry = null;
+  var loaded = false;
+  var loading = false;
+  var stopped = false;
 
   var providers = [
     { id: "anilist", label: "AniList", icon: "/ui/components/watchlist-management/assets/anilist.png", url: "https://anilist.co/anime/" },
@@ -120,6 +123,11 @@
     return providers.filter(function (provider) { return connected.indexOf(provider.id) !== -1; });
   }
 
+  function active() {
+    var panel = document.getElementById("panel-watchlist-management");
+    return !stopped && !document.hidden && panel && !panel.hidden;
+  }
+
   function providerIcons(entry) {
     var group = document.createElement("span");
     group.className = "provider-icons";
@@ -180,6 +188,7 @@
     pageStatus.textContent = "Page " + page + " of " + pages + " · " + visible.length + " items";
     previous.disabled = page <= 1;
     next.disabled = page >= pages;
+    window.dispatchEvent(new CustomEvent("prime:watchlist-rendered"));
   }
 
   window.addEventListener("prime:search", function (event) {
@@ -258,13 +267,43 @@
     }
   });
 
-  fetch("/api/watchlist/items", { headers: { "Accept": "application/json" } })
-    .then(function (response) { if (!response.ok) throw new Error("Could not load watchlist table"); return response.json(); })
-    .then(function (payload) { entries = payload.entries || []; render(); })
-    .catch(function (error) {
-      rows.textContent = "";
-      var row = document.createElement("tr");
-      textCell(row, error.message, "muted").colSpan = 5;
-      rows.appendChild(row);
-    });
+  function loadEntries() {
+    if (loaded || loading || !active()) return;
+    loading = true;
+    var controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    var timeout = window.setTimeout(function () { if (controller) controller.abort(); }, 8000);
+    fetch("/api/watchlist/items", {
+      headers: { "Accept": "application/json" }, cache: "no-store",
+      signal: controller ? controller.signal : undefined
+    })
+      .then(function (response) {
+        if (!response.ok) throw new Error("Could not load watchlist table");
+        return response.json();
+      })
+      .then(function (payload) {
+        entries = payload.entries || [];
+        loaded = true;
+        render();
+      })
+      .catch(function (error) {
+        rows.textContent = "";
+        var row = document.createElement("tr");
+        var message = error && error.name === "AbortError"
+          ? "Watchlist request timed out. Change tabs to retry."
+          : (error.message || "Could not load watchlist table");
+        textCell(row, message, "muted").colSpan = 5;
+        rows.appendChild(row);
+      })
+      .finally(function () {
+        window.clearTimeout(timeout);
+        loading = false;
+      });
+  }
+
+  window.addEventListener("prime:tabchange", function (event) {
+    if (event.detail && event.detail.id === "watchlist-management") loadEntries();
+  });
+  document.addEventListener("visibilitychange", function () { if (active()) loadEntries(); });
+  window.addEventListener("beforeunload", function () { stopped = true; });
+  loadEntries();
 }());
