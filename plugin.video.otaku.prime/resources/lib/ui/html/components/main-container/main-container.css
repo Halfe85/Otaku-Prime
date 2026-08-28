@@ -10,8 +10,8 @@
 .tab { padding: 11px 14px; border: 0; border-bottom: 3px solid transparent; background: transparent; color: var(--muted); cursor: pointer; white-space: nowrap; }
 .tab:hover, .tab:focus-visible { color: var(--text); }
 .tab.active { color: var(--text); border-color: var(--accent); }
-.main-content { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 30px clamp(18px, 4vw, 52px) 52px; }
-.content-inner { width: min(980px, 100%); margin: 0 auto; }
+.main-content { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0px clamp(00px, 0vw, 0px) 0px; }
+.content-inner { width: min(1980px, 100%); margin: 0 auto; }
 .panel[hidden] { display: none; }
 .panel-header { margin-bottom: 24px; }
 .panel-header h2 { margin: 0 0 5px; font-size: clamp(24px, 4vw, 34px); }
