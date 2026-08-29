@@ -41,6 +41,30 @@
 .library-section-note { color:var(--muted); font-size:12px; }
 .library-overview { margin:0; color:#d6dceb; white-space:pre-line; }
 .library-muted { color:var(--muted); margin:0; }
+.library-people-tabs { display:inline-flex; gap:4px; margin-top:12px; padding:4px; border:1px solid var(--border); border-radius:12px; background:rgba(8,11,18,.62); }
+.library-people-tab { min-height:36px; padding:7px 13px; border:0; border-radius:8px; background:transparent; color:var(--muted); font:inherit; font-size:13px; cursor:pointer; }
+.library-people-tab span { display:inline-grid; min-width:22px; min-height:22px; margin-left:5px; padding:2px 6px; place-items:center; border-radius:999px; background:rgba(255,255,255,.06); color:inherit; font-size:11px; }
+.library-people-tab:hover,.library-people-tab:focus-visible { color:var(--text); outline:none; }
+.library-people-tab.active { background:rgba(139,124,255,.18); color:#dedaff; box-shadow:inset 0 0 0 1px rgba(159,149,255,.34); }
+.library-people-panel[hidden] { display:none; }
+.library-people-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:12px; margin-top:14px; }
+.library-person-card { min-width:0; padding:14px; border:1px solid var(--border); border-radius:14px; background:linear-gradient(145deg,rgba(24,30,48,.94),rgba(13,17,28,.94)); }
+.library-person-header { display:grid; grid-template-columns:58px minmax(0,1fr); gap:12px; align-items:center; }
+.library-person-portrait { width:58px; height:72px; display:grid; place-items:center; overflow:hidden; border:1px solid #414b68; border-radius:10px; background:linear-gradient(145deg,#343b57,#1a2031); color:#b8b0ff; font-size:24px; font-weight:800; }
+.library-person-portrait.staff { border-radius:50% 50% 42% 42%; }
+.library-person-portrait img { width:100%; height:100%; object-fit:cover; }
+.library-person-heading { min-width:0; }
+.library-person-heading h4 { margin:0; overflow-wrap:anywhere; font-size:15px; line-height:1.3; }
+.library-person-heading p { margin:5px 0 0; color:var(--muted); font-size:11px; line-height:1.45; }
+.library-person-links { margin-top:13px; }
+.library-person-links-label { display:block; margin-bottom:6px; color:#8c96ac; font-size:10px; font-weight:800; letter-spacing:.07em; text-transform:uppercase; }
+.library-person-chips { display:flex; flex-wrap:wrap; gap:6px; }
+.library-person-chip { max-width:100%; padding:4px 8px; overflow:hidden; border:1px solid #39445f; border-radius:999px; color:#cbd2e3; font-size:11px; line-height:1.35; text-overflow:ellipsis; white-space:nowrap; }
+.library-person-empty { color:#727d94; font-size:11px; }
+.library-person-trivia { margin-top:13px; padding-top:10px; border-top:1px solid rgba(54,64,88,.62); }
+.library-person-trivia summary { color:#aaa2ff; font-size:12px; cursor:pointer; }
+.library-person-trivia summary:focus-visible { outline:1px solid #8f83ff; outline-offset:3px; }
+.library-person-trivia p { max-height:220px; margin:9px 0 0; overflow:auto; color:#cbd2e1; font-size:12px; line-height:1.55; white-space:pre-line; }
 .library-cast { display:grid; grid-template-columns:repeat(auto-fill,minmax(145px,1fr)); gap:12px; margin-top:12px; }
 .library-cast.compact { grid-template-columns:repeat(auto-fill,minmax(132px,1fr)); gap:10px; }
 .library-cast-card-fallback { padding:12px 13px; border:1px solid var(--border); border-radius:11px; background:rgba(15,20,32,.8); }
@@ -89,4 +113,7 @@
   .library-episode-row { grid-template-columns:48px minmax(0,1fr); }
   .library-episode-date { grid-column:2; text-align:left; }
   .library-cast,.library-cast.compact { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .library-people-grid { grid-template-columns:1fr; }
+  .library-people-tabs { display:flex; }
+  .library-people-tab { flex:1; }
 }

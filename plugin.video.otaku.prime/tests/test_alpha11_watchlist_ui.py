@@ -64,6 +64,22 @@ class Alpha11WatchlistUITests(unittest.TestCase):
         self.assertIn("AbortController",watchlist)
         self.assertIn("window.setInterval(loadTiles, 10000)",library)
 
+    def test_library_has_separate_character_and_staff_views(self):
+        page=render_home(
+            {"username":"admin","role":"admin"},active_tab="library",
+            watchlist_accounts={})
+        script=read_static_asset("components/library/library.js")[1].decode("utf-8")
+        styles=read_static_asset("components/library/library.css")[1].decode("utf-8")
+        self.assertIn('id="library-characters-panel"',page)
+        self.assertIn('id="library-staff-panel"',page)
+        self.assertIn('data-library-people-tab="characters"',page)
+        self.assertIn('data-library-people-tab="staff"',page)
+        self.assertNotIn('<h3>Actors</h3>',page)
+        self.assertIn("function characterCard(character)",script)
+        self.assertIn("function staffCard(person)",script)
+        self.assertIn("function selectPeopleTab(tab)",script)
+        self.assertIn(".library-people-grid",styles)
+
     def test_app_logs_preserve_scroll_and_offer_jump_to_newest(self):
         page=render_home(
             {"username":"admin","role":"admin"},active_tab="library",

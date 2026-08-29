@@ -46,11 +46,32 @@
 
       <section class="library-section">
         <div class="library-section-heading">
-          <h3>Actors</h3>
-          <span id="library-cast-count" class="library-section-note"></span>
+          <h3>Characters &amp; staff</h3>
+          <span id="library-people-count" class="library-section-note"></span>
         </div>
-        <div class="library-cast" id="library-series-cast">
-          <p class="library-muted">No cast metadata resolved yet.</p>
+        <div class="library-people-tabs" role="tablist" aria-label="Characters and staff">
+          <button class="library-people-tab active" type="button" role="tab"
+                  id="library-characters-tab" aria-selected="true"
+                  aria-controls="library-characters-panel" data-library-people-tab="characters">
+            Characters <span id="library-character-count">0</span>
+          </button>
+          <button class="library-people-tab" type="button" role="tab"
+                  id="library-staff-tab" aria-selected="false"
+                  aria-controls="library-staff-panel" data-library-people-tab="staff">
+            Staff <span id="library-staff-count">0</span>
+          </button>
+        </div>
+        <div class="library-people-panel" id="library-characters-panel" role="tabpanel"
+             aria-labelledby="library-characters-tab">
+          <div class="library-people-grid" id="library-series-characters">
+            <p class="library-muted">No character metadata resolved yet.</p>
+          </div>
+        </div>
+        <div class="library-people-panel" id="library-staff-panel" role="tabpanel"
+             aria-labelledby="library-staff-tab" hidden>
+          <div class="library-people-grid" id="library-series-staff">
+            <p class="library-muted">No staff metadata resolved yet.</p>
+          </div>
         </div>
       </section>
 
@@ -92,7 +113,7 @@
       </section>
       <section class="library-section library-episode-cast-section">
         <div class="library-section-heading">
-          <h3>Actors</h3>
+          <h3>Characters &amp; staff</h3>
           <span id="library-episode-cast-scope" class="library-section-note"></span>
         </div>
         <div class="library-cast compact" id="library-episode-cast">

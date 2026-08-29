@@ -41,6 +41,22 @@ class TVShowMediatorService:
     def resolve_item(self,item):
         return self.processor.resolve(item)
 
+    def _anilist_cast(self,anilist_id,item_id):
+        if anilist_id in (None,""): return None
+        endpoint=(getattr(self.processor,"endpoints",{}) or {}).get("anilist")
+        if endpoint is None:
+            endpoint=(getattr(self.processor,"helpers",{}) or {}).get("anilist")
+        client=getattr(endpoint,"client",None)
+        getter=getattr(client,"cast",None)
+        if not getter: return None
+        try:
+            return getter(str(anilist_id)) or None
+        except Exception as exc:
+            LOGGER.warning(
+                "AniList staff/character enrichment unavailable for Prime item %s: %s",
+                item_id,exc)
+            return None
+
     def _persist_placement(self,item,placement,placement_state="COMPLETE"):
         provider=placement["provider_path"]
         show=placement["tv_show"]
@@ -51,8 +67,6 @@ class TVShowMediatorService:
             source_media_format=show.get("source_format"),publish_year=show.get("publish_year"),
             overview=show.get("overview"),runtime_minutes=show.get("runtime_minutes"),
             air_status=show.get("air_status"))
-        self.catalog_store.replace_series_cast(
-            series["local_id"],show.get("cast"),source_provider=provider)
         season_data=placement["season"]
         season=self.catalog_store.add_watchlist_season(
             series["local_id"],item,season_number=season_data["number"],
@@ -64,13 +78,32 @@ class TVShowMediatorService:
             release_date=season_data.get("release_date"),
             release_status=season_data.get("release_status"),
             placement_state=placement_state)
+        series_cast=show.get("cast") or self._anilist_cast(
+            show.get("anilist_id"),item.get("local_id"))
+        season_cast=season_data.get("cast") or self._anilist_cast(
+            item.get("anilist_id"),item.get("local_id"))
+        series_credit_count=self.catalog_store.replace_media_credits(
+            series_cast,series_id=series["local_id"],
+            source_provider=show.get("cast_source") or
+                            ("anilist" if series_cast and show.get("anilist_id") else provider))
+        season_credit_count=self.catalog_store.replace_media_credits(
+            season_cast,season_id=season["local_id"],
+            source_provider=season_data.get("cast_source") or
+                            ("anilist" if season_cast and item.get("anilist_id") else provider))
+        if series_credit_count or season_credit_count:
+            LOGGER.info(
+                "Stored staff/character metadata for Prime item %s: series=%s season=%s",
+                item.get("local_id"),series_credit_count,season_credit_count)
         for episode in placement["episodes"]:
-            self.catalog_store.add_episode(
+            stored_episode=self.catalog_store.add_episode(
                 season["local_id"],episode["episode_number"],
                 source_episode_number=episode["source_episode_number"],
                 mal_id=episode.get("mal_id"),simkl_id=episode.get("simkl_id"),
                 release_date=episode.get("release_date"),title=episode.get("title"),
                 overview=episode.get("overview"),runtime_minutes=episode.get("runtime_minutes"))
+            self.catalog_store.replace_media_credits(
+                episode.get("cast"),episode_id=stored_episode["local_id"],
+                source_provider=episode.get("cast_source") or provider)
         return series,season
 
     def process_item(self,item):

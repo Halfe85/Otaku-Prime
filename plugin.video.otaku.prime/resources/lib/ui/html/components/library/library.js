@@ -17,7 +17,9 @@
     busyTiles: false,
     busyDetail: false,
     stopped: false,
-    tileSignature: ""
+    tileSignature: "",
+    detailSignature: "",
+    peopleTab: "characters"
   };
 
   function active() {
@@ -240,12 +242,166 @@
     });
   }
 
-  function renderSeriesCast(cast) {
-    var root = document.getElementById("library-series-cast");
-    var castCount = document.getElementById("library-cast-count");
-    cast = castEntries(cast);
-    if (castCount) castCount.textContent = cast.length ? cast.length + " credited" : "";
-    fillCastRoot(root, cast);
+  function peopleEntries(value) {
+    return Array.isArray(value) ? value.filter(function (entry) {
+      return entry && entry.local_id;
+    }) : [];
+  }
+
+  function portrait(entity, kind) {
+    var root = element("div", "library-person-portrait " + kind);
+    var name = text(entity && entity.name, kind === "character" ? "Character" : "Staff");
+    if (entity && entity.image_url) {
+      var image = document.createElement("img");
+      image.src = entity.image_url;
+      image.alt = name;
+      image.loading = "lazy";
+      image.addEventListener("error", function () {
+        root.classList.add("image-missing");
+        image.remove();
+        root.appendChild(element("span", "", name.slice(0, 1).toUpperCase()));
+      }, { once: true });
+      root.appendChild(image);
+    } else {
+      root.classList.add("image-missing");
+      root.appendChild(element("span", "", name.slice(0, 1).toUpperCase()));
+    }
+    return root;
+  }
+
+  function compactDate(value) {
+    if (!value) return "";
+    var raw = String(value);
+    var full = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+    if (full) return full[3] + "." + full[2] + "." + full[1];
+    var month = /^(\d{4})-(\d{2})$/.exec(raw);
+    if (month) return month[2] + "." + month[1];
+    return raw;
+  }
+
+  function relationshipLabel(value) {
+    return String(value || "voice_actor").replace(/[_-]+/g, " ").replace(/\b\w/g, function (letter) {
+      return letter.toUpperCase();
+    });
+  }
+
+  function mediaLabel(link) {
+    if (!link) return "Library";
+    if (link.scope === "episode") {
+      var season = String(link.season_number === null || link.season_number === undefined ? "?" : link.season_number).padStart(2, "0");
+      var episode = String(link.episode_number === null || link.episode_number === undefined ? "?" : link.episode_number).padStart(2, "0");
+      return "S" + season + "E" + episode + (link.title ? " · " + link.title : "");
+    }
+    if (link.scope === "season") {
+      return Number(link.season_number) === 0
+        ? "Specials"
+        : "Season " + text(link.season_number, "?");
+    }
+    return "Series";
+  }
+
+  function chipList(label, rows, valueForRow, emptyValue) {
+    var group = element("div", "library-person-links");
+    group.appendChild(element("span", "library-person-links-label", label));
+    var values = element("div", "library-person-chips");
+    if (!rows.length) {
+      values.appendChild(element("span", "library-person-empty", emptyValue));
+    } else {
+      rows.forEach(function (row) {
+        values.appendChild(element("span", "library-person-chip", valueForRow(row)));
+      });
+    }
+    group.appendChild(values);
+    return group;
+  }
+
+  function triviaBlock(value) {
+    if (!value) return null;
+    var details = element("details", "library-person-trivia");
+    details.appendChild(element("summary", "", "Biography & trivia"));
+    details.appendChild(element("p", "", value));
+    return details;
+  }
+
+  function characterCard(character) {
+    var card = element("article", "library-person-card character-card");
+    var header = element("header", "library-person-header");
+    header.appendChild(portrait(character, "character"));
+    var heading = element("div", "library-person-heading");
+    heading.appendChild(element("h4", "", text(character.name, "Unknown character")));
+    var staff = peopleEntries(character.staff);
+    var media = Array.isArray(character.media_links) ? character.media_links : [];
+    heading.appendChild(element("p", "", staff.length + (staff.length === 1 ? " staff credit" : " staff credits") + " · " + media.length + (media.length === 1 ? " placement" : " placements")));
+    header.appendChild(heading);
+    card.appendChild(header);
+    card.appendChild(chipList("Staff", staff, function (person) {
+      var language = person.language ? " · " + person.language : "";
+      return text(person.name, "Unknown staff") + " · " + relationshipLabel(person.credit_type) + language;
+    }, "No linked staff"));
+    card.appendChild(chipList("Appears in", media, mediaLabel, "No media placement"));
+    var trivia = triviaBlock(character.trivia);
+    if (trivia) card.appendChild(trivia);
+    return card;
+  }
+
+  function staffCard(person) {
+    var card = element("article", "library-person-card staff-card");
+    var header = element("header", "library-person-header");
+    header.appendChild(portrait(person, "staff"));
+    var heading = element("div", "library-person-heading");
+    heading.appendChild(element("h4", "", text(person.name, "Unknown staff")));
+    var life=[];
+    if (person.age !== null && person.age !== undefined) life.push("Age " + person.age);
+    if (person.date_of_birth) life.push("Born " + compactDate(person.date_of_birth));
+    if (person.date_of_death) life.push("Died " + compactDate(person.date_of_death));
+    heading.appendChild(element("p", "", life.length ? life.join(" · ") : "Life details unavailable"));
+    header.appendChild(heading);
+    card.appendChild(header);
+    var characters = peopleEntries(person.characters);
+    card.appendChild(chipList("Characters", characters, function (character) {
+      var language = character.language ? " · " + character.language : "";
+      return text(character.name, "Unknown character") + language;
+    }, "No linked characters"));
+    var trivia = triviaBlock(person.trivia);
+    if (trivia) card.appendChild(trivia);
+    return card;
+  }
+
+  function selectPeopleTab(tab) {
+    state.peopleTab = tab === "staff" ? "staff" : "characters";
+    document.querySelectorAll("[data-library-people-tab]").forEach(function (button) {
+      var selected = button.dataset.libraryPeopleTab === state.peopleTab;
+      button.classList.toggle("active", selected);
+      button.setAttribute("aria-selected", selected ? "true" : "false");
+    });
+    var charactersPanel = document.getElementById("library-characters-panel");
+    var staffPanel = document.getElementById("library-staff-panel");
+    if (charactersPanel) charactersPanel.hidden = state.peopleTab !== "characters";
+    if (staffPanel) staffPanel.hidden = state.peopleTab !== "staff";
+  }
+
+  function renderPeople(series) {
+    var characters = peopleEntries(series.characters);
+    var staff = peopleEntries(series.staff);
+    var characterRoot = document.getElementById("library-series-characters");
+    var staffRoot = document.getElementById("library-series-staff");
+    var characterCount = document.getElementById("library-character-count");
+    var staffCount = document.getElementById("library-staff-count");
+    var peopleCount = document.getElementById("library-people-count");
+    if (characterCount) characterCount.textContent = String(characters.length);
+    if (staffCount) staffCount.textContent = String(staff.length);
+    if (peopleCount) peopleCount.textContent = characters.length + " characters · " + staff.length + " staff";
+    if (characterRoot) {
+      characterRoot.replaceChildren();
+      if (!characters.length) characterRoot.appendChild(element("p", "library-muted", "No character metadata resolved yet."));
+      characters.forEach(function (character) { characterRoot.appendChild(characterCard(character)); });
+    }
+    if (staffRoot) {
+      staffRoot.replaceChildren();
+      if (!staff.length) staffRoot.appendChild(element("p", "library-muted", "No staff metadata resolved yet."));
+      staff.forEach(function (person) { staffRoot.appendChild(staffCard(person)); });
+    }
+    selectPeopleTab(state.peopleTab);
   }
 
   function resolveSeasonCast(series, season) {
@@ -275,7 +431,7 @@
     var resolved = resolveSeasonCast(series, season);
     var block = element("section", "library-season-cast");
     var heading = element("div", "library-section-heading compact");
-    heading.appendChild(element("h4", "", "Actors"));
+    heading.appendChild(element("h4", "", "Characters & staff"));
     heading.appendChild(element("span", "library-section-note", resolved.label));
     block.appendChild(heading);
 
@@ -377,7 +533,7 @@
     setSeriesText("library-series-airing", airingLabel(series));
     setSeriesText("library-series-overview", series.overview, "Metadata has not been resolved yet.");
     setSeriesText("library-series-local-id", "Prime series · " + series.local_id);
-    renderSeriesCast(series.cast);
+    renderPeople(series);
     renderSeasons(series);
   }
 
@@ -387,7 +543,11 @@
     try {
       var payload = await fetchJson("/api/library/series/" + encodeURIComponent(localId));
       if (state.openSeriesId !== localId) return;
-      renderSeriesDetail(payload.series);
+      var signature = JSON.stringify(payload.series);
+      if (signature !== state.detailSignature) {
+        state.detailSignature = signature;
+        renderSeriesDetail(payload.series);
+      }
     } catch (error) {
       if (!silent) showMessage(error.message || "Could not load series details.", true);
     } finally {
@@ -398,6 +558,7 @@
   async function openSeries(localId) {
     state.openSeriesId = localId;
     state.detail = null;
+    state.detailSignature = "";
     if (seriesModal) seriesModal.hidden = false;
     document.body.classList.add("library-modal-open");
     setSeriesText("library-series-title", "Loading series…");
@@ -409,6 +570,7 @@
     closeEpisode();
     state.openSeriesId = null;
     state.detail = null;
+    state.detailSignature = "";
     if (seriesModal) seriesModal.hidden = true;
     document.body.classList.remove("library-modal-open");
   }
@@ -437,6 +599,11 @@
   });
   document.querySelectorAll("[data-library-episode-close]").forEach(function (node) {
     node.addEventListener("click", closeEpisode);
+  });
+  document.querySelectorAll("[data-library-people-tab]").forEach(function (node) {
+    node.addEventListener("click", function () {
+      selectPeopleTab(node.dataset.libraryPeopleTab);
+    });
   });
   document.addEventListener("keydown", function (event) {
     if (event.key !== "Escape") return;

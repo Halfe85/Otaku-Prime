@@ -347,14 +347,30 @@ def _cast_entries(payload):
     result=[]
     for index,row in enumerate(marker):
         if not isinstance(row,dict): continue
-        actor=row.get("person") or row.get("actor") or row.get("name")
-        if isinstance(actor,dict): actor=actor.get("name") or actor.get("full_name")
-        character=row.get("character") or row.get("role") or row.get("character_name")
-        if isinstance(character,dict): character=character.get("name")
-        if actor:
-            result.append({"person_name":clean_remote_text(actor),
-                           "character_name":clean_remote_text(character) if character else None,
-                           "sort_order":index})
+        actor_value=row.get("person") or row.get("actor") or row.get("name")
+        character_value=row.get("character") or row.get("role") or row.get("character_name")
+        actor_data=actor_value if isinstance(actor_value,dict) else {}
+        character_data=character_value if isinstance(character_value,dict) else {}
+        actor=(actor_data.get("name") or actor_data.get("full_name")
+               if actor_data else actor_value)
+        character=(character_data.get("name") if character_data else character_value)
+        if actor and character:
+            result.append({
+                "person_name":clean_remote_text(actor),
+                "character_name":clean_remote_text(character),
+                "person":{"provider_id":actor_data.get("id"),"name":clean_remote_text(actor),
+                          "trivia":actor_data.get("description") or actor_data.get("biography"),
+                          "date_of_birth":actor_data.get("birthday"),
+                          "date_of_death":actor_data.get("deathday"),
+                          "age":actor_data.get("age"),
+                          "image_url":actor_data.get("image") or actor_data.get("image_url")},
+                "character":{"provider_id":character_data.get("id"),
+                             "name":clean_remote_text(character),
+                             "trivia":character_data.get("description"),
+                             "image_url":character_data.get("image") or character_data.get("image_url")},
+                "credit_type":row.get("credit_type") or "voice_actor",
+                "language":row.get("language") or "",
+                "source_provider":"simkl","sort_order":index})
     return result
 
 

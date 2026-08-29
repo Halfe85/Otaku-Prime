@@ -45,6 +45,25 @@ class StructurallyPendingProcessor:
             "Episode metadata has not been published",placement=placement)
 
 
+class AniListCastClient:
+    def __init__(self): self.calls=[]
+    def cast(self,anilist_id):
+        self.calls.append(str(anilist_id))
+        return [{"person":{"anilist_id":"700","name":"Voice Actor",
+                           "image_url":"https://img/staff.jpg"},
+                 "character":{"anilist_id":"800","name":"Hero",
+                              "image_url":"https://img/hero.jpg"}}]
+
+
+class SimklPlacementWithAniListCredits:
+    def __init__(self,placement):
+        self.placement=placement
+        endpoint=type("AniListEndpoint",(),{})()
+        endpoint.client=AniListCastClient()
+        self.endpoints={"anilist":endpoint}
+    def resolve(self,item): return self.placement
+
+
 class WatchlistTVShowMediatorTests(unittest.TestCase):
     def setUp(self):
         handle=tempfile.NamedTemporaryFile(delete=False); handle.close(); self.path=handle.name
@@ -87,6 +106,22 @@ class WatchlistTVShowMediatorTests(unittest.TestCase):
         helpers={name:Helper(name,self.placement(name)) for name in ("simkl","anilist","mal","kitsu")}
         service=TVShowMediatorService(self.watchlist,self.catalog,client=object(),helpers=helpers)
         self.assertEqual("anilist",service.provider_for(item))
+
+    def test_simkl_placement_fetches_staff_and_characters_from_anilist_ids(self):
+        placement=self.placement("simkl")
+        placement["tv_show"]["anilist_id"]="269"
+        processor=SimklPlacementWithAniListCredits(placement)
+        service=TVShowMediatorService(
+            self.watchlist,self.catalog,client=object(),processor=processor)
+
+        result=service.run_once()
+
+        self.assertEqual(1,result["placed"])
+        detail=self.catalog.library_series_detail(self.catalog.list_series()[0]["local_id"])
+        self.assertEqual("Voice Actor",detail["staff"][0]["name"])
+        self.assertEqual("Hero",detail["characters"][0]["name"])
+        self.assertEqual("https://img/staff.jpg",detail["cast"][0]["person"]["image_url"])
+        self.assertEqual(["269","185874"],processor.endpoints["anilist"].client.calls)
 
     def test_anilist_is_tried_after_present_simkl_id_fails(self):
         helpers={name:Helper(name,self.placement(name)) for name in ("simkl","anilist","mal","kitsu")}

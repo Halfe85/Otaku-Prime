@@ -121,7 +121,7 @@ class AniListMediatorClient:
         return rows
 
     def cast(self, anilist_id):
-        """Return original Japanese voice actor -> character pairs for this anime."""
+        """Return rich Japanese voice actor -> character credits for one anime."""
         key = str(anilist_id)
         if key in self._cast_cache:
             return self._cast_cache[key]
@@ -134,8 +134,12 @@ class AniListMediatorClient:
                   characters(page:$page,perPage:25){
                     pageInfo{hasNextPage}
                     edges{
-                      node{name{full}}
-                      voiceActors(language:JAPANESE){name{full}}
+                      node{id name{full} description(asHtml:false) image{large}}
+                      voiceActors(language:JAPANESE,sort:[RELEVANCE,ID]){
+                        id name{full} description(asHtml:false)
+                        dateOfBirth{year month day} dateOfDeath{year month day}
+                        age image{large}
+                      }
                     }
                   }
                 }}""",
@@ -143,10 +147,27 @@ class AniListMediatorClient:
             )
             connection = ((data.get("Media") or {}).get("characters") or {})
             for edge in connection.get("edges") or []:
-                character = (((edge or {}).get("node") or {}).get("name") or {}).get("full")
+                character_node=(edge or {}).get("node") or {}
+                character = (character_node.get("name") or {}).get("full")
                 if not character:
                     continue
-                for actor in (edge or {}).get("voiceActors") or []:
+                actors=(edge or {}).get("voiceActors") or []
+                if not actors:
+                    marker=(None,str(character))
+                    if marker not in seen:
+                        seen.add(marker)
+                        result.append({
+                            "person_name":None,"character_name":str(character),
+                            "person":{},
+                            "character":{
+                                "anilist_id":str(character_node.get("id")) if character_node.get("id") else None,
+                                "name":str(character),"trivia":character_node.get("description"),
+                                "image_url":(character_node.get("image") or {}).get("large"),
+                            },
+                            "credit_type":"voice_actor","language":"JAPANESE",
+                            "source_provider":"anilist","sort_order":len(result),
+                        })
+                for actor in actors:
                     person = ((actor or {}).get("name") or {}).get("full")
                     if not person:
                         continue
@@ -155,8 +176,22 @@ class AniListMediatorClient:
                         continue
                     seen.add(marker)
                     result.append({
-                        "person_name": str(person),
-                        "character_name": str(character),
+                        "person_name": str(person),"character_name":str(character),
+                        "person":{
+                            "anilist_id":str(actor.get("id")) if actor.get("id") else None,
+                            "name":str(person),"trivia":actor.get("description"),
+                            "date_of_birth":_fuzzy_date_string(actor.get("dateOfBirth")),
+                            "date_of_death":_fuzzy_date_string(actor.get("dateOfDeath")),
+                            "age":actor.get("age"),
+                            "image_url":(actor.get("image") or {}).get("large"),
+                        },
+                        "character":{
+                            "anilist_id":str(character_node.get("id")) if character_node.get("id") else None,
+                            "name":str(character),"trivia":character_node.get("description"),
+                            "image_url":(character_node.get("image") or {}).get("large"),
+                        },
+                        "credit_type":"voice_actor","language":"JAPANESE",
+                        "source_provider":"anilist",
                         "sort_order": len(result),
                     })
             if not (connection.get("pageInfo") or {}).get("hasNextPage"):
@@ -185,6 +220,17 @@ def _date_string(value):
     return "{:04d}-{:02d}-{:02d}".format(
         int(value["year"]), int(value.get("month") or 1), int(value.get("day") or 1)
     )
+
+
+def _fuzzy_date_string(value):
+    """Preserve AniList's partial staff dates without inventing month/day values."""
+    value=value or {}
+    if not value.get("year"): return None
+    result="{:04d}".format(int(value["year"]))
+    if not value.get("month"): return result
+    result+="-{:02d}".format(int(value["month"]))
+    if not value.get("day"): return result
+    return result+"-{:02d}".format(int(value["day"]))
 
 
 def _titles(media):
@@ -350,6 +396,9 @@ class AniListMediatorHelper:
         schedule = self.client.schedule(value)
         root_titles = _titles(root)
         target_titles = _titles(target)
+        root_cast=self.client.cast(root["id"])
+        target_cast=(root_cast if str(root["id"])==str(value)
+                     else self.client.cast(value))
         root_format = str(root.get("format") or "").upper() or None
         season_release_date=_date_string(target.get("startDate")) or item.get("release_date")
         placement = {
@@ -367,7 +416,8 @@ class AniListMediatorHelper:
                 "overview": target.get("description") or root.get("description"),
                 "runtime_minutes": _runtime(target) or _runtime(root),
                 "air_status": target.get("status") or root.get("status"),
-                "cast": self.client.cast(value),
+                "cast": root_cast or target_cast or None,
+                "cast_source":"anilist",
             },
             "season": {
                 "number": season_number,
@@ -379,6 +429,8 @@ class AniListMediatorHelper:
                 "last_episode": None,
                 "release_date": season_release_date,
                 "release_status": target.get("status"),
+                "cast":target_cast or None,
+                "cast_source":"anilist",
             },
             "episodes": [],
             "relation_path": [str(node["id"]) for node in path],

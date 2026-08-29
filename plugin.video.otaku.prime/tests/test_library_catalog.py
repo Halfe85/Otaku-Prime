@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import tempfile
 import unittest
 
@@ -59,10 +60,14 @@ class LibraryCatalogTests(unittest.TestCase):
             runtime_minutes=24,
             air_status="airing",
         )
-        self.catalog.replace_series_cast(self.series["local_id"], [
-            {"person_name": "Actor One", "character_name": "Hero", "sort_order": 0},
-            {"person_name": "Actor Two", "character_name": "Rival", "sort_order": 1},
-        ], source_provider="simkl")
+        self.catalog.replace_media_credits([
+            {"person":{"anilist_id":"501","name":"Actor One","trivia":"Known fact",
+                       "date_of_birth":"1980-01-02","age":50,"image_url":"https://img/staff-1.jpg"},
+             "character":{"anilist_id":"601","name":"Hero","trivia":"Main character",
+                          "image_url":"https://img/character-1.jpg"},"sort_order":0},
+            {"person":{"anilist_id":"502","name":"Actor Two"},
+             "character":{"anilist_id":"602","name":"Rival"},"sort_order":1},
+        ], series_id=self.series["local_id"], source_provider="anilist")
         self.season = self.catalog.add_watchlist_season(
             self.series["local_id"], self.item, season_number=1,
             provider_path="simkl", placement_source="mapped_tvdb_seasons",
@@ -106,6 +111,28 @@ class LibraryCatalogTests(unittest.TestCase):
         self.assertEqual(("Actor One", "Hero"), (
             detail["cast"][0]["person_name"], detail["cast"][0]["character_name"]
         ))
+        self.assertEqual("Known fact",detail["cast"][0]["person"]["trivia"])
+        self.assertEqual("1980-01-02",detail["cast"][0]["person"]["date_of_birth"])
+        self.assertEqual("https://img/character-1.jpg",
+                         detail["cast"][0]["character"]["image_url"])
+        self.assertEqual(2,len(detail["staff"]))
+        self.assertEqual(2,len(detail["characters"]))
+        hero=next(row for row in detail["characters"] if row["name"]=="Hero")
+        actor=next(row for row in detail["staff"] if row["name"]=="Actor One")
+        self.assertEqual(["Actor One"],[row["name"] for row in hero["staff"]])
+        self.assertEqual(["series"],[row["scope"] for row in hero["media_links"]])
+        self.assertEqual(["Hero"],[row["name"] for row in actor["characters"]])
+        db=sqlite3.connect(self.path)
+        try:
+            self.assertEqual(2,db.execute("SELECT COUNT(*) FROM staff").fetchone()[0])
+            self.assertEqual(2,db.execute("SELECT COUNT(*) FROM characters").fetchone()[0])
+            self.assertEqual(2,db.execute(
+                "SELECT COUNT(*) FROM staff_character_links").fetchone()[0])
+            self.assertEqual(2,db.execute(
+                "SELECT COUNT(*) FROM character_media_links WHERE related_series_id=?",
+                (self.series["local_id"],)).fetchone()[0])
+        finally:
+            db.close()
         self.assertEqual(1, len(detail["seasons"]))
         episodes = detail["seasons"][0]["episodes"]
         self.assertEqual(2, len(episodes))
@@ -137,14 +164,79 @@ class LibraryCatalogTests(unittest.TestCase):
         self.assertEqual("Arrival Updated", same_episode["title"])
 
     def test_missing_cast_metadata_does_not_delete_existing_cast(self):
-        self.catalog.replace_series_cast(self.series["local_id"], None, source_provider="other")
+        self.catalog.replace_media_credits(
+            None,series_id=self.series["local_id"],source_provider="other")
         detail = self.catalog.library_series_detail(self.series["local_id"])
         self.assertEqual(2, len(detail["cast"]))
 
-    def test_explicit_empty_cast_replaces_previous_cast(self):
-        self.catalog.replace_series_cast(self.series["local_id"], [], source_provider="simkl")
+    def test_empty_provider_cast_does_not_erase_existing_cast(self):
+        self.catalog.replace_media_credits(
+            [],series_id=self.series["local_id"],source_provider="simkl")
         detail = self.catalog.library_series_detail(self.series["local_id"])
-        self.assertEqual([], detail["cast"])
+        self.assertEqual(2,len(detail["cast"]))
+
+    def test_credits_can_be_scoped_to_season_and_episode(self):
+        season_credit={"person_name":"Season Actor","character_name":"Season Character"}
+        episode_credit={"person_name":"Guest Actor","character_name":"Guest Character"}
+        self.catalog.replace_media_credits(
+            [season_credit],season_id=self.season["local_id"],source_provider="simkl")
+        self.catalog.replace_media_credits(
+            [episode_credit],episode_id=self.ep1["local_id"],source_provider="simkl")
+
+        detail=self.catalog.library_series_detail(self.series["local_id"])
+        season=detail["seasons"][0]
+        self.assertEqual("Season Character",season["cast"][0]["character"]["name"])
+        self.assertEqual("Guest Actor",season["episodes"][0]["cast"][0]["person"]["name"])
+        self.assertEqual([],season["episodes"][1]["cast"])
+        self.assertEqual(4,len(detail["staff"]))
+        self.assertEqual(4,len(detail["characters"]))
+        season_character=next(
+            row for row in detail["characters"] if row["name"]=="Season Character")
+        guest_character=next(
+            row for row in detail["characters"] if row["name"]=="Guest Character")
+        self.assertEqual("season",season_character["media_links"][0]["scope"])
+        self.assertEqual(1,season_character["media_links"][0]["season_number"])
+        self.assertEqual("episode",guest_character["media_links"][0]["scope"])
+        self.assertEqual(1,guest_character["media_links"][0]["episode_number"])
+
+    def test_character_without_staff_is_still_linked_to_media(self):
+        self.catalog.replace_media_credits([{
+            "character":{"anilist_id":"999","name":"Silent Character",
+                         "trivia":"No voice actor published yet"},"person":{}
+        }],series_id=self.series["local_id"],source_provider="anilist")
+
+        detail=self.catalog.library_series_detail(self.series["local_id"])
+
+        self.assertEqual([],detail["staff"])
+        self.assertEqual("Silent Character",detail["characters"][0]["name"])
+        self.assertEqual({},detail["cast"][0]["person"])
+
+    def test_legacy_flat_cast_table_is_discarded_and_not_migrated(self):
+        other=os.path.join(self.tmp.name,"legacy.sqlite")
+        legacy_watchlist=WatchlistItemStore(other); legacy_watchlist.initialize()
+        legacy_watchlist.replace_provider_snapshot("anilist",[{
+            "provider_item_id":"1","ids":{"anilist":"1"},"english_name":"Legacy",
+            "list_status":"PLANNING","progress":0,"raw":{}}])
+        local_id=legacy_watchlist.list_all()[0]["local_id"]
+        db=sqlite3.connect(other)
+        try:
+            db.execute("CREATE TABLE series_cast(related_series_id TEXT,person_name TEXT)")
+            db.execute("INSERT INTO series_cast VALUES('old','Discard Me')")
+            db.commit()
+        finally:
+            db.close()
+        rebuilt=CatalogStore(other,SegmentFactory()); rebuilt.initialize()
+        db=sqlite3.connect(other)
+        try:
+            tables={row[0] for row in db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+            self.assertNotIn("series_cast",tables)
+            self.assertEqual(0,db.execute("SELECT COUNT(*) FROM staff").fetchone()[0])
+            state=db.execute("SELECT mediator_ready,added_to_library FROM watchlist_items "
+                             "WHERE local_id=?",(local_id,)).fetchone()
+            self.assertEqual((1,0),state)
+        finally:
+            db.close()
 
 
 if __name__ == "__main__":

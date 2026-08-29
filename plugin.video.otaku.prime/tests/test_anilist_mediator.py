@@ -4,7 +4,10 @@ import unittest
 
 from resources.lib.database.catalog import CatalogStore
 from resources.lib.database.watchlist_items import WatchlistItemStore
-from resources.lib.services.mediator_helper_anilist import AniListMediatorHelper
+from resources.lib.services.mediator_helper_anilist import (
+    AniListMediatorHelper,
+    _fuzzy_date_string,
+)
 from resources.lib.services.mediator_helper_simkl import MediatorMetadataPending
 from resources.lib.services.mediator_tvshow import TVShowMediatorService
 
@@ -67,6 +70,12 @@ class FakeAniListClient:
 
 
 class AniListMediatorTests(unittest.TestCase):
+    def test_staff_fuzzy_dates_do_not_invent_missing_month_or_day(self):
+        self.assertEqual("1980",_fuzzy_date_string({"year":1980}))
+        self.assertEqual("1980-04",_fuzzy_date_string({"year":1980,"month":4}))
+        self.assertEqual("1980-04-09",_fuzzy_date_string(
+            {"year":1980,"month":4,"day":9}))
+
     def test_unreleased_third_season_returns_structural_placement_without_episodes(self):
         root = media(10, "How NOT to Summon a Demon Lord", "TV", 12, year=2018)
         second = media(20, "How NOT to Summon a Demon Lord Omega", "TV", 10,
