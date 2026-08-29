@@ -2,6 +2,16 @@
 .library-season-cast,
 .library-episode-cast-section { display:none !important; }
 
+/* Keep Library posters comfortably separated and let the viewport decide
+   how many cards fit on each row. */
+.library-shell .library-grid {
+  grid-template-columns:repeat(auto-fit,minmax(min(230px,100%),1fr));
+  column-gap:clamp(28px,2.4vw,44px);
+  row-gap:clamp(32px,2.8vw,52px);
+  padding:clamp(10px,1.1vw,18px);
+  align-items:start;
+}
+
 .character-card {
   position:relative;
   min-height:210px;
@@ -65,6 +75,14 @@
 .character-card.staff-hover-active .library-staff-hover-content .library-person-portrait {
   width:72px;
   height:72px;
+}
+
+@media (max-width:760px) {
+  .library-shell .library-grid {
+    grid-template-columns:repeat(auto-fit,minmax(min(220px,100%),1fr));
+    gap:24px;
+    padding:8px;
+  }
 }
 
 @media (prefers-reduced-motion:reduce) {
