@@ -9,7 +9,10 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from resources.lib.services.anilist_rate_limit import ANILIST_RATE_LIMITER
-from resources.lib.services.mediator_helper_simkl import MediatorPlacementError
+from resources.lib.services.mediator_helper_simkl import (
+    MediatorMetadataPending,
+    MediatorPlacementError,
+)
 
 
 MAX_PREQUEL_DEPTH = 64
@@ -267,7 +270,8 @@ def _episode_count(target, item, schedule):
             continue
         if count > 0:
             return count
-    raise MediatorPlacementError("AniList has no episode count for the requested watchlist item")
+    raise MediatorMetadataPending(
+        "AniList has no episode count for the requested watchlist item")
 
 
 def _special_offset(target, path):

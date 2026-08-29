@@ -415,7 +415,7 @@ class WatchlistItemStore:
 
     def record_mediator_resolution(self,local_id,status,provider=None,error=None):
         value=str(status or "").upper()
-        if value not in ("RESOLVED","PARTIAL","UNRESOLVED","ERROR"):
+        if value not in ("RESOLVED","PARTIAL","UNRESOLVED","DEFERRED","ERROR"):
             raise ValueError("unsupported mediator status")
         with self._connection() as db:
             cursor=db.execute("""UPDATE watchlist_items SET mediator_status=?,

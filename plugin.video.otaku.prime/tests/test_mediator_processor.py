@@ -1,6 +1,7 @@
 import unittest
 
 from resources.lib.services.mediator_processor import MediatorProcessor
+from resources.lib.services.mediator_helper_simkl import MediatorMetadataPending
 
 
 class Endpoint:
@@ -10,6 +11,12 @@ class Endpoint:
         self.calls+=1
         if self.error: raise RuntimeError(self.error)
         return dict(self.result)
+
+
+class PendingEndpoint(Endpoint):
+    def resolve(self,item):
+        self.calls+=1
+        raise MediatorMetadataPending(self.error or self.name+" episode metadata pending")
 
 
 def placement(provider,season=1):
@@ -41,10 +48,59 @@ class MediatorProcessorTests(unittest.TestCase):
         self.assertEqual("anilist+mal",result["provider_path"]); self.assertEqual(["anilist","mal"],result["provider_consensus"])
         self.assertEqual(0,endpoints["kitsu"].calls)
 
+    def test_anilist_composite_accepts_partial_mal_episode_coverage(self):
+        anilist=placement("anilist",season=0)
+        mal=placement("mal",season=0); mal["episodes"]=mal["episodes"][:1]
+        mal["season"]["last_episode"]=1
+        endpoints={"simkl":Endpoint("simkl",error="not listed"),
+                   "anilist":Endpoint("anilist",anilist),"mal":Endpoint("mal",mal),
+                   "kitsu":Endpoint("kitsu",error="not listed")}
+        result=MediatorProcessor(endpoints=endpoints).resolve(self.item())
+        self.assertEqual("anilist+mal",result["provider_path"])
+        self.assertEqual([1,2],[row["episode_number"] for row in result["episodes"]])
+        self.assertEqual("partial_episode_coverage",result["provider_consensus_scope"])
+        self.assertEqual({"anilist":[1,2],"mal":[1]},result["provider_coverage"])
+        self.assertEqual(0,endpoints["kitsu"].calls)
+
+    def test_anilist_remains_authoritative_when_mal_numbers_specials_differently(self):
+        anilist=placement("anilist",season=0)
+        mal=placement("mal",season=0)
+        for row in mal["episodes"]: row["episode_number"]+=1
+        endpoints={"simkl":Endpoint("simkl",error="not listed"),
+                   "anilist":Endpoint("anilist",anilist),"mal":Endpoint("mal",mal),
+                   "kitsu":Endpoint("kitsu",placement("kitsu",season=0))}
+        with self.assertLogs("otaku_prime.services-mediator_processor",level="INFO") as logs:
+            result=MediatorProcessor(endpoints=endpoints).resolve(self.item())
+        self.assertEqual("anilist",result["provider_path"])
+        self.assertIn("different",result["provider_disagreement"]["error"])
+        self.assertTrue(any(
+            "INFO:otaku_prime.services-mediator_processor:MAL alternate coordinates ignored"
+            in message for message in logs.output))
+        self.assertEqual(0,endpoints["kitsu"].calls)
+
+    def test_anilist_remains_authoritative_when_mal_classifies_season_zero_differently(self):
+        anilist=placement("anilist",season=0); mal=placement("mal",season=2)
+        endpoints={"simkl":Endpoint("simkl",error="not listed"),
+                   "anilist":Endpoint("anilist",anilist),"mal":Endpoint("mal",mal),
+                   "kitsu":Endpoint("kitsu",placement("kitsu",season=2))}
+        result=MediatorProcessor(endpoints=endpoints).resolve(self.item())
+        self.assertEqual("anilist",result["provider_path"])
+        self.assertEqual(0,result["season"]["number"])
+        self.assertEqual(0,endpoints["kitsu"].calls)
+
     def test_kitsu_is_last_after_simkl_and_anilist_mal_fail(self):
         endpoints={name:Endpoint(name,error="no") for name in ("simkl","anilist","mal")}; endpoints["kitsu"]=Endpoint("kitsu",placement("kitsu"))
         result=MediatorProcessor(endpoints=endpoints).resolve(self.item())
         self.assertEqual("kitsu",result["provider_path"]); self.assertEqual(1,endpoints["kitsu"].calls)
+
+    def test_all_unknown_episode_counts_are_deferred_not_failed(self):
+        endpoints={name:PendingEndpoint(name,error="no episode count")
+                   for name in ("simkl","anilist","mal","kitsu")}
+        with self.assertRaises(MediatorMetadataPending) as caught:
+            MediatorProcessor(endpoints=endpoints).resolve(self.item())
+        self.assertIn("not been published",str(caught.exception))
+        self.assertEqual((1,1,1,1),tuple(
+            endpoints[name].calls for name in ("simkl","anilist","mal","kitsu")))
 
 
 if __name__=="__main__": unittest.main()

@@ -5,8 +5,11 @@ import unittest
 from resources.lib.database.catalog import CatalogStore
 from resources.lib.database.watchlist_items import WatchlistItemStore
 from resources.lib.services.mediator_tvshow import TVShowMediatorService
-from resources.lib.services.mediator_helper_simkl import _episodes
-from resources.lib.services.mediator_helper_simkl import SimklMediatorHelper
+from resources.lib.services.mediator_helper_simkl import (
+    MediatorMetadataPending,
+    SimklMediatorHelper,
+    _episodes,
+)
 
 
 class SegmentFactory:
@@ -18,6 +21,11 @@ class Helper:
     def resolve(self,item,client): self.calls.append(item["local_id"]); return self.placement
 class FailingHelper(Helper):
     def resolve(self,item,client): self.calls.append(item["local_id"]); raise RuntimeError(self.provider+" unavailable")
+
+
+class PendingProcessor:
+    def resolve(self,item):
+        raise MediatorMetadataPending("Episode metadata has not been published")
 
 
 class WatchlistTVShowMediatorTests(unittest.TestCase):
@@ -81,6 +89,28 @@ class WatchlistTVShowMediatorTests(unittest.TestCase):
         class Client:
             def exact_simkl_id(self,*args): raise AssertionError("mediator must not search Simkl with a foreign ID")
         self.assertEqual("2671730",SimklMediatorHelper().resolve_simkl_id({"simkl_id":"2671730","anilist_id":"185874"},Client()))
+
+    def test_unreleased_item_is_deferred_without_catalog_rows_or_error(self):
+        service=TVShowMediatorService(
+            self.watchlist,self.catalog,client=object(),processor=PendingProcessor())
+        result=service.run_once()
+        item=self.watchlist.item(self.prime_id)
+        self.assertEqual({"placed":0,"existing":0,"deferred":1,"failed":0},result)
+        self.assertEqual("DEFERRED",item["mediator_status"])
+        self.assertEqual(0,item["mediator_ready"])
+        self.assertEqual(0,item["added_to_library"])
+        self.assertEqual([],self.catalog.list_series())
+
+    def test_unchanged_deferred_metadata_does_not_repeat_the_item_notice(self):
+        service=TVShowMediatorService(
+            self.watchlist,self.catalog,client=object(),processor=PendingProcessor())
+        service.run_once()
+        self.watchlist.mark_mediator_ready(self.prime_id,True)
+        with self.assertLogs("otaku_prime.services-mediator_tvshow",level="INFO") as logs:
+            result=service.run_once()
+        self.assertEqual(1,result["deferred"])
+        self.assertFalse(any(
+            "Mediator deferred Prime item" in message for message in logs.output))
 
 
 if __name__=="__main__": unittest.main()

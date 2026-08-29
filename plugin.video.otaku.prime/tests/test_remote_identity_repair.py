@@ -166,6 +166,41 @@ class RemoteIdentityRepairTests(unittest.TestCase):
                 try: os.unlink(handle.name+suffix)
                 except FileNotFoundError: pass
 
+    def test_catalog_repairs_a_unique_two_of_three_split_identity(self):
+        handle=tempfile.NamedTemporaryFile(delete=False); handle.close()
+        try:
+            catalog=CatalogStore(handle.name,SegmentFactory()); catalog.initialize()
+            winner=catalog.get_or_create_series(
+                "Fate/Zero",root_simkl_id="37739",tvdb_id="275798",
+                root_anilist_id="106862")
+            stale=catalog.get_or_create_series(
+                "Different Fate branch",root_simkl_id="39520",tvdb_id="79151",
+                root_anilist_id="10087")
+            repaired=catalog.get_or_create_series(
+                "Fate/Zero",root_simkl_id="37739",tvdb_id="275798",
+                root_anilist_id="10087")
+            self.assertEqual(winner["local_id"],repaired["local_id"])
+            self.assertEqual("10087",repaired["root_anilist_id"])
+            rows={row["local_id"]:row for row in catalog.list_series()}
+            self.assertIsNone(rows[stale["local_id"]]["root_anilist_id"])
+        finally:
+            for suffix in ("","-wal","-shm"):
+                try: os.unlink(handle.name+suffix)
+                except FileNotFoundError: pass
+
+    def test_catalog_does_not_guess_when_split_identity_has_no_majority(self):
+        handle=tempfile.NamedTemporaryFile(delete=False); handle.close()
+        try:
+            catalog=CatalogStore(handle.name,SegmentFactory()); catalog.initialize()
+            catalog.get_or_create_series("First",root_simkl_id="10")
+            catalog.get_or_create_series("Second",tvdb_id="20")
+            with self.assertRaises(ValueError):
+                catalog.get_or_create_series("First",root_simkl_id="10",tvdb_id="20")
+        finally:
+            for suffix in ("","-wal","-shm"):
+                try: os.unlink(handle.name+suffix)
+                except FileNotFoundError: pass
+
     def test_season_and_episode_remote_ids_refresh_without_changing_local_ids(self):
         handle=tempfile.NamedTemporaryFile(delete=False); handle.close()
         try:

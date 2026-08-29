@@ -7,7 +7,10 @@ from urllib.error import HTTPError,URLError
 from urllib.parse import urlencode
 from urllib.request import Request,urlopen
 
-from resources.lib.services.mediator_helper_simkl import MediatorPlacementError
+from resources.lib.services.mediator_helper_simkl import (
+    MediatorMetadataPending,
+    MediatorPlacementError,
+)
 
 KITSU_API_URL="https://kitsu.io/api/edge"
 SPECIAL_FORMATS={"movie","ova","ona","special","music"}
@@ -125,7 +128,7 @@ class KitsuMediatorEndpoint:
         season_number,number_source=_season_number(target,path)
         try: count=int(target_attrs.get("episodeCount") or item.get("episode_count") or 0)
         except (TypeError,ValueError): count=0
-        if count<=0: raise MediatorPlacementError("Kitsu has no episode count for this anime")
+        if count<=0: raise MediatorMetadataPending("Kitsu has no episode count for this anime")
         offset=_special_offset(target,path) if season_number==0 else 0
         runtime=_runtime(target_attrs)
         episodes=[]

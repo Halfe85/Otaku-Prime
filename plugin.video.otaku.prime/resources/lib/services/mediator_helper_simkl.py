@@ -31,6 +31,10 @@ class MediatorPlacementError(RuntimeError):
     pass
 
 
+class MediatorMetadataPending(MediatorPlacementError):
+    """The identity is valid, but providers have not published episodes yet."""
+
+
 class SimklMediatorClient:
     """Small throttled Simkl client shared by every provider path."""
     def __init__(self,client_id=None,timeout=30,request_delay=0.25,opener=None):
@@ -408,7 +412,8 @@ class SimklMediatorHelper:
         target_type=str(target.get("anime_type") or "").lower()
         episodes=_episodes(client.episodes(simkl_id),target_type in SPECIAL_MEDIA_TYPES)
         if not episodes:
-            raise MediatorPlacementError("Simkl returned no episodes for the requested watchlist item")
+            raise MediatorMetadataPending(
+                "Simkl returned no episodes for the requested watchlist item")
         unmapped=[row["source_episode_number"] for row in episodes
                   if row["season_number"] is None or row["episode_number"] is None]
         seasons={row["season_number"] for row in episodes if row["season_number"] is not None}

@@ -163,7 +163,8 @@ class AniListMediatorTests(unittest.TestCase):
 
             result = service.run_once()
 
-            self.assertEqual({"placed": 1, "existing": 0, "failed": 0}, result)
+            self.assertEqual(
+                {"placed": 1, "existing": 0, "deferred": 0, "failed": 0}, result)
             series = catalog.list_series()[0]
             self.assertEqual("100", series["root_anilist_id"])
             self.assertEqual("anilist", series["source_provider"])

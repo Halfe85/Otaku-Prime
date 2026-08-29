@@ -5,7 +5,10 @@ from __future__ import annotations
 import threading
 
 from resources.lib.logging_config import get_logger
-from resources.lib.services.mediator_helper_simkl import SimklMediatorClient
+from resources.lib.services.mediator_helper_simkl import (
+    MediatorMetadataPending,
+    SimklMediatorClient,
+)
 from resources.lib.services.mediator_processor import MediatorProcessor
 
 LOGGER=get_logger(__name__)
@@ -108,7 +111,7 @@ class TVShowMediatorService:
 
     def run_once(self):
         if not self._lock.acquire(blocking=False): return {"scheduled":False,"busy":True}
-        placed=existing=failed=0
+        placed=existing=deferred=failed=0
         try:
             # Drain repeatedly: Watchdog may release another 10% while this worker is active.
             while not self._stop.is_set():
@@ -125,6 +128,20 @@ class TVShowMediatorService:
                         continue
                     try:
                         self.process_item(item); placed+=1; progress=True
+                    except MediatorMetadataPending as exc:
+                        deferred+=1; progress=True
+                        unchanged=(
+                            str(item.get("mediator_status") or "").upper()=="DEFERRED"
+                            and str(item.get("mediator_error") or "")==str(exc))
+                        if not unchanged:
+                            LOGGER.info(
+                                "Mediator deferred Prime item %s until episode metadata is published: %s",
+                                item["local_id"],exc)
+                        if hasattr(self.watchlist_store,"record_mediator_resolution"):
+                            self.watchlist_store.record_mediator_resolution(
+                                item["local_id"],"DEFERRED",error=str(exc))
+                        clearer=getattr(self.watchlist_store,"clear_mediator_ready",None)
+                        if clearer: clearer(item["local_id"])
                     except Exception as exc:
                         failed+=1; progress=True
                         LOGGER.exception("Mediator placement failed for Prime item %s",item["local_id"])
@@ -134,9 +151,9 @@ class TVShowMediatorService:
                         clearer=getattr(self.watchlist_store,"clear_mediator_ready",None)
                         if clearer: clearer(item["local_id"])
                 if not progress: break
-            LOGGER.info("TV-show mediator complete: placed=%s existing=%s failed=%s",
-                        placed,existing,failed)
-            return {"placed":placed,"existing":existing,"failed":failed}
+            LOGGER.info("TV-show mediator complete: placed=%s existing=%s deferred=%s failed=%s",
+                        placed,existing,deferred,failed)
+            return {"placed":placed,"existing":existing,"deferred":deferred,"failed":failed}
         finally:
             self._lock.release()
 

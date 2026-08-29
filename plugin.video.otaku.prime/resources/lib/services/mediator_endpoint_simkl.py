@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 from resources.lib.services.mediator_helper_simkl import (
+    MediatorMetadataPending,
     MediatorPlacementError,
     SPECIAL_MEDIA_TYPES,
     SimklMediatorClient,
@@ -67,7 +68,8 @@ class SimklMediatorEndpoint:
         candidates=_episodes(client.episodes(simkl_id),target_type in SPECIAL_MEDIA_TYPES)
         episodes=[row for row in candidates if row.get("season_number")==season_number]
         if not episodes:
-            raise MediatorPlacementError("Simkl returned no episodes for season {}".format(season_number))
+            raise MediatorMetadataPending(
+                "Simkl returned no episodes for season {}".format(season_number))
         unmapped=[row["source_episode_number"] for row in episodes if row.get("episode_number") is None]
         if unmapped:
             raise MediatorPlacementError("Simkl episodes lack TVDB coordinates: {}".format(unmapped))

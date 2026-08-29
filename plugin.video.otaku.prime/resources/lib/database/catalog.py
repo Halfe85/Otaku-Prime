@@ -6,10 +6,12 @@ import secrets
 import sqlite3
 from contextlib import contextmanager
 
+from resources.lib.logging_config import get_logger
 from resources.lib.services.remote_identity import best_title_similarity,clean_remote_text
 
 
 HEX_SEGMENT_LENGTH=6
+LOGGER=get_logger(__name__)
 
 
 class CatalogStore:
@@ -190,6 +192,44 @@ class CatalogStore:
                 "{} {} already belongs to Prime series {}".format(
                     column,str(value),collision["local_id"]))
 
+    @staticmethod
+    def _resolve_split_identity(db,identity_rows,english_name=None,romaji_name=None):
+        """Select and repair a unique 2-of-3 remote-identity majority.
+
+        Historical mediation could attach one stale remote ID to a different
+        Prime series. Never merge local series or their seasons here: only
+        detach the contradicted remote mapping when two other validated IDs
+        and the incoming title independently select one row.
+        """
+        by_local_id={}
+        for column,value,row in identity_rows:
+            if row:
+                by_local_id.setdefault(row["local_id"],[]).append((column,value,row))
+        if len(by_local_id)<=1:
+            return next(iter(by_local_id.values()))[0][2] if by_local_id else None
+        ranked=sorted(by_local_id.items(),key=lambda pair:len(pair[1]),reverse=True)
+        winner_id,winner_matches=ranked[0]
+        runner_up_count=len(ranked[1][1])
+        winner=winner_matches[0][2]
+        incoming_titles=[value for value in (english_name,romaji_name) if value]
+        stored_titles=[value for value in (winner["english_name"],winner["romaji_name"]) if value]
+        title_similarity=best_title_similarity(incoming_titles,stored_titles)
+        if len(winner_matches)<2 or len(winner_matches)==runner_up_count or title_similarity<0.88:
+            raise ValueError(
+                "validated remote identities point at different Prime series: {}".format(
+                    ", ".join(sorted(by_local_id))))
+        for column,value,row in identity_rows:
+            if not row or row["local_id"]==winner_id:
+                continue
+            db.execute(
+                "UPDATE tv_series SET {}=NULL,updated_at=CURRENT_TIMESTAMP "
+                "WHERE local_id=? AND {}=?".format(column,column),
+                (row["local_id"],str(value)))
+            LOGGER.warning(
+                "Reassigned stale catalogue identity %s=%s from Prime series %s to %s",
+                column,value,row["local_id"],winner_id)
+        return winner
+
     def get_or_create_series(self,english_name=None,romaji_name=None,root_simkl_id=None,
                              tvdb_id=None,root_anilist_id=None,source_provider=None,
                              source_media_format=None,publish_year=None,overview=None,
@@ -209,13 +249,11 @@ class CatalogStore:
             anilist_row=db.execute(
                 "SELECT * FROM tv_series WHERE root_anilist_id=?",(anilist,)
             ).fetchone() if anilist else None
-            identity_rows=[row for row in (root_row,tvdb_row,anilist_row) if row]
-            identity_ids={row["local_id"] for row in identity_rows}
-            if len(identity_ids)>1:
-                raise ValueError(
-                    "validated remote identities point at different Prime series: {}".format(
-                        ", ".join(sorted(identity_ids))))
-            row=root_row or tvdb_row or anilist_row
+            identity_rows=[("root_simkl_id",root,root_row),
+                           ("tvdb_id",tvdb,tvdb_row),
+                           ("root_anilist_id",anilist,anilist_row)]
+            row=self._resolve_split_identity(
+                db,identity_rows,english_name=english_name,romaji_name=romaji_name)
             if not row:
                 row=self._series_name_match(db,english_name,romaji_name)
             if row:

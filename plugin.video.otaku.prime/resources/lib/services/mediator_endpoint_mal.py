@@ -7,7 +7,10 @@ from urllib.error import HTTPError,URLError
 from urllib.parse import urlencode
 from urllib.request import Request,urlopen
 
-from resources.lib.services.mediator_helper_simkl import MediatorPlacementError
+from resources.lib.services.mediator_helper_simkl import (
+    MediatorMetadataPending,
+    MediatorPlacementError,
+)
 from resources.lib.watchlist.mal import MAL_API_URL,MAL_CLIENT_ID
 
 SPECIAL_FORMATS={"movie","ova","ona","special","music"}
@@ -104,7 +107,7 @@ class MALMediatorEndpoint:
         season_number,source=_season_number(target,path)
         try: count=int(target.get("num_episodes") or item.get("episode_count") or 0)
         except (TypeError,ValueError): count=0
-        if count<=0: raise MediatorPlacementError("MAL has no episode count for this anime")
+        if count<=0: raise MediatorMetadataPending("MAL has no episode count for this anime")
         offset=0
         if season_number==0:
             target_id=str(target["id"])

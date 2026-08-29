@@ -51,6 +51,18 @@ class Alpha11WatchlistUITests(unittest.TestCase):
         self.assertIn("AbortController",watchlist)
         self.assertIn("window.setInterval(loadTiles, 10000)",library)
 
+    def test_app_logs_preserve_scroll_and_offer_jump_to_newest(self):
+        page=render_home(
+            {"username":"admin","role":"admin"},active_tab="library",
+            watchlist_accounts={})
+        script=read_static_asset("components/app-logs/app-logs.js")[1].decode("utf-8")
+        styles=read_static_asset("components/app-logs/app-logs.css")[1].decode("utf-8")
+        self.assertIn('id="app-log-jump"',page)
+        self.assertIn("var shouldFollow=atBottom()",script)
+        self.assertIn("else setUnreadBelow(true)",script)
+        self.assertNotIn("messages.scrollTop=messages.scrollHeight",script)
+        self.assertIn(".app-log-jump",styles)
+
     def test_watchlist_ui_projection_excludes_background_bookkeeping(self):
         with tempfile.TemporaryDirectory() as directory:
             database=os.path.join(directory,"users.sqlite")
