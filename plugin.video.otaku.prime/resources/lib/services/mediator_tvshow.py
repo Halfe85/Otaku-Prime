@@ -92,7 +92,7 @@ class TVShowMediatorService:
             source_media_format=show.get("source_format"),publish_year=show.get("publish_year"),
             overview=show.get("overview"),runtime_minutes=show.get("runtime_minutes"),
             air_status=show.get("air_status"),poster_url=show.get("poster_url"),
-            logo_url=show.get("logo_url"),banner_url=show.get("banner_url"),
+            clearlogo_url=show.get("clearlogo_url"),banner_url=show.get("banner_url"),
             genres=show.get("genres"),themes=show.get("themes"),
             age_rating=show.get("age_rating"),
             mature=show.get("mature") or item.get("is_adult"))

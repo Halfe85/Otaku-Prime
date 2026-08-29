@@ -118,7 +118,7 @@ class WatchlistTVShowMediatorTests(unittest.TestCase):
         placement=self.placement("simkl")
         placement["tv_show"].update({
             "poster_url":"https://img.example/poster.webp",
-            "logo_url":"https://img.example/logo.webp",
+            "clearlogo_url":"https://img.example/logo.webp",
             "banner_url":"https://img.example/banner.webp",
         })
         service=TVShowMediatorService(
@@ -129,7 +129,7 @@ class WatchlistTVShowMediatorTests(unittest.TestCase):
 
         self.assertEqual(1,result["placed"])
         self.assertEqual("https://img.example/poster.webp",series["poster_url"])
-        self.assertEqual("https://img.example/logo.webp",series["logo_url"])
+        self.assertEqual("https://img.example/logo.webp",series["clearlogo_url"])
         self.assertEqual("https://img.example/banner.webp",series["banner_url"])
 
     def test_anilist_is_used_when_simkl_is_absent(self):

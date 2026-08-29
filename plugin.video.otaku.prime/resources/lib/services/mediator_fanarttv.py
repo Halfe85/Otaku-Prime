@@ -55,7 +55,7 @@ class FanartTVClient:
 
     @property
     def configured(self):
-        return bool(self.api_key or self.client_key)
+        return bool(self.api_key)
 
     def tv(self,tvdb_id):
         key=str(tvdb_id or "").strip()
@@ -90,9 +90,9 @@ class FanartTVMediator:
     @staticmethod
     def artwork(payload):
         return {
-            "poster_url":_select(payload,("tvposter","seasonposter")),
-            "logo_url":_select(payload,("hdtvlogo","clearlogo")),
-            "banner_url":_select(payload,("showbackground","tvbanner")),
+            "poster_url":_select(payload,("tvposter",)),
+            "clearlogo_url":_select(payload,("hdtvlogo","clearlogo")),
+            "banner_url":_select(payload,("tvbanner","showbackground")),
         }
 
     def enrich(self,placement):

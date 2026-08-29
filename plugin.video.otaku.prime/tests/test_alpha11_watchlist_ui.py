@@ -106,9 +106,9 @@ class Alpha11WatchlistUITests(unittest.TestCase):
         self.assertIn('id="library-series-logo"',page)
         self.assertNotIn('<span class="library-modal-kicker">Prime library</span>',page)
         self.assertIn("item.poster_url",script)
-        self.assertIn("item.logo_url",script)
+        self.assertIn("item.clearlogo_url",script)
         self.assertIn("series.banner_url",script)
-        self.assertIn("series.logo_url",script)
+        self.assertIn("series.clearlogo_url",script)
         self.assertIn(".library-tile-poster",styles)
         self.assertIn(".library-series-hero",styles)
 

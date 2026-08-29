@@ -60,7 +60,7 @@ class LibraryCatalogTests(unittest.TestCase):
             runtime_minutes=24,
             air_status="airing",
             poster_url="https://img.example/poster.webp",
-            logo_url="https://img.example/logo.webp",
+            clearlogo_url="https://img.example/logo.webp",
             banner_url="https://img.example/banner.webp",
             genres=["Action","Fantasy"],
             themes=["Isekai","Magic"],
@@ -183,8 +183,28 @@ class LibraryCatalogTests(unittest.TestCase):
         detail=self.catalog.library_series_detail(self.series["local_id"])
 
         self.assertEqual("https://img.example/poster.webp",tile["poster_url"])
-        self.assertEqual("https://img.example/logo.webp",tile["logo_url"])
+        self.assertEqual("https://img.example/logo.webp",tile["clearlogo_url"])
         self.assertEqual("https://img.example/banner.webp",detail["banner_url"])
+
+    def test_legacy_logo_url_is_upgraded_to_explicit_clearlogo_url(self):
+        other=os.path.join(self.tmp.name,"legacy-artwork.sqlite")
+        with sqlite3.connect(other) as db:
+            db.execute("""CREATE TABLE tv_series(
+              local_id TEXT PRIMARY KEY,english_name TEXT,romaji_name TEXT,
+              root_simkl_id TEXT UNIQUE,logo_url TEXT,
+              created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+              updated_at TEXT DEFAULT CURRENT_TIMESTAMP)""")
+            db.execute("""INSERT INTO tv_series(
+              local_id,english_name,logo_url) VALUES(?,?,?)""",
+              ("abcdef","Legacy Series","https://img.example/legacy-logo.webp"))
+
+        CatalogStore(other,SegmentFactory()).initialize()
+
+        with sqlite3.connect(other) as db:
+            row=db.execute("""SELECT poster_url,clearlogo_url,banner_url
+              FROM tv_series WHERE local_id='abcdef'""").fetchone()
+        self.assertEqual(
+            (None,"https://img.example/legacy-logo.webp",None),row)
 
     def test_series_classification_is_projected_as_lists_and_binary_mature(self):
         tile=self.catalog.library_series()[0]

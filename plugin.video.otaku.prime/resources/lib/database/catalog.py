@@ -62,7 +62,7 @@ class CatalogStore:
               runtime_minutes INTEGER,
               air_status TEXT,
               poster_url TEXT,
-              logo_url TEXT,
+              clearlogo_url TEXT,
               banner_url TEXT,
               genres_json TEXT NOT NULL DEFAULT '[]',
               themes_json TEXT NOT NULL DEFAULT '[]',
@@ -230,7 +230,8 @@ class CatalogStore:
             """)
             existing_series_columns={row[1] for row in db.execute(
                 "PRAGMA table_info(tv_series)")}
-            artwork_upgrade=not {"poster_url","logo_url","banner_url"}.issubset(
+            legacy_logo_column="logo_url" in existing_series_columns
+            artwork_upgrade=not {"poster_url","clearlogo_url","banner_url"}.issubset(
                 existing_series_columns)
             classification_upgrade=not {
                 "genres_json","themes_json","age_rating","mature"
@@ -240,10 +241,14 @@ class CatalogStore:
                 ("source_provider","TEXT"),("source_media_format","TEXT"),
                 ("publish_year","INTEGER"),("overview","TEXT"),
                 ("runtime_minutes","INTEGER"),("air_status","TEXT"),
-                ("poster_url","TEXT"),("logo_url","TEXT"),("banner_url","TEXT"),
+                ("poster_url","TEXT"),("clearlogo_url","TEXT"),("banner_url","TEXT"),
                 ("genres_json","TEXT NOT NULL DEFAULT '[]'"),
                 ("themes_json","TEXT NOT NULL DEFAULT '[]'"),("age_rating","TEXT"),
                 ("mature","INTEGER NOT NULL DEFAULT 0 CHECK(mature IN(0,1))")))
+            if legacy_logo_column:
+                db.execute("""UPDATE tv_series
+                  SET clearlogo_url=COALESCE(clearlogo_url,logo_url)
+                  WHERE logo_url IS NOT NULL""")
             self._add_columns(db,"seasons",(
                 ("provider_path","TEXT"),("placement_source","TEXT"),
                 ("first_episode","INTEGER"),("last_episode","INTEGER"),
@@ -403,7 +408,7 @@ class CatalogStore:
                              tvdb_id=None,root_anilist_id=None,source_provider=None,
                              source_media_format=None,publish_year=None,overview=None,
                              runtime_minutes=None,air_status=None,poster_url=None,
-                             logo_url=None,banner_url=None,genres=None,themes=None,
+                             clearlogo_url=None,banner_url=None,genres=None,themes=None,
                              age_rating=None,mature=False):
         """Resolve a Prime series while treating remote IDs as replaceable mappings."""
         root=str(root_simkl_id) if root_simkl_id not in (None,"") else None
@@ -442,7 +447,8 @@ class CatalogStore:
                   source_media_format=COALESCE(source_media_format,?),
                   publish_year=COALESCE(?,publish_year),overview=COALESCE(?,overview),
                   runtime_minutes=COALESCE(?,runtime_minutes),air_status=COALESCE(?,air_status),
-                  poster_url=COALESCE(?,poster_url),logo_url=COALESCE(?,logo_url),
+                  poster_url=COALESCE(?,poster_url),
+                  clearlogo_url=COALESCE(?,clearlogo_url),
                   banner_url=COALESCE(?,banner_url),
                   genres_json=CASE WHEN ?='[]' THEN genres_json ELSE ? END,
                   themes_json=CASE WHEN ?='[]' THEN themes_json ELSE ? END,
@@ -450,17 +456,17 @@ class CatalogStore:
                   updated_at=CURRENT_TIMESTAMP WHERE local_id=?""",
                   (english_name,romaji_name,root,tvdb,anilist,source_provider,
                    source_media_format,year,overview,runtime,air_status,poster_url,
-                   logo_url,banner_url,genres_json,genres_json,themes_json,themes_json,
+                   clearlogo_url,banner_url,genres_json,genres_json,themes_json,themes_json,
                    clean_remote_text(age_rating),mature_value,row["local_id"]))
                 return dict(db.execute("SELECT * FROM tv_series WHERE local_id=?",(row["local_id"],)).fetchone())
             local_id=self._new_local_id(db,"tv_series")
             db.execute("""INSERT INTO tv_series(local_id,english_name,romaji_name,
               root_simkl_id,root_anilist_id,tvdb_id,source_provider,source_media_format,
-              publish_year,overview,runtime_minutes,air_status,poster_url,logo_url,banner_url,
+              publish_year,overview,runtime_minutes,air_status,poster_url,clearlogo_url,banner_url,
               genres_json,themes_json,age_rating,mature)
               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",(local_id,english_name,romaji_name,root,anilist,
               tvdb,source_provider,source_media_format,year,overview,runtime,air_status,
-              poster_url,logo_url,banner_url,genres_json,themes_json,
+              poster_url,clearlogo_url,banner_url,genres_json,themes_json,
               clean_remote_text(age_rating),mature_value))
             return dict(db.execute("SELECT * FROM tv_series WHERE local_id=?",(local_id,)).fetchone())
 

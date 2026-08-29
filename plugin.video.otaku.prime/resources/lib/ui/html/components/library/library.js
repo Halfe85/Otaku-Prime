@@ -184,8 +184,8 @@
       var content = element("div", "library-tile-content");
       var top = element("div", "library-tile-top");
       var fallbackTitle = element("h3", "library-tile-title", title);
-      if (item.logo_url) {
-        var logo = artworkImage(item.logo_url,"library-tile-logo",title,function () {
+      if (item.clearlogo_url) {
+        var logo = artworkImage(item.clearlogo_url,"library-tile-logo",title,function () {
           tile.classList.add("has-logo");
         });
         top.appendChild(logo);
@@ -257,14 +257,14 @@
       banner.onerror = function () { banner.hidden = true; hero.classList.remove("has-banner"); };
       banner.src = String(series.banner_url);
     }
-    if (series.logo_url) {
+    if (series.clearlogo_url) {
       logo.onload = function () {
         logo.hidden = false;
         logo.alt = title;
         hero.classList.add("has-logo");
       };
       logo.onerror = function () { logo.hidden = true; hero.classList.remove("has-logo"); };
-      logo.src = String(series.logo_url);
+      logo.src = String(series.clearlogo_url);
     }
   }
 
