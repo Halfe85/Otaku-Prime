@@ -28,6 +28,11 @@ class PendingProcessor:
         raise MediatorMetadataPending("Episode metadata has not been published")
 
 
+class HelperProcessor:
+    def __init__(self,placement): self.placement=placement
+    def resolve(self,item): return self.placement
+
+
 class StructurallyPendingProcessor:
     def resolve(self,item):
         placement={
@@ -43,6 +48,14 @@ class StructurallyPendingProcessor:
         }
         raise MediatorMetadataPending(
             "Episode metadata has not been published",placement=placement)
+
+
+class VanishingWatchlistProcessor:
+    def __init__(self,watchlist,placement):
+        self.watchlist=watchlist; self.placement=placement
+    def resolve(self,item):
+        self.watchlist.replace_provider_snapshot("anilist",[])
+        return self.placement
 
 
 class AniListCastClient:
@@ -100,6 +113,24 @@ class WatchlistTVShowMediatorTests(unittest.TestCase):
         self.assertEqual((17,41,42,"simkl"),(season["season_number"],season["first_episode"],season["last_episode"],season["provider_path"]))
         self.assertEqual([(1,41),(2,42)],[(row["source_episode_number"],row["episode_number"]) for row in episodes])
         self.assertEqual(1,self.watchlist.item(self.prime_id)["added_to_library"])
+
+    def test_mediator_persists_series_artwork(self):
+        placement=self.placement("simkl")
+        placement["tv_show"].update({
+            "poster_url":"https://img.example/poster.webp",
+            "logo_url":"https://img.example/logo.webp",
+            "banner_url":"https://img.example/banner.webp",
+        })
+        service=TVShowMediatorService(
+            self.watchlist,self.catalog,client=object(),processor=HelperProcessor(placement))
+
+        result=service.run_once()
+        series=self.catalog.list_series()[0]
+
+        self.assertEqual(1,result["placed"])
+        self.assertEqual("https://img.example/poster.webp",series["poster_url"])
+        self.assertEqual("https://img.example/logo.webp",series["logo_url"])
+        self.assertEqual("https://img.example/banner.webp",series["banner_url"])
 
     def test_anilist_is_used_when_simkl_is_absent(self):
         item=self.watchlist.list_all()[0]; item["simkl_id"]=None
@@ -200,6 +231,26 @@ class WatchlistTVShowMediatorTests(unittest.TestCase):
         # a completely published library season.
         self.watchlist.initialize()
         self.assertEqual(0,self.watchlist.item(self.prime_id)["added_to_library"])
+
+    def test_vanished_watchlist_row_cancels_stale_worker_without_catalog_writes(self):
+        processor=VanishingWatchlistProcessor(self.watchlist,self.placement())
+        service=TVShowMediatorService(
+            self.watchlist,self.catalog,client=object(),processor=processor)
+
+        with self.assertLogs("otaku_prime.services-mediator_tvshow",level="INFO") as logs:
+            result=service.run_once()
+
+        self.assertEqual({"placed":0,"existing":0,"deferred":0,"failed":0},result)
+        self.assertEqual([],self.catalog.list_series())
+        self.assertTrue(any("discarded stale Prime item" in message for message in logs.output))
+
+    def test_stopped_mediator_cannot_be_restarted_by_late_watchdog_callback(self):
+        service=TVShowMediatorService(
+            self.watchlist,self.catalog,client=object(),processor=PendingProcessor())
+
+        self.assertTrue(service.stop(timeout=0))
+        self.assertEqual(
+            {"scheduled":False,"busy":False,"stopping":True},service.start())
 
 
 if __name__=="__main__": unittest.main()

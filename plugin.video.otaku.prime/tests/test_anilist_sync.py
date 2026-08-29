@@ -49,6 +49,7 @@ class AniListSyncTests(unittest.TestCase):
 
     def test_preferred_and_alternative_titles_are_stored_for_ui_and_search(self):
         self.importer.sync()
+        self.items.set_mature(1)
         rows={row["anilist_id"]:row for row in self.items.list_ui_items()}
         self.assertEqual("Preferred Show",rows["1"]["preferred_name"])
         self.assertEqual(["Show Alias","Show & Friends"],rows["1"]["alternative_titles"])

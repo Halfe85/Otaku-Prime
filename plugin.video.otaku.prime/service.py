@@ -184,8 +184,9 @@ def main() -> None:
     monitor.waitForAbort()
 
     server.shutdown()
-    watchlist_watchdog.stop()
-    tvshow_mediator.stop()
+    # Watchdog shutdown retires its identity and mediator workers before Kodi
+    # can start a replacement addon service against the same SQLite database.
+    watchlist_watchdog.stop(timeout=35)
     server.server_close()
     server_thread.join(timeout=5)
 

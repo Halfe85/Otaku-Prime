@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import secrets
 import sqlite3
+import json
 from contextlib import contextmanager
 
 from resources.lib.logging_config import get_logger
@@ -60,6 +61,13 @@ class CatalogStore:
               overview TEXT,
               runtime_minutes INTEGER,
               air_status TEXT,
+              poster_url TEXT,
+              logo_url TEXT,
+              banner_url TEXT,
+              genres_json TEXT NOT NULL DEFAULT '[]',
+              themes_json TEXT NOT NULL DEFAULT '[]',
+              age_rating TEXT,
+              mature INTEGER NOT NULL DEFAULT 0 CHECK(mature IN(0,1)),
               created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
               updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
@@ -120,6 +128,9 @@ class CatalogStore:
               local_id TEXT PRIMARY KEY
                 CHECK(length(local_id)=6 AND local_id NOT GLOB '*[^0-9a-f]*'),
               anilist_id TEXT UNIQUE,
+              mal_id TEXT UNIQUE,
+              kitsu_id TEXT UNIQUE,
+              simkl_id TEXT UNIQUE,
               name TEXT NOT NULL,
               trivia TEXT,
               date_of_birth TEXT,
@@ -135,6 +146,9 @@ class CatalogStore:
               local_id TEXT PRIMARY KEY
                 CHECK(length(local_id)=6 AND local_id NOT GLOB '*[^0-9a-f]*'),
               anilist_id TEXT UNIQUE,
+              mal_id TEXT UNIQUE,
+              kitsu_id TEXT UNIQUE,
+              simkl_id TEXT UNIQUE,
               name TEXT NOT NULL,
               trivia TEXT,
               image_url TEXT,
@@ -214,11 +228,22 @@ class CatalogStore:
               ON character_media_links(character_local_id,related_episode_id)
               WHERE related_episode_id IS NOT NULL;
             """)
+            existing_series_columns={row[1] for row in db.execute(
+                "PRAGMA table_info(tv_series)")}
+            artwork_upgrade=not {"poster_url","logo_url","banner_url"}.issubset(
+                existing_series_columns)
+            classification_upgrade=not {
+                "genres_json","themes_json","age_rating","mature"
+            }.issubset(existing_series_columns)
             self._add_columns(db,"tv_series",(
                 ("tvdb_id","TEXT"),("root_anilist_id","TEXT"),
                 ("source_provider","TEXT"),("source_media_format","TEXT"),
                 ("publish_year","INTEGER"),("overview","TEXT"),
-                ("runtime_minutes","INTEGER"),("air_status","TEXT")))
+                ("runtime_minutes","INTEGER"),("air_status","TEXT"),
+                ("poster_url","TEXT"),("logo_url","TEXT"),("banner_url","TEXT"),
+                ("genres_json","TEXT NOT NULL DEFAULT '[]'"),
+                ("themes_json","TEXT NOT NULL DEFAULT '[]'"),("age_rating","TEXT"),
+                ("mature","INTEGER NOT NULL DEFAULT 0 CHECK(mature IN(0,1))")))
             self._add_columns(db,"seasons",(
                 ("provider_path","TEXT"),("placement_source","TEXT"),
                 ("first_episode","INTEGER"),("last_episode","INTEGER"),
@@ -227,6 +252,15 @@ class CatalogStore:
             self._add_columns(db,"episodes",(
                 ("source_episode_number","INTEGER NOT NULL DEFAULT 1"),
                 ("title","TEXT"),("overview","TEXT"),("runtime_minutes","INTEGER")))
+            self._add_columns(db,"staff",(
+                ("mal_id","TEXT"),("kitsu_id","TEXT"),("simkl_id","TEXT")))
+            self._add_columns(db,"characters",(
+                ("mal_id","TEXT"),("kitsu_id","TEXT"),("simkl_id","TEXT")))
+            for table in ("staff","characters"):
+                for provider in ("mal","kitsu","simkl"):
+                    db.execute("""CREATE UNIQUE INDEX IF NOT EXISTS ux_{}_{}
+                      ON {}({}_id) WHERE {}_id IS NOT NULL""".format(
+                        table,provider,table,provider,provider))
             db.execute("""CREATE UNIQUE INDEX IF NOT EXISTS ux_tv_series_tvdb
               ON tv_series(tvdb_id) WHERE tvdb_id IS NOT NULL""")
             db.execute("""CREATE UNIQUE INDEX IF NOT EXISTS ux_tv_series_anilist
@@ -240,6 +274,26 @@ class CatalogStore:
                   updated_at=CURRENT_TIMESTAMP""")
                 LOGGER.warning(
                     "Discarded legacy series_cast data; queued Prime library for staff/character rebuild")
+            if artwork_upgrade and db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='watchlist_items'"
+            ).fetchone():
+                db.execute("""UPDATE watchlist_items SET added_to_library=0,
+                  mediator_ready=1,mediator_status='PARTIAL',
+                  mediator_error='Series artwork refresh required',updated_at=CURRENT_TIMESTAMP
+                  WHERE EXISTS(SELECT 1 FROM seasons s
+                    WHERE s.watchlist_local_id=watchlist_items.local_id)""")
+                LOGGER.info("Queued existing Prime library entries for poster/banner artwork refresh")
+            if classification_upgrade and db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='watchlist_items'"
+            ).fetchone():
+                db.execute("""UPDATE watchlist_items SET added_to_library=0,
+                  mediator_ready=1,mediator_status='PARTIAL',
+                  mediator_error='Series classification refresh required',
+                  updated_at=CURRENT_TIMESTAMP
+                  WHERE EXISTS(SELECT 1 FROM seasons s
+                    WHERE s.watchlist_local_id=watchlist_items.local_id)""")
+                LOGGER.info(
+                    "Queued existing Prime library entries for genres/themes/age-rating refresh")
             self._repair_encoded_text(db)
 
     @staticmethod
@@ -348,7 +402,9 @@ class CatalogStore:
     def get_or_create_series(self,english_name=None,romaji_name=None,root_simkl_id=None,
                              tvdb_id=None,root_anilist_id=None,source_provider=None,
                              source_media_format=None,publish_year=None,overview=None,
-                             runtime_minutes=None,air_status=None):
+                             runtime_minutes=None,air_status=None,poster_url=None,
+                             logo_url=None,banner_url=None,genres=None,themes=None,
+                             age_rating=None,mature=False):
         """Resolve a Prime series while treating remote IDs as replaceable mappings."""
         root=str(root_simkl_id) if root_simkl_id not in (None,"") else None
         tvdb=str(tvdb_id) if tvdb_id not in (None,"") else None
@@ -358,6 +414,9 @@ class CatalogStore:
         overview=clean_remote_text(overview)
         year=int(publish_year) if publish_year not in (None,"") else None
         runtime=int(runtime_minutes) if runtime_minutes not in (None,"") else None
+        genres_json=self._encode_terms(genres)
+        themes_json=self._encode_terms(themes)
+        mature_value=int(bool(mature))
         with self._connection() as db:
             root_row=db.execute("SELECT * FROM tv_series WHERE root_simkl_id=?",(root,)).fetchone() if root else None
             tvdb_row=db.execute("SELECT * FROM tv_series WHERE tvdb_id=?",(tvdb,)).fetchone() if tvdb else None
@@ -383,17 +442,48 @@ class CatalogStore:
                   source_media_format=COALESCE(source_media_format,?),
                   publish_year=COALESCE(?,publish_year),overview=COALESCE(?,overview),
                   runtime_minutes=COALESCE(?,runtime_minutes),air_status=COALESCE(?,air_status),
+                  poster_url=COALESCE(?,poster_url),logo_url=COALESCE(?,logo_url),
+                  banner_url=COALESCE(?,banner_url),
+                  genres_json=CASE WHEN ?='[]' THEN genres_json ELSE ? END,
+                  themes_json=CASE WHEN ?='[]' THEN themes_json ELSE ? END,
+                  age_rating=COALESCE(?,age_rating),mature=MAX(mature,?),
                   updated_at=CURRENT_TIMESTAMP WHERE local_id=?""",
                   (english_name,romaji_name,root,tvdb,anilist,source_provider,
-                   source_media_format,year,overview,runtime,air_status,row["local_id"]))
+                   source_media_format,year,overview,runtime,air_status,poster_url,
+                   logo_url,banner_url,genres_json,genres_json,themes_json,themes_json,
+                   clean_remote_text(age_rating),mature_value,row["local_id"]))
                 return dict(db.execute("SELECT * FROM tv_series WHERE local_id=?",(row["local_id"],)).fetchone())
             local_id=self._new_local_id(db,"tv_series")
             db.execute("""INSERT INTO tv_series(local_id,english_name,romaji_name,
               root_simkl_id,root_anilist_id,tvdb_id,source_provider,source_media_format,
-              publish_year,overview,runtime_minutes,air_status)
-              VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",(local_id,english_name,romaji_name,root,anilist,
-              tvdb,source_provider,source_media_format,year,overview,runtime,air_status))
+              publish_year,overview,runtime_minutes,air_status,poster_url,logo_url,banner_url,
+              genres_json,themes_json,age_rating,mature)
+              VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",(local_id,english_name,romaji_name,root,anilist,
+              tvdb,source_provider,source_media_format,year,overview,runtime,air_status,
+              poster_url,logo_url,banner_url,genres_json,themes_json,
+              clean_remote_text(age_rating),mature_value))
             return dict(db.execute("SELECT * FROM tv_series WHERE local_id=?",(local_id,)).fetchone())
+
+    @staticmethod
+    def _encode_terms(values):
+        if values in (None,""): return "[]"
+        if isinstance(values,str):
+            try: values=json.loads(values)
+            except (TypeError,ValueError,json.JSONDecodeError): values=[values]
+        if not isinstance(values,(list,tuple,set)): values=[values]
+        result=[]; seen=set()
+        for value in values:
+            text=clean_remote_text(value)
+            text=str(text).strip() if text not in (None,"") else ""
+            key=text.casefold()
+            if text and key not in seen: result.append(text); seen.add(key)
+        return json.dumps(result,ensure_ascii=False,separators=(",",":"))
+
+    @staticmethod
+    def _decode_terms(value):
+        try: result=json.loads(value or "[]")
+        except (TypeError,ValueError,json.JSONDecodeError): result=[]
+        return result if isinstance(result,list) else []
 
     @staticmethod
     def _credit_entity(entry,key,legacy_name):
@@ -404,13 +494,22 @@ class CatalogStore:
             result["name"]=(entry or {}).get(legacy_name)
         return result
 
-    def _upsert_staff(self,db,value):
+    def _upsert_staff(self,db,value,source_provider=None):
         name=str(clean_remote_text((value or {}).get("name")) or "").strip()
         if not name: return None
-        anilist_id=(value or {}).get("anilist_id")
-        anilist_id=str(anilist_id) if anilist_id not in (None,"") else None
-        row=(db.execute("SELECT * FROM staff WHERE anilist_id=?",(anilist_id,)).fetchone()
-             if anilist_id else db.execute(
+        ids={provider:(value or {}).get(provider+"_id")
+             for provider in ("anilist","mal","kitsu","simkl")}
+        if source_provider in ids and ids[source_provider] in (None,""):
+            ids[source_provider]=(value or {}).get("provider_id")
+        ids={provider:(str(remote_id) if remote_id not in (None,"") else None)
+             for provider,remote_id in ids.items()}
+        row=None
+        for provider,remote_id in ids.items():
+            if remote_id:
+                row=db.execute("SELECT * FROM staff WHERE {}_id=?".format(provider),
+                               (remote_id,)).fetchone()
+                if row: break
+        row=(row or db.execute(
                  "SELECT * FROM staff WHERE name=? COLLATE NOCASE ORDER BY local_id LIMIT 1",
                  (name,)).fetchone())
         trivia=clean_remote_text((value or {}).get("trivia"))
@@ -420,37 +519,56 @@ class CatalogStore:
         except (TypeError,ValueError): age=None
         image=(value or {}).get("image_url")
         if row:
-            db.execute("""UPDATE staff SET anilist_id=COALESCE(?,anilist_id),name=?,
+            db.execute("""UPDATE staff SET anilist_id=COALESCE(?,anilist_id),
+              mal_id=COALESCE(?,mal_id),kitsu_id=COALESCE(?,kitsu_id),
+              simkl_id=COALESCE(?,simkl_id),name=?,
               trivia=COALESCE(?,trivia),date_of_birth=COALESCE(?,date_of_birth),
               date_of_death=COALESCE(?,date_of_death),age=COALESCE(?,age),
               image_url=COALESCE(?,image_url),updated_at=CURRENT_TIMESTAMP WHERE local_id=?""",
-              (anilist_id,name,trivia,dob,dod,age,image,row["local_id"]))
+              (ids["anilist"],ids["mal"],ids["kitsu"],ids["simkl"],name,
+               trivia,dob,dod,age,image,row["local_id"]))
             return row["local_id"]
         local_id=self._new_local_id(db,"staff")
-        db.execute("""INSERT INTO staff(local_id,anilist_id,name,trivia,date_of_birth,
-          date_of_death,age,image_url) VALUES(?,?,?,?,?,?,?,?)""",
-          (local_id,anilist_id,name,trivia,dob,dod,age,image))
+        db.execute("""INSERT INTO staff(local_id,anilist_id,mal_id,kitsu_id,simkl_id,
+          name,trivia,date_of_birth,date_of_death,age,image_url)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+          (local_id,ids["anilist"],ids["mal"],ids["kitsu"],ids["simkl"],
+           name,trivia,dob,dod,age,image))
         return local_id
 
-    def _upsert_character(self,db,value):
+    def _upsert_character(self,db,value,source_provider=None):
         name=str(clean_remote_text((value or {}).get("name")) or "").strip()
         if not name: return None
-        anilist_id=(value or {}).get("anilist_id")
-        anilist_id=str(anilist_id) if anilist_id not in (None,"") else None
-        row=(db.execute("SELECT * FROM characters WHERE anilist_id=?",(anilist_id,)).fetchone()
-             if anilist_id else db.execute(
+        ids={provider:(value or {}).get(provider+"_id")
+             for provider in ("anilist","mal","kitsu","simkl")}
+        if source_provider in ids and ids[source_provider] in (None,""):
+            ids[source_provider]=(value or {}).get("provider_id")
+        ids={provider:(str(remote_id) if remote_id not in (None,"") else None)
+             for provider,remote_id in ids.items()}
+        row=None
+        for provider,remote_id in ids.items():
+            if remote_id:
+                row=db.execute("SELECT * FROM characters WHERE {}_id=?".format(provider),
+                               (remote_id,)).fetchone()
+                if row: break
+        row=(row or db.execute(
                  "SELECT * FROM characters WHERE name=? COLLATE NOCASE ORDER BY local_id LIMIT 1",
                  (name,)).fetchone())
         trivia=clean_remote_text((value or {}).get("trivia")); image=(value or {}).get("image_url")
         if row:
-            db.execute("""UPDATE characters SET anilist_id=COALESCE(?,anilist_id),name=?,
+            db.execute("""UPDATE characters SET anilist_id=COALESCE(?,anilist_id),
+              mal_id=COALESCE(?,mal_id),kitsu_id=COALESCE(?,kitsu_id),
+              simkl_id=COALESCE(?,simkl_id),name=?,
               trivia=COALESCE(?,trivia),image_url=COALESCE(?,image_url),
               updated_at=CURRENT_TIMESTAMP WHERE local_id=?""",
-              (anilist_id,name,trivia,image,row["local_id"]))
+              (ids["anilist"],ids["mal"],ids["kitsu"],ids["simkl"],name,
+               trivia,image,row["local_id"]))
             return row["local_id"]
         local_id=self._new_local_id(db,"characters")
-        db.execute("""INSERT INTO characters(local_id,anilist_id,name,trivia,image_url)
-          VALUES(?,?,?,?,?)""",(local_id,anilist_id,name,trivia,image))
+        db.execute("""INSERT INTO characters(local_id,anilist_id,mal_id,kitsu_id,simkl_id,
+          name,trivia,image_url) VALUES(?,?,?,?,?,?,?,?)""",
+          (local_id,ids["anilist"],ids["mal"],ids["kitsu"],ids["simkl"],
+           name,trivia,image))
         return local_id
 
     @staticmethod
@@ -483,12 +601,12 @@ class CatalogStore:
             for index,entry in enumerate(credits):
                 staff_value=self._credit_entity(entry,"person","person_name")
                 character_value=self._credit_entity(entry,"character","character_name")
-                character_id=self._upsert_character(db,character_value)
-                staff_id=self._upsert_staff(db,staff_value)
+                provider=str((entry or {}).get("source_provider") or source_provider or "") or None
+                character_id=self._upsert_character(db,character_value,provider)
+                staff_id=self._upsert_staff(db,staff_value,provider)
                 if not character_id and not staff_id: continue
                 credit_type=str((entry or {}).get("credit_type") or "voice_actor")
                 language=str((entry or {}).get("language") or "")
-                provider=str((entry or {}).get("source_provider") or source_provider or "") or None
                 sort_order=int((entry or {}).get("sort_order",index))
                 if staff_id and character_id:
                     db.execute("""INSERT INTO staff_character_links(staff_local_id,
@@ -519,10 +637,14 @@ class CatalogStore:
         rows=db.execute("""SELECT staff_link.credit_type,staff_link.language,
           COALESCE(staff_link.source_provider,link.source_provider) AS source_provider,
           link.sort_order,staff.local_id AS staff_local_id,staff.anilist_id AS staff_anilist_id,
+          staff.mal_id AS staff_mal_id,staff.kitsu_id AS staff_kitsu_id,
+          staff.simkl_id AS staff_simkl_id,
           staff.name AS staff_name,staff.trivia AS staff_trivia,
           staff.date_of_birth,staff.date_of_death,staff.age,staff.image_url AS staff_image_url,
           characters.local_id AS character_local_id,
-          characters.anilist_id AS character_anilist_id,characters.name AS character_name,
+          characters.anilist_id AS character_anilist_id,
+          characters.mal_id AS character_mal_id,characters.kitsu_id AS character_kitsu_id,
+          characters.simkl_id AS character_simkl_id,characters.name AS character_name,
           characters.trivia AS character_trivia,characters.image_url AS character_image_url
           FROM character_media_links link
           JOIN characters ON characters.local_id=link.character_local_id
@@ -539,18 +661,25 @@ class CatalogStore:
                 "language":row["language"] or "",
                 "source_provider":row["source_provider"],"sort_order":row["sort_order"],
                 "person":({"local_id":row["staff_local_id"],
-                           "anilist_id":row["staff_anilist_id"],"name":row["staff_name"],
+                           "anilist_id":row["staff_anilist_id"],"mal_id":row["staff_mal_id"],
+                           "kitsu_id":row["staff_kitsu_id"],"simkl_id":row["staff_simkl_id"],
+                           "name":row["staff_name"],
                            "trivia":row["staff_trivia"],"date_of_birth":row["date_of_birth"],
                            "date_of_death":row["date_of_death"],"age":row["age"],
                            "image_url":row["staff_image_url"]}
                           if row["staff_local_id"] else {}),
                 "character":{"local_id":row["character_local_id"],
                              "anilist_id":row["character_anilist_id"],
+                             "mal_id":row["character_mal_id"],
+                             "kitsu_id":row["character_kitsu_id"],
+                             "simkl_id":row["character_simkl_id"],
                              "name":row["character_name"],"trivia":row["character_trivia"],
                              "image_url":row["character_image_url"]},
             })
         staff_rows=db.execute("""SELECT link.credit_type,link.language,link.source_provider,
           link.sort_order,staff.local_id AS staff_local_id,staff.anilist_id AS staff_anilist_id,
+          staff.mal_id AS staff_mal_id,staff.kitsu_id AS staff_kitsu_id,
+          staff.simkl_id AS staff_simkl_id,
           staff.name AS staff_name,staff.trivia AS staff_trivia,staff.date_of_birth,
           staff.date_of_death,staff.age,staff.image_url AS staff_image_url
           FROM staff_media_links link JOIN staff ON staff.local_id=link.staff_local_id
@@ -563,7 +692,9 @@ class CatalogStore:
                 "language":row["language"] or "",
                 "source_provider":row["source_provider"],"sort_order":row["sort_order"],
                 "person":{"local_id":row["staff_local_id"],
-                          "anilist_id":row["staff_anilist_id"],"name":row["staff_name"],
+                          "anilist_id":row["staff_anilist_id"],"mal_id":row["staff_mal_id"],
+                          "kitsu_id":row["staff_kitsu_id"],"simkl_id":row["staff_simkl_id"],
+                          "name":row["staff_name"],
                           "trivia":row["staff_trivia"],"date_of_birth":row["date_of_birth"],
                           "date_of_death":row["date_of_death"],"age":row["age"],
                           "image_url":row["staff_image_url"]},
@@ -773,6 +904,9 @@ class CatalogStore:
                     years=[int(str(value)[:4]) for value in dates if str(value)[:4].isdigit()]
                     year=min(years) if years else None
                 item=dict(series)
+                item["genres"]=self._decode_terms(series.get("genres_json"))
+                item["themes"]=self._decode_terms(series.get("themes_json"))
+                item.pop("genres_json",None); item.pop("themes_json",None)
                 item.update({
                     "title":series.get("english_name") or series.get("romaji_name") or "Untitled series",
                     "publish_year":year,
@@ -792,6 +926,8 @@ class CatalogStore:
             if not row:
                 return None
             series=dict(row)
+            series["genres"]=self._decode_terms(series.pop("genres_json",None))
+            series["themes"]=self._decode_terms(series.pop("themes_json",None))
             release_fields=self._watchlist_release_fields(db)
             cast=self._credits_for_media(db,"related_series_id",series["local_id"])
             seasons=[]

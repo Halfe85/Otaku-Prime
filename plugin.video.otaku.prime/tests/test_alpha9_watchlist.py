@@ -67,5 +67,30 @@ class Alpha9CanonicalWatchlistTests(unittest.TestCase):
               {"simkl":31,"anilist":1,"kitsu":21})])
         self.assertEqual(2,len(self.store.list_all()))
 
+    def test_mature_switch_is_stored_as_zero_or_one_and_gates_ui_mediation(self):
+        adult=entry(2,"PLANNING",0,{"anilist":2},title="Adult title")
+        adult["is_adult"]=True
+        self.store.replace_provider_snapshot("anilist",[
+            entry(1,"CURRENT",1,{"anilist":1},title="General title"),adult])
+        self.store.finalize_merge()
+        adult_id=next(row["local_id"] for row in self.store.list_all()
+                      if row["anilist_id"]=="2")
+        self.store.mark_mediator_ready(adult_id,True)
+
+        self.assertEqual({"mature":0},self.store.preferences())
+        self.assertEqual(["1"],[row["anilist_id"] for row in self.store.list_ui_items()])
+        self.assertNotIn(adult_id,{row["local_id"] for row in self.store.list_mediator_ready()})
+
+        self.assertEqual({"mature":1},self.store.set_mature("1"))
+        self.assertEqual({"1","2"},{row["anilist_id"] for row in self.store.list_ui_items()})
+        self.assertIn(adult_id,{row["local_id"] for row in self.store.list_mediator_ready()})
+
+        self.assertEqual({"mature":0},self.store.set_mature(0))
+        self.assertEqual(0,self.store.item(adult_id)["mediator_ready"])
+
+    def test_mature_switch_rejects_non_binary_values(self):
+        with self.assertRaises(ValueError): self.store.set_mature(2)
+        with self.assertRaises(ValueError): self.store.set_mature("maybe")
+
 
 if __name__=="__main__": unittest.main()

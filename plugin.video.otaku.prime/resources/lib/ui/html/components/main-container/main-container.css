@@ -23,3 +23,14 @@
 .bottombar-status { min-width:150px;text-align:center;color:#c4cbda; }
 .bottom-actions { justify-self:end; }
 @media (max-width: 760px) { .brand-row { min-height: 58px;flex-wrap:wrap; } .brand p, .user-name { display: none; } .topbar-search { order:3;width:100%;margin:0; }.topbar-search:has(input:disabled) { display:none; } .main-content { padding:10px 10px 12px; } .bottombar .bottom-actions { display:none; } }
+.preference-card { grid-column: 1 / -1; }
+.preference-switch { display: inline-flex; align-items: center; gap: .75rem; cursor: pointer; }
+.preference-switch input { position: absolute; opacity: 0; pointer-events: none; }
+.preference-switch-track { width: 2.75rem; height: 1.5rem; padding: .15rem; border-radius: 999px; background: rgba(255,255,255,.18); transition: background .18s ease; }
+.preference-switch-track span { display: block; width: 1.2rem; height: 1.2rem; border-radius: 50%; background: #fff; transition: transform .18s ease; }
+.preference-switch input:checked + .preference-switch-track { background: var(--accent, #8b5cf6); }
+.preference-switch input:checked + .preference-switch-track span { transform: translateX(1.25rem); }
+.preference-switch input:focus-visible + .preference-switch-track { outline: 2px solid #fff; outline-offset: 3px; }
+.preference-switch input:disabled + .preference-switch-track { opacity: .55; }
+.preference-switch-value { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.preference-feedback { min-height: 1.25em; margin-bottom: 0; }

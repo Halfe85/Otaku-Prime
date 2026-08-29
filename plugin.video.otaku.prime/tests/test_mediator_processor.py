@@ -50,6 +50,23 @@ class MediatorProcessorTests(unittest.TestCase):
         self.assertEqual("anilist+mal",result["provider_path"]); self.assertEqual(["anilist","mal"],result["provider_consensus"])
         self.assertEqual(0,endpoints["kitsu"].calls)
 
+    def test_anilist_and_mal_metadata_lists_are_combined_and_mature_is_orred(self):
+        anilist=placement("anilist"); mal=placement("mal")
+        anilist["tv_show"].update({"genres":["Action"],"themes":["Isekai"],
+                                    "mature":False})
+        mal["tv_show"].update({"genres":["Action","Fantasy"],"themes":[],
+                                "age_rating":"R+","mature":True})
+        endpoints={"simkl":Endpoint("simkl",error="down"),
+                   "anilist":Endpoint("anilist",anilist),"mal":Endpoint("mal",mal),
+                   "kitsu":Endpoint("kitsu",error="unused")}
+
+        show=MediatorProcessor(endpoints=endpoints).resolve(self.item())["tv_show"]
+
+        self.assertEqual(["Action","Fantasy"],show["genres"])
+        self.assertEqual(["Isekai"],show["themes"])
+        self.assertEqual("R+",show["age_rating"])
+        self.assertTrue(show["mature"])
+
     def test_anilist_composite_accepts_partial_mal_episode_coverage(self):
         anilist=placement("anilist",season=0)
         mal=placement("mal",season=0); mal["episodes"]=mal["episodes"][:1]

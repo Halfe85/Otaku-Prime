@@ -366,6 +366,10 @@
       pageStatus.textContent = "";
     }
   });
+  window.addEventListener("prime:maturechange", function () {
+    loaded = false;
+    if (active()) loadEntries();
+  });
   document.addEventListener("visibilitychange", function () { if (active()) loadEntries(); });
   window.addEventListener("beforeunload", function () { stopped = true; });
   loadEntries();

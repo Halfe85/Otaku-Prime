@@ -228,6 +228,7 @@ def create_server(host: str, port: int, user_store, app_log_store=None,
                 message=message,
                 active_tab=active_tab,
                 watchlist_accounts=accounts,
+                watchlist_preferences=watchlist_items.preferences(),
             )
 
         def do_GET(self):
@@ -264,6 +265,12 @@ def create_server(host: str, port: int, user_store, app_log_store=None,
                 if not self._current_user():
                     self._send_json(401,{"ok":False,"message":"Sign in again."}); return
                 self._send_json(200,{"ok":True,"entries":watchlist_items.list_ui_items()})
+                return
+
+            if path == "/api/preferences":
+                if not self._current_user():
+                    self._send_json(401,{"ok":False,"message":"Sign in again."}); return
+                self._send_json(200,{"ok":True,"preferences":watchlist_items.preferences()})
                 return
 
             if path == "/api/watchlist/states":
@@ -436,6 +443,18 @@ def create_server(host: str, port: int, user_store, app_log_store=None,
 
         def do_POST(self):
             path = self.path.split("?", 1)[0]
+
+            if path == "/api/preferences/mature":
+                if not self._current_user():
+                    self._send_json(401,{"ok":False,"message":"Sign in again."}); return
+                payload=self._read_api_payload()
+                try: preferences=watchlist_items.set_mature(payload.get("mature"))
+                except ValueError as exc:
+                    self._send_json(400,{"ok":False,"message":str(exc)}); return
+                LOGGER.info("Mature watchlist content changed to %s",preferences["mature"])
+                self._watchlist_changed("preferences")
+                self._send_json(200,{"ok":True,"preferences":preferences})
+                return
 
             if path.startswith("/api/watchlist/items/") and path.endswith("/progress"):
                 if not self._current_user():

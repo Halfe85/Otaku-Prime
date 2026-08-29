@@ -95,6 +95,41 @@ class Alpha11WatchlistUITests(unittest.TestCase):
         self.assertIn(".library-person-portrait.has-staff-portrait:hover",styles)
         self.assertIn(".library-portrait-layer.alternate",styles)
 
+    def test_library_uses_posters_logos_and_full_width_banner_header(self):
+        page=render_home(
+            {"username":"admin","role":"admin"},active_tab="library",
+            watchlist_accounts={})
+        script=read_static_asset("components/library/library.js")[1].decode("utf-8")
+        styles=read_static_asset("components/library/library.css")[1].decode("utf-8")
+
+        self.assertIn('id="library-series-banner"',page)
+        self.assertIn('id="library-series-logo"',page)
+        self.assertNotIn('<span class="library-modal-kicker">Prime library</span>',page)
+        self.assertIn("item.poster_url",script)
+        self.assertIn("item.logo_url",script)
+        self.assertIn("series.banner_url",script)
+        self.assertIn("series.logo_url",script)
+        self.assertIn(".library-tile-poster",styles)
+        self.assertIn(".library-series-hero",styles)
+
+    def test_watchlist_has_binary_mature_switch_and_library_classification(self):
+        page=render_home(
+            {"username":"admin","role":"admin"},active_tab="watchlist",
+            watchlist_accounts={},watchlist_preferences={"mature":1})
+        script=read_static_asset(
+            "components/main-container/main-container.js")[1].decode("utf-8")
+        library=render_home(
+            {"username":"admin","role":"admin"},active_tab="library",
+            watchlist_accounts={})
+
+        self.assertIn('id="mature-content-toggle"',page)
+        self.assertIn('id="mature-content-value" class="preference-switch-value">mature=1',page)
+        self.assertIn('type="checkbox" value="1" checked',page)
+        self.assertIn('fetch("/api/preferences/mature"',script)
+        self.assertIn('id="library-series-age-rating"',library)
+        self.assertIn('id="library-series-genres"',library)
+        self.assertIn('id="library-series-themes"',library)
+
     def test_app_logs_preserve_scroll_and_offer_jump_to_newest(self):
         page=render_home(
             {"username":"admin","role":"admin"},active_tab="library",

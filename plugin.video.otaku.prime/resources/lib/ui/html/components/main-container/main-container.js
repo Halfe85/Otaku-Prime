@@ -38,4 +38,33 @@
       detail: { context: search.dataset.context, value: search.value }
     }));
   });
+
+  var matureToggle = document.getElementById("mature-content-toggle");
+  var matureValue = document.getElementById("mature-content-value");
+  var matureFeedback = document.getElementById("mature-content-feedback");
+  if (matureToggle) matureToggle.addEventListener("change", async function () {
+    var next = matureToggle.checked ? 1 : 0;
+    matureToggle.disabled = true;
+    if (matureFeedback) matureFeedback.textContent = "Saving…";
+    try {
+      var response = await fetch("/api/preferences/mature", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Accept": "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ mature: next })
+      });
+      var payload = await response.json();
+      if (!response.ok || !payload.ok) throw new Error(payload.message || "Could not save setting.");
+      next = Number(payload.preferences.mature) === 1 ? 1 : 0;
+      matureToggle.checked = next === 1;
+      if (matureValue) matureValue.textContent = "mature=" + next;
+      if (matureFeedback) matureFeedback.textContent = next ? "18+ titles enabled." : "18+ titles hidden.";
+      window.dispatchEvent(new CustomEvent("prime:maturechange", { detail: { mature: next } }));
+    } catch (error) {
+      matureToggle.checked = !matureToggle.checked;
+      if (matureFeedback) matureFeedback.textContent = error.message || "Could not save setting.";
+    } finally {
+      matureToggle.disabled = false;
+    }
+  });
 }());

@@ -21,6 +21,33 @@ from resources.lib.services.mediator_helper_simkl import (
 _LOCATOR=re.compile(r"^S(\d{2,3})E(\d{2,4})$")
 
 
+def _terms(*payloads):
+    result={"genres":[],"themes":[]}; seen={"genres":set(),"themes":set()}
+    for payload in payloads:
+        for name in result:
+            for row in (payload or {}).get(name) or []:
+                value=row.get("name") if isinstance(row,dict) else row
+                text=str(value or "").strip(); key=text.casefold()
+                if text and key not in seen[name]:
+                    result[name].append(text); seen[name].add(key)
+    return result
+
+
+def _age_rating(*payloads):
+    for payload in payloads:
+        for key in ("certification","age_rating","content_rating"):
+            value=(payload or {}).get(key)
+            if value not in (None,""): return str(value)
+    return None
+
+
+def _mature(age_rating,*payloads):
+    text=str(age_rating or "").upper().replace(" ","")
+    return text in ("18+","R18","R18+","NC-17","RX") or any(
+        bool((payload or {}).get("is_adult") or (payload or {}).get("adult"))
+        for payload in payloads)
+
+
 class SimklMediatorEndpoint:
     provider="simkl"
 
@@ -32,6 +59,10 @@ class SimklMediatorEndpoint:
         return item.get("simkl_id") not in (None,"") or (
             item.get("simkl_reference_id") not in (None,"") and item.get("special_locator") not in (None,""))
 
+    def cast(self,simkl_id):
+        if self.client is None or simkl_id in (None,""): return None
+        return _cast_entries(self.client.anime(simkl_id))
+
     @staticmethod
     def _franchise(client,target,root):
         franchise=client.tv_franchise(target,root_detail=root) or {
@@ -41,6 +72,7 @@ class SimklMediatorEndpoint:
             "source":"relation_fallback_unmapped",
         }
         root_ids=root.get("ids") or {}
+        terms=_terms(root,target); age_rating=_age_rating(target,root)
         franchise.update({
             "romaji_name":_remote_title({"title":root.get("title") or target.get("title")}),
             "anilist_id":str(root_ids.get("anilist")) if root_ids.get("anilist") not in (None,"") else None,
@@ -52,6 +84,9 @@ class SimklMediatorEndpoint:
             "air_status":target.get("status") or target.get("release_status") or
                          root.get("status") or root.get("release_status"),
             "cast":_cast_entries(target) if _cast_entries(target) is not None else _cast_entries(root),
+            "cast_source":"simkl",
+            "genres":terms["genres"],"themes":terms["themes"],
+            "age_rating":age_rating,"mature":_mature(age_rating,root,target),
         })
         return franchise
 

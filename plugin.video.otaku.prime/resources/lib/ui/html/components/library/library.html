@@ -22,9 +22,13 @@
 <div class="library-series-modal" id="library-series-modal" hidden>
   <div class="library-modal-backdrop" data-library-series-close></div>
   <section class="library-series-card" role="dialog" aria-modal="true" aria-labelledby="library-series-title">
-    <header class="library-modal-header">
-      <div>
-        <span class="library-modal-kicker">Prime library</span>
+    <header class="library-modal-header library-series-hero" id="library-series-hero">
+      <div class="library-hero-art" aria-hidden="true">
+        <img id="library-series-banner" alt="" hidden>
+      </div>
+      <div class="library-hero-shade" aria-hidden="true"></div>
+      <div class="library-hero-copy">
+        <img class="library-series-logo" id="library-series-logo" alt="" hidden>
         <h2 id="library-series-title">Series</h2>
         <p id="library-series-subtitle">—</p>
       </div>
@@ -37,6 +41,12 @@
         <div><span>Published</span><strong id="library-series-year">—</strong></div>
         <div><span>Runtime</span><strong id="library-series-runtime">—</strong></div>
         <div><span>Airing</span><strong id="library-series-airing">—</strong></div>
+        <div><span>Age rating</span><strong id="library-series-age-rating">—</strong></div>
+      </section>
+
+      <section class="library-classification" aria-label="Series classification">
+        <div><span>Genres</span><div class="library-term-list" id="library-series-genres"><span>Not resolved yet</span></div></div>
+        <div><span>Themes</span><div class="library-term-list" id="library-series-themes"><span>Not resolved yet</span></div></div>
       </section>
 
       <section class="library-section">

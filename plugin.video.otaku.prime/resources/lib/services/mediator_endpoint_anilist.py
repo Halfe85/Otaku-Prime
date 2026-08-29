@@ -9,3 +9,6 @@ class AniListMediatorEndpoint(AniListMediatorHelper):
     @staticmethod
     def available(item):
         return item.get("anilist_id") not in (None,"")
+
+    def cast(self,anilist_id):
+        return self.client.cast(anilist_id)

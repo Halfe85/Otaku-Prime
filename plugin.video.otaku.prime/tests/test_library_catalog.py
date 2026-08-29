@@ -59,6 +59,13 @@ class LibraryCatalogTests(unittest.TestCase):
             overview="A mediated series overview.",
             runtime_minutes=24,
             air_status="airing",
+            poster_url="https://img.example/poster.webp",
+            logo_url="https://img.example/logo.webp",
+            banner_url="https://img.example/banner.webp",
+            genres=["Action","Fantasy"],
+            themes=["Isekai","Magic"],
+            age_rating="R+",
+            mature=True,
         )
         self.catalog.replace_media_credits([
             {"person":{"anilist_id":"501","name":"Actor One","trivia":"Known fact",
@@ -171,6 +178,24 @@ class LibraryCatalogTests(unittest.TestCase):
         self.assertEqual("Updated series overview.", same_series["overview"])
         self.assertEqual("Arrival Updated", same_episode["title"])
 
+    def test_series_artwork_urls_are_projected_to_tiles_and_detail(self):
+        tile=self.catalog.library_series()[0]
+        detail=self.catalog.library_series_detail(self.series["local_id"])
+
+        self.assertEqual("https://img.example/poster.webp",tile["poster_url"])
+        self.assertEqual("https://img.example/logo.webp",tile["logo_url"])
+        self.assertEqual("https://img.example/banner.webp",detail["banner_url"])
+
+    def test_series_classification_is_projected_as_lists_and_binary_mature(self):
+        tile=self.catalog.library_series()[0]
+        detail=self.catalog.library_series_detail(self.series["local_id"])
+
+        self.assertEqual(["Action","Fantasy"],tile["genres"])
+        self.assertEqual(["Isekai","Magic"],detail["themes"])
+        self.assertEqual("R+",detail["age_rating"])
+        self.assertEqual(1,detail["mature"])
+        self.assertNotIn("genres_json",tile)
+
     def test_missing_cast_metadata_does_not_delete_existing_cast(self):
         self.catalog.replace_media_credits(
             None,series_id=self.series["local_id"],source_provider="other")
@@ -218,6 +243,20 @@ class LibraryCatalogTests(unittest.TestCase):
         self.assertEqual([],detail["staff"])
         self.assertEqual("Silent Character",detail["characters"][0]["name"])
         self.assertEqual({},detail["cast"][0]["person"])
+
+    def test_non_anilist_staff_and_character_ids_are_preserved(self):
+        self.catalog.replace_media_credits([{
+            "source_provider":"mal",
+            "person":{"provider_id":"700","name":"MAL Actor"},
+            "character":{"provider_id":"800","name":"MAL Character"},
+        }],season_id=self.season["local_id"],source_provider="mal")
+
+        detail=self.catalog.library_series_detail(self.series["local_id"])
+        character=next(row for row in detail["characters"]
+                       if row["name"]=="MAL Character")
+
+        self.assertEqual("800",character["mal_id"])
+        self.assertEqual("700",character["staff"][0]["mal_id"])
 
     def test_legacy_flat_cast_table_is_discarded_and_not_migrated(self):
         other=os.path.join(self.tmp.name,"legacy.sqlite")

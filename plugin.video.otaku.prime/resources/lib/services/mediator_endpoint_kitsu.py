@@ -21,7 +21,7 @@ MAX_PREQUEL_DEPTH=64
 class KitsuMediatorClient:
     def __init__(self,timeout=30,opener=None):
         self.timeout=int(timeout); self._open=opener or urlopen
-        self._anime_cache={}; self._prequel_cache={}
+        self._anime_cache={}; self._prequel_cache={}; self._category_cache={}; self._cast_cache={}
 
     @staticmethod
     def _headers():
@@ -60,6 +60,48 @@ class KitsuMediatorClient:
             value=included.get(str(destination.get("id") or ""))
             if value: result.append(value)
         self._prequel_cache[key]=result
+        return result
+
+    def categories(self,kitsu_id):
+        key=str(kitsu_id)
+        if key not in self._category_cache:
+            payload=self._json(KITSU_API_URL+"/anime/"+key+"/categories?page[limit]=20")
+            values=[]
+            for row in (payload or {}).get("data") or []:
+                attrs=(row or {}).get("attributes") or {}
+                name=attrs.get("title") or attrs.get("name") or attrs.get("slug")
+                if name: values.append(str(name))
+            self._category_cache[key]=list(dict.fromkeys(values))
+        return self._category_cache[key]
+
+    def cast(self,kitsu_id):
+        key=str(kitsu_id)
+        if key in self._cast_cache: return self._cast_cache[key]
+        params={"include":"castings.character,castings.person"}
+        payload=self._json(KITSU_API_URL+"/anime/"+key+"?"+urlencode(params))
+        included={(str(row.get("type")),str(row.get("id"))):row
+                  for row in (payload or {}).get("included") or []}
+        result=[]
+        for row in (payload or {}).get("included") or []:
+            if row.get("type")!="castings": continue
+            relationships=row.get("relationships") or {}
+            person_ref=(relationships.get("person") or {}).get("data") or {}
+            character_ref=(relationships.get("character") or {}).get("data") or {}
+            person=included.get((str(person_ref.get("type")),str(person_ref.get("id")))) or {}
+            character=included.get((str(character_ref.get("type")),str(character_ref.get("id")))) or {}
+            person_attrs=person.get("attributes") or {}; character_attrs=character.get("attributes") or {}
+            person_name=person_attrs.get("name") or person_attrs.get("canonicalName")
+            character_name=character_attrs.get("name") or character_attrs.get("canonicalName")
+            if not person_name and not character_name: continue
+            result.append({
+                "person":{"provider_id":person.get("id"),"name":person_name,
+                          "image_url":((person_attrs.get("image") or {}).get("original"))},
+                "character":{"provider_id":character.get("id"),"name":character_name,
+                             "trivia":character_attrs.get("description"),
+                             "image_url":((character_attrs.get("image") or {}).get("original"))},
+                "credit_type":(row.get("attributes") or {}).get("role") or "voice_actor",
+                "language":"","source_provider":"kitsu","sort_order":len(result)})
+        self._cast_cache[key]=result
         return result
 
 
@@ -113,12 +155,21 @@ def _runtime(attrs):
     except (TypeError,ValueError): return None
 
 
+def _age_rating(*attrs_rows):
+    for attrs in attrs_rows:
+        value=(attrs or {}).get("ageRating")
+        if value: return str(value).upper()
+    return None
+
+
 class KitsuMediatorEndpoint:
     provider="kitsu"
     def __init__(self,client=None): self.client=client or KitsuMediatorClient()
 
     @staticmethod
     def available(item): return item.get("kitsu_id") not in (None,"")
+
+    def cast(self,kitsu_id): return self.client.cast(kitsu_id)
 
     def resolve(self,item,client=None):
         value=item.get("kitsu_id")
@@ -143,13 +194,22 @@ class KitsuMediatorEndpoint:
         try: publish_year=int(str(root_attrs.get("startDate") or target_attrs.get("startDate") or "")[:4])
         except (TypeError,ValueError): publish_year=None
         numbers=[row["episode_number"] for row in episodes]
+        genres=[]
+        for media in (root,target):
+            try: values=self.client.categories(media["id"])
+            except Exception: values=[]
+            for name in values:
+                if name not in genres: genres.append(name)
+        age_rating=_age_rating(target_attrs,root_attrs)
         return {"provider_path":"kitsu","provider_id":str(value),
                 "tv_show":{"name":name,"romaji_name":romaji,"simkl_id":None,"tvdb_id":None,
                            "anilist_id":None,"source_format":str(root_attrs.get("subtype") or target_attrs.get("subtype") or "").upper() or None,
                            "source":"kitsu_prequel_graph","publish_year":publish_year,
                            "overview":target_attrs.get("synopsis") or root_attrs.get("synopsis"),
                            "runtime_minutes":runtime or _runtime(root_attrs),
-                           "air_status":target_attrs.get("status") or root_attrs.get("status"),"cast":None},
+                           "air_status":target_attrs.get("status") or root_attrs.get("status"),"cast":None,
+                           "genres":genres,"themes":[],"age_rating":age_rating,
+                           "mature":age_rating=="R18"},
                 "season":{"number":season_number,"number_source":number_source,"name":target_attrs.get("canonicalTitle"),
                           "media_type":_format(target),"first_episode":numbers[0],"last_episode":numbers[-1]},
                 "episodes":episodes,"relation_path":[str(row["id"]) for row in path]}

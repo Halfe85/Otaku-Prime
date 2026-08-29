@@ -180,6 +180,10 @@ class AniListMediatorTests(unittest.TestCase):
             20, "Example Season 2", "TV", 10, prequel=root, year=2022,
             description="Current season description", duration=25, status="RELEASING"
         )
+        root["genres"]=["Action","Fantasy"]
+        root["tags"]=[{"name":"Isekai","rank":90,"isMediaSpoiler":False},
+                      {"name":"Hidden spoiler","rank":100,"isMediaSpoiler":True}]
+        current["isAdult"]=True
         cast = [
             {"person_name": "Actor One", "character_name": "Hero", "sort_order": 0},
             {"person_name": "Actor Two", "character_name": "Rival", "sort_order": 1},
@@ -196,6 +200,12 @@ class AniListMediatorTests(unittest.TestCase):
         self.assertEqual(25, show["runtime_minutes"])
         self.assertEqual("RELEASING", show["air_status"])
         self.assertEqual(cast, show["cast"])
+        self.assertNotIn("poster_url",show)
+        self.assertNotIn("banner_url",show)
+        self.assertEqual(["Action","Fantasy"],show["genres"])
+        self.assertEqual(["Isekai"],show["themes"])
+        self.assertEqual("18+",show["age_rating"])
+        self.assertTrue(show["mature"])
         self.assertTrue(all(row["runtime_minutes"] == 25 for row in result["episodes"]))
 
     def test_anilist_root_is_persisted_by_tvshow_mediator(self):

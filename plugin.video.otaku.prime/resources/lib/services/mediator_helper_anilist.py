@@ -82,11 +82,13 @@ class AniListMediatorClient:
             data = self._query(
                 """query($id:Int!){Media(id:$id,type:ANIME){
                   id idMal format episodes status duration description(asHtml:false)
+                  genres isAdult tags{name rank isMediaSpoiler isGeneralSpoiler category}
                   title{english romaji native}
                   startDate{year month day} endDate{year month day}
                   nextAiringEpisode{episode airingAt}
                   relations{edges{relationType(version:2) node{
                     id idMal type format episodes status duration description(asHtml:false)
+                    genres isAdult tags{name rank isMediaSpoiler isGeneralSpoiler category}
                     title{english romaji native}
                     startDate{year month day} endDate{year month day}
                   }}}
@@ -403,6 +405,29 @@ def _runtime(media):
         return None
 
 
+def _metadata_terms(root,target):
+    genres=[]; themes=[]; seen_genres=set(); seen_themes=set()
+    for media in (root or {},target or {}):
+        for value in media.get("genres") or []:
+            text=str(value or "").strip(); key=text.casefold()
+            if text and key not in seen_genres:
+                genres.append(text); seen_genres.add(key)
+        # AniList exposes thematic descriptors as ranked Media tags.  Spoiler
+        # tags never belong in Prime's public series metadata.
+        for tag in media.get("tags") or []:
+            if not isinstance(tag,dict) or tag.get("isMediaSpoiler") or tag.get("isGeneralSpoiler"):
+                continue
+            try: rank=int(tag.get("rank") or 0)
+            except (TypeError,ValueError): rank=0
+            if rank<40: continue
+            text=str(tag.get("name") or "").strip(); key=text.casefold()
+            if text and key not in seen_themes:
+                themes.append(text); seen_themes.add(key)
+    mature=bool((root or {}).get("isAdult") or (target or {}).get("isAdult"))
+    return {"genres":genres,"themes":themes,
+            "age_rating":"18+" if mature else None,"mature":mature}
+
+
 class AniListMediatorHelper:
     provider = "anilist"
 
@@ -443,6 +468,7 @@ class AniListMediatorHelper:
                 "air_status": target.get("status") or root.get("status"),
                 "cast": root_cast or target_cast or None,
                 "cast_source":"anilist",
+                **_metadata_terms(root,target),
             },
             "season": {
                 "number": season_number,

@@ -86,6 +86,21 @@
     return node;
   }
 
+  function artworkImage(url, className, alt, onReady, onMissing) {
+    var image = element("img", className);
+    image.alt = alt || "";
+    image.loading = "lazy";
+    image.decoding = "async";
+    image.addEventListener("load", function () { if (onReady) onReady(image); }, { once: true });
+    image.addEventListener("error", function () {
+      image.remove();
+      if (onMissing) onMissing();
+    }, { once: true });
+    if (url) image.src = String(url);
+    else if (onMissing) onMissing();
+    return image;
+  }
+
   function showMessage(value, isError) {
     if (!message) return;
     if (!value) {
@@ -156,16 +171,34 @@
       tile.dataset.seriesId = item.local_id;
       tile.setAttribute("aria-label", "Open " + text(item.title, "series") + " details");
 
+      var title = text(item.title, "Untitled series");
+      var artwork = element("div", "library-tile-art");
+      if (item.poster_url) {
+        artwork.appendChild(artworkImage(item.poster_url,"library-tile-poster",""));
+      } else {
+        tile.classList.add("missing-poster");
+      }
+      artwork.appendChild(element("span", "library-tile-shade"));
+      tile.appendChild(artwork);
+
+      var content = element("div", "library-tile-content");
       var top = element("div", "library-tile-top");
-      top.appendChild(element("h3", "library-tile-title", text(item.title, "Untitled series")));
+      var fallbackTitle = element("h3", "library-tile-title", title);
+      if (item.logo_url) {
+        var logo = artworkImage(item.logo_url,"library-tile-logo",title,function () {
+          tile.classList.add("has-logo");
+        });
+        top.appendChild(logo);
+      }
+      top.appendChild(fallbackTitle);
       top.appendChild(element("span", "library-tile-year", item.publish_year ? String(item.publish_year) : "Year pending"));
-      tile.appendChild(top);
+      content.appendChild(top);
 
       var body = element("div", "library-tile-next");
       body.textContent = item.next_episode_release_date
         ? "Next: E" + text(item.next_episode_number, "?") + " · " + formatDate(item.next_episode_release_date)
         : airingLabel(item);
-      tile.appendChild(body);
+      content.appendChild(body);
 
       var meta = element("div", "library-tile-meta");
       meta.appendChild(element("span", "library-chip " + statusClass(item),
@@ -174,7 +207,8 @@
         text(item.season_count, "0") + (Number(item.season_count) === 1 ? " season" : " seasons")));
       meta.appendChild(element("span", "library-chip",
         text(item.episode_count, "0") + (Number(item.episode_count) === 1 ? " episode" : " episodes")));
-      tile.appendChild(meta);
+      content.appendChild(meta);
+      tile.appendChild(content);
 
       tile.addEventListener("click", function () { openSeries(item.local_id); });
       grid.appendChild(tile);
@@ -205,6 +239,33 @@
   function setSeriesText(id, value, fallback) {
     var node = document.getElementById(id);
     if (node) node.textContent = text(value, fallback);
+  }
+
+  function renderSeriesArtwork(series, title) {
+    var hero = document.getElementById("library-series-hero");
+    var banner = document.getElementById("library-series-banner");
+    var logo = document.getElementById("library-series-logo");
+    if (!hero || !banner || !logo) return;
+    hero.classList.remove("has-banner","has-logo");
+    banner.hidden = true;
+    banner.removeAttribute("src");
+    logo.hidden = true;
+    logo.removeAttribute("src");
+    logo.alt = "";
+    if (series.banner_url) {
+      banner.onload = function () { banner.hidden = false; hero.classList.add("has-banner"); };
+      banner.onerror = function () { banner.hidden = true; hero.classList.remove("has-banner"); };
+      banner.src = String(series.banner_url);
+    }
+    if (series.logo_url) {
+      logo.onload = function () {
+        logo.hidden = false;
+        logo.alt = title;
+        hero.classList.add("has-logo");
+      };
+      logo.onerror = function () { logo.hidden = true; hero.classList.remove("has-logo"); };
+      logo.src = String(series.logo_url);
+    }
   }
 
   function castEntries(value) {
@@ -539,15 +600,34 @@
     var title = text(series.english_name || series.title || series.romaji_name, "Untitled series");
     var year = series.publish_year ? String(series.publish_year) : "Year pending";
     setSeriesText("library-series-title", title);
-    setSeriesText("library-series-subtitle", title + (series.publish_year ? " (" + year + ")" : ""));
+    setSeriesText("library-series-subtitle", year);
+    renderSeriesArtwork(series,title);
     setSeriesText("library-series-english", series.english_name || series.title, "Not resolved yet");
     setSeriesText("library-series-year", series.publish_year, "Not resolved yet");
     setSeriesText("library-series-runtime", runtime(series.runtime_minutes));
     setSeriesText("library-series-airing", airingLabel(series));
+    setSeriesText("library-series-age-rating", series.age_rating,
+      Number(series.mature) === 1 ? "18+" : "Not resolved yet");
+    renderTerms("library-series-genres", series.genres);
+    renderTerms("library-series-themes", series.themes);
     setSeriesText("library-series-overview", series.overview, "Metadata has not been resolved yet.");
     setSeriesText("library-series-local-id", "Prime series · " + series.local_id);
     renderPeople(series);
     renderSeasons(series);
+  }
+
+  function renderTerms(id, values) {
+    var root = document.getElementById(id);
+    if (!root) return;
+    root.replaceChildren();
+    values = Array.isArray(values) ? values.filter(Boolean) : [];
+    if (!values.length) {
+      root.appendChild(element("span", "library-term-empty", "Not resolved yet"));
+      return;
+    }
+    values.forEach(function (value) {
+      root.appendChild(element("span", "library-term", String(value)));
+    });
   }
 
   async function loadSeriesDetail(localId, silent) {
@@ -576,6 +656,7 @@
     document.body.classList.add("library-modal-open");
     setSeriesText("library-series-title", "Loading series…");
     setSeriesText("library-series-subtitle", "Mediator catalogue");
+    renderSeriesArtwork({},"Loading series");
     await loadSeriesDetail(localId, false);
   }
 

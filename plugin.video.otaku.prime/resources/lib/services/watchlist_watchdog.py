@@ -375,13 +375,21 @@ class WatchlistWatchdogService:
         self._thread.start()
         return {"scheduled": True, "busy": False}
 
-    def stop(self, timeout=5):
+    def stop(self, timeout=35):
         self._stop.set()
         self._wake.set()
-        if self._thread:
-            self._thread.join(timeout=timeout)
+        # Retire the mediator before waiting for provider/identity workers.  An
+        # enrichment progress callback may otherwise restart it during shutdown.
+        if self.mediator:
+            requester = getattr(self.mediator, "request_stop", None)
+            if requester:
+                requester()
         if self.identity_enricher:
             self.identity_enricher.stop(timeout=timeout)
+        if self._thread:
+            self._thread.join(timeout=timeout)
+        if self.mediator:
+            self.mediator.stop(timeout=timeout)
 
     def local_changed(self, local_id=None):
         """Wake after a Prime write or identity-enrichment pass."""

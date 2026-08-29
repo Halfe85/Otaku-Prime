@@ -46,6 +46,13 @@ def _merge_dict(primary,secondary):
     result=deepcopy(primary or {})
     for key,value in (secondary or {}).items():
         if result.get(key) in (None,"",[]): result[key]=deepcopy(value)
+    for key in ("genres","themes"):
+        combined=[]; seen=set()
+        for value in list((primary or {}).get(key) or [])+list((secondary or {}).get(key) or []):
+            text=str(value or "").strip(); folded=text.casefold()
+            if text and folded not in seen: combined.append(text); seen.add(folded)
+        if combined: result[key]=combined
+    result["mature"]=bool((primary or {}).get("mature") or (secondary or {}).get("mature"))
     return result
 
 

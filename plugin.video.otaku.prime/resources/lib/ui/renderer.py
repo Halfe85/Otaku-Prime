@@ -124,11 +124,12 @@ def _accounts_content(user: dict, message: str) -> str:
     return _fill(_template("components/main-container/accounts.html"), USERNAME=html.escape(user["username"]), ROLE=html.escape(user["role"]), NOTICE=notice)
 
 
-def _watchlist_content(accounts: dict) -> str:
+def _watchlist_content(accounts: dict,preferences: Optional[dict] = None) -> str:
     anilist = accounts.get("anilist")
     kitsu = accounts.get("kitsu")
     mal = accounts.get("mal")
     simkl = accounts.get("simkl")
+    mature=int(bool((preferences or {}).get("mature")))
     return _fill(
         _template("components/main-container/watchlist.html"),
         ANILIST_BADGE="Connected" if anilist else "Not connected",
@@ -155,10 +156,14 @@ def _watchlist_content(accounts: dict) -> str:
             if simkl else "Connect securely using Simkl's short PIN flow."
         ),
         SIMKL_ACTION="Manage" if simkl else "Connect",
+        MATURE_CHECKED=" checked" if mature else "",
+        MATURE_VALUE=str(mature),
     )
 
 
-def render_home(user: dict, message: str = "", active_tab: str = "library", watchlist_accounts: Optional[dict] = None) -> str:
+def render_home(user: dict, message: str = "", active_tab: str = "library",
+                watchlist_accounts: Optional[dict] = None,
+                watchlist_preferences: Optional[dict] = None) -> str:
     watchlist_accounts = watchlist_accounts or {}
     if active_tab not in {item[0] for item in SETTINGS_CATEGORIES}:
         active_tab = "library"
@@ -175,7 +180,7 @@ def render_home(user: dict, message: str = "", active_tab: str = "library", watc
         elif category_id == "accounts":
             panel_content = _accounts_content(user, message)
         elif category_id == "watchlist":
-            panel_content = _watchlist_content(watchlist_accounts)
+            panel_content = _watchlist_content(watchlist_accounts,watchlist_preferences)
         elif category_id == "watchlist-management":
             panel_content = (
                 '<link rel="stylesheet" href="/ui/components/watchlist-management/watchlist-management.css">'

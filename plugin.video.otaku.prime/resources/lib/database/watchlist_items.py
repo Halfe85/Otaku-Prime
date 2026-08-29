@@ -79,6 +79,12 @@ class WatchlistItemStore:
         );
         CREATE INDEX IF NOT EXISTS ix_watchlist_provider_entries_local
           ON watchlist_provider_entries(local_id,provider);
+        CREATE TABLE IF NOT EXISTS watchlist_preferences(
+          singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+          mature INTEGER NOT NULL DEFAULT 0 CHECK(mature IN(0,1)),
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        INSERT OR IGNORE INTO watchlist_preferences(singleton,mature) VALUES(1,0);
         """)
 
     def initialize(self):
@@ -139,9 +145,45 @@ class WatchlistItemStore:
                 "kodi_inventory_shows","kodi_library_state","kodi_episode_links",
                 "kodi_movie_links","kodi_series_links","provider_watch_states",
                 "watch_status_outbox","provider_list_entries","anilist_import_staging",
-                "movies","metadata_resolver_config","watchlist_preferences",
+                "movies","metadata_resolver_config",
             ): db.execute("DROP TABLE IF EXISTS "+table_name)
             self._repair_encoded_text(db)
+
+    def preferences(self):
+        """Return the one-user watchlist policy as primitive JSON-safe values."""
+        with self._connection() as db:
+            row=db.execute(
+                "SELECT mature FROM watchlist_preferences WHERE singleton=1"
+            ).fetchone()
+            return {"mature":int(row["mature"] if row else 0)}
+
+    def set_mature(self,value):
+        """Persist the 18+ policy exactly as 0 (disabled) or 1 (enabled)."""
+        if isinstance(value,str):
+            text=value.strip().lower()
+            if text not in ("0","1","false","true","off","on","no","yes"):
+                raise ValueError("mature must be 0 or 1")
+            mature=1 if text in ("1","true","on","yes") else 0
+        elif value in (0,1,False,True):
+            mature=int(bool(value))
+        else:
+            raise ValueError("mature must be 0 or 1")
+        with self._connection() as db:
+            db.execute("""INSERT INTO watchlist_preferences(singleton,mature)
+              VALUES(1,?) ON CONFLICT(singleton) DO UPDATE SET
+              mature=excluded.mature,updated_at=CURRENT_TIMESTAMP""",(mature,))
+            if mature:
+                # Releasing all adult rows lets identity enrichment decide which
+                # provider path is usable.  Existing completed library rows stay
+                # linked and are never duplicated.
+                db.execute("""UPDATE watchlist_items SET mediator_ready=CASE
+                  WHEN added_to_library=0 THEN 1 ELSE 0 END,
+                  updated_at=CURRENT_TIMESTAMP WHERE is_adult=1""")
+            else:
+                db.execute("""UPDATE watchlist_items SET mediator_ready=0,
+                  updated_at=CURRENT_TIMESTAMP
+                  WHERE is_adult=1 AND added_to_library=0""")
+        return {"mature":mature}
 
     @staticmethod
     def _repair_encoded_text(db):
@@ -345,12 +387,15 @@ class WatchlistItemStore:
               item.english_name,item.preferred_name,item.romaji_name,item.native_name,
               item.alternative_titles_json,
               item.status,item.progress,item.episode_count,item.media_format,item.release_date,
+              item.is_adult,
               item.has_conflict,item.identity_resolution_status,item.identity_resolution_error,
               item.mediator_status,item.mediator_provider,item.mediator_error,
               item.mediator_ready,item.added_to_library,
               GROUP_CONCAT(entry.provider,',') AS connected_providers
               FROM watchlist_items item
               JOIN watchlist_provider_entries entry ON entry.local_id=item.local_id
+              WHERE item.is_adult=0 OR COALESCE((SELECT mature FROM
+                watchlist_preferences WHERE singleton=1),0)=1
               GROUP BY item.local_id ORDER BY
               CASE WHEN COALESCE(item.english_name,item.preferred_name,item.romaji_name,item.native_name,'') GLOB '[A-Za-z]*' THEN 1 ELSE 0 END,
               LOWER(COALESCE(item.english_name,item.preferred_name,item.romaji_name,item.native_name,'')),item.local_id""")]
@@ -387,10 +432,12 @@ class WatchlistItemStore:
         """Rows the watchdog must identity-check or release to the mediator."""
         with self._connection() as db:
             return [dict(row) for row in db.execute("""SELECT * FROM watchlist_items
-              WHERE added_to_library=0 OR (
+              WHERE (is_adult=0 OR COALESCE((SELECT mature FROM
+                watchlist_preferences WHERE singleton=1),0)=1) AND
+              (added_to_library=0 OR (
                 (anilist_id IS NULL OR mal_id IS NULL OR kitsu_id IS NULL OR
                  (simkl_id IS NULL AND simkl_reference_id IS NULL))
-                AND COALESCE(identity_resolution_status,'PENDING') NOT IN('CONFLICT_EXACT'))
+                AND COALESCE(identity_resolution_status,'PENDING') NOT IN('CONFLICT_EXACT')))
               ORDER BY CASE WHEN COALESCE(english_name,romaji_name,native_name,'') GLOB '[A-Za-z]*' THEN 1 ELSE 0 END,
               LOWER(COALESCE(english_name,romaji_name,native_name,'')),local_id""")]
 
@@ -398,6 +445,8 @@ class WatchlistItemStore:
         with self._connection() as db:
             return [dict(row) for row in db.execute("""SELECT * FROM watchlist_items
               WHERE mediator_ready=1 AND added_to_library=0
+              AND (is_adult=0 OR COALESCE((SELECT mature FROM
+                watchlist_preferences WHERE singleton=1),0)=1)
               ORDER BY CASE WHEN COALESCE(english_name,romaji_name,native_name,'') GLOB '[A-Za-z]*' THEN 1 ELSE 0 END,
               LOWER(COALESCE(english_name,romaji_name,native_name,'')),local_id""")]
 
