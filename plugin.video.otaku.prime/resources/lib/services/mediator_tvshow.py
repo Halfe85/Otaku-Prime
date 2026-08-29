@@ -59,9 +59,7 @@ class TVShowMediatorService:
 
     def _provider_cast(self,provider,provider_id,item_id):
         if provider_id in (None,""): return None
-        endpoint=(getattr(self.processor,"endpoints",{}) or {}).get(provider)
-        if endpoint is None:
-            endpoint=(getattr(self.processor,"helpers",{}) or {}).get(provider)
+        endpoint=self._provider_endpoint(provider)
         getter=getattr(endpoint,"cast",None)
         if not getter:
             getter=getattr(getattr(endpoint,"client",None),"cast",None)
@@ -73,6 +71,96 @@ class TVShowMediatorService:
                 "%s staff/character enrichment unavailable for Prime item %s "
                 "(%s ID %s): %s",provider.title(),item_id,provider.title(),provider_id,exc)
             return None
+
+    def _provider_endpoint(self,provider):
+        endpoint=(getattr(self.processor,"endpoints",{}) or {}).get(provider)
+        if endpoint is None:
+            endpoint=(getattr(self.processor,"helpers",{}) or {}).get(provider)
+        return endpoint
+
+    def _provider_poster(self,provider,provider_id,item_id):
+        if provider_id in (None,""): return None
+        endpoint=self._provider_endpoint(provider)
+        getter=getattr(endpoint,"poster",None)
+        if not getter: return None
+        try:
+            value=str(getter(str(provider_id)) or "").strip()
+            return value if value.startswith(("https://","http://")) else None
+        except Exception as exc:
+            LOGGER.warning(
+                "%s poster fallback unavailable for Prime item %s (%s ID %s): %s",
+                provider.title(),item_id,provider.title(),provider_id,exc)
+            return None
+
+    def _fallback_poster(self,item,placement):
+        show=(placement or {}).get("tv_show") or {}
+        if show.get("poster_url"): return placement
+        for provider in ("anilist","mal","kitsu","simkl"):
+            provider_id=show.get(provider+"_id") or item.get(provider+"_id")
+            poster=self._provider_poster(
+                provider,provider_id,item.get("local_id"))
+            if not poster: continue
+            show["poster_url"]=poster
+            show["poster_source"]=provider
+            LOGGER.info(
+                "Using %s poster fallback for Prime item %s",
+                provider.title(),item.get("local_id"))
+            break
+        return placement
+
+    @staticmethod
+    def _merge_terms(existing,incoming):
+        result=[]; seen=set()
+        for value in list(existing or [])+list(incoming or []):
+            text=str(value or "").strip(); key=text.casefold()
+            if text and key not in seen:
+                result.append(text); seen.add(key)
+        return result
+
+    def _provider_classification(self,provider,provider_id,item_id):
+        if provider_id in (None,""): return None
+        endpoint=self._provider_endpoint(provider)
+        getter=getattr(endpoint,"classification",None)
+        if not getter: return None
+        try:
+            value=getter(str(provider_id)) or {}
+            return value if isinstance(value,dict) else None
+        except Exception as exc:
+            LOGGER.warning(
+                "%s classification enrichment unavailable for Prime item %s "
+                "(%s ID %s): %s",
+                provider.title(),item_id,provider.title(),provider_id,exc)
+            return None
+
+    def _enrich_classification(self,item,placement):
+        show=(placement or {}).get("tv_show") or {}
+        missing=lambda: (not show.get("genres") or not show.get("themes") or
+                         not show.get("age_rating"))
+        if not missing(): return placement
+        used=[]
+        for provider in ("anilist","mal","kitsu","simkl"):
+            provider_id=show.get(provider+"_id") or item.get(provider+"_id")
+            metadata=self._provider_classification(
+                provider,provider_id,item.get("local_id"))
+            if not metadata: continue
+            before=(tuple(show.get("genres") or []),tuple(show.get("themes") or []),
+                    show.get("age_rating"),bool(show.get("mature")))
+            show["genres"]=self._merge_terms(show.get("genres"),metadata.get("genres"))
+            show["themes"]=self._merge_terms(show.get("themes"),metadata.get("themes"))
+            if not show.get("age_rating") and metadata.get("age_rating"):
+                show["age_rating"]=metadata["age_rating"]
+            show["mature"]=bool(show.get("mature") or metadata.get("mature"))
+            after=(tuple(show.get("genres") or []),tuple(show.get("themes") or []),
+                   show.get("age_rating"),bool(show.get("mature")))
+            if after!=before: used.append(provider)
+            if not missing(): break
+        if used:
+            show["classification_sources"]=list(dict.fromkeys(
+                list(show.get("classification_sources") or [])+used))
+            LOGGER.info(
+                "Enriched classification for Prime item %s through %s",
+                item.get("local_id"),", ".join(used))
+        return placement
 
     def _staff_cast(self,ids,item_id):
         """Use every available tracker as a staff source, in stable priority order."""
@@ -160,7 +248,10 @@ class TVShowMediatorService:
     def process_item(self,item):
         placement=self.resolve_item(item)
         self._ensure_current(item["local_id"])
+        placement=self._enrich_classification(item,placement)
+        self._ensure_current(item["local_id"])
         placement=self.fanart.enrich(placement)
+        placement=self._fallback_poster(item,placement)
         self._ensure_current(item["local_id"])
         provider=placement["provider_path"]
         show=placement["tv_show"]; season_data=placement["season"]
@@ -214,7 +305,9 @@ class TVShowMediatorService:
         self._ensure_current(item["local_id"])
         partial=getattr(exc,"placement",None)
         if partial:
+            partial=self._enrich_classification(item,partial)
             partial=self.fanart.enrich(partial)
+            partial=self._fallback_poster(item,partial)
             self._ensure_current(item["local_id"])
             self._persist_placement(item,partial,placement_state="STRUCTURE_ONLY")
             show=partial.get("tv_show") or {}

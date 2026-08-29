@@ -1,8 +1,10 @@
 import unittest
 
+from resources.lib.services.mediator_endpoint_anilist import AniListMediatorEndpoint
 from resources.lib.services.mediator_endpoint_kitsu import KitsuMediatorClient,KitsuMediatorEndpoint
 from resources.lib.services.mediator_endpoint_mal import MALMediatorClient,MALMediatorEndpoint
-from resources.lib.services.mediator_endpoint_simkl import _age_rating,_mature,_terms
+from resources.lib.services.mediator_endpoint_simkl import (
+    SimklMediatorEndpoint,_age_rating,_mature,_terms)
 
 
 class MALClient:
@@ -10,6 +12,7 @@ class MALClient:
         return {"id":int(mal_id),"title":"Example","alternative_titles":{"en":"Example"},
                 "start_date":"2020-01-01","media_type":"tv","status":"finished_airing",
                 "num_episodes":1,"average_episode_duration":1440,"related_anime":[],
+                "main_picture":{"large":"https://img.example/mal.jpg"},
                 "genres":[{"id":1,"name":"Action"},{"id":10,"name":"Fantasy"}],
                 "rating":"r+","nsfw":"black"}
 
@@ -19,12 +22,31 @@ class KitsuClient:
         return {"id":str(kitsu_id),"attributes":{
             "canonicalTitle":"Example","titles":{"en":"Example"},"subtype":"TV",
             "episodeCount":1,"episodeLength":24,"startDate":"2020-01-01",
-            "status":"finished","ageRating":"R18"}}
+            "status":"finished","ageRating":"R18",
+            "posterImage":{"original":"https://img.example/kitsu.jpg"}}}
     def prequels(self,_kitsu_id): return []
     def categories(self,_kitsu_id): return ["Action","Fantasy"]
 
 
 class ProviderMetadataTests(unittest.TestCase):
+    def test_provider_poster_extractors_return_browser_urls(self):
+        anilist_client=type("AniListClient",(),{
+            "media":lambda _self,_value:{
+                "coverImage":{"extraLarge":"https://img.example/anilist.jpg"}}})()
+        simkl_client=type("SimklClient",(),{
+            "anime":lambda _self,_value:{"poster":"poster-hash"}})()
+
+        self.assertEqual(
+            "https://img.example/anilist.jpg",
+            AniListMediatorEndpoint(anilist_client).poster("1"))
+        self.assertEqual(
+            "https://img.example/mal.jpg",MALMediatorEndpoint(MALClient()).poster("1"))
+        self.assertEqual(
+            "https://img.example/kitsu.jpg",KitsuMediatorEndpoint(KitsuClient()).poster("1"))
+        self.assertEqual(
+            "https://simkl.in/posters/poster-hash_m.jpg",
+            SimklMediatorEndpoint(simkl_client).poster("1"))
+
     def test_mal_exposes_genres_age_rating_and_mature_flag(self):
         show=MALMediatorEndpoint(MALClient()).resolve({"mal_id":"1"})["tv_show"]
         self.assertEqual(["Action","Fantasy"],show["genres"])

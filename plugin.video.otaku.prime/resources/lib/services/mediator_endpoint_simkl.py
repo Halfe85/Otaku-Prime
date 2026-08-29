@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from urllib.parse import quote
 
 from resources.lib.services.mediator_helper_simkl import (
     MediatorMetadataPending,
@@ -63,6 +64,23 @@ class SimklMediatorEndpoint:
         if self.client is None or simkl_id in (None,""): return None
         return _cast_entries(self.client.anime(simkl_id))
 
+    def poster(self,simkl_id):
+        if self.client is None or simkl_id in (None,""): return None
+        value=(self.client.anime(simkl_id) or {}).get("poster")
+        if isinstance(value,dict):
+            value=(value.get("url") or value.get("large") or value.get("medium"))
+        text=str(value or "").strip()
+        if text.startswith(("https://","http://")): return text
+        if not text: return None
+        return "https://simkl.in/posters/{}_m.jpg".format(quote(text,safe=""))
+
+    def classification(self,simkl_id):
+        if self.client is None or simkl_id in (None,""): return {}
+        payload=self.client.anime(simkl_id) or {}; terms=_terms(payload)
+        age_rating=_age_rating(payload)
+        return {"genres":terms["genres"],"themes":terms["themes"],
+                "age_rating":age_rating,"mature":_mature(age_rating,payload)}
+
     @staticmethod
     def _franchise(client,target,root):
         franchise=client.tv_franchise(target,root_detail=root) or {
@@ -76,6 +94,8 @@ class SimklMediatorEndpoint:
         franchise.update({
             "romaji_name":_remote_title({"title":root.get("title") or target.get("title")}),
             "anilist_id":str(root_ids.get("anilist")) if root_ids.get("anilist") not in (None,"") else None,
+            "mal_id":str(root_ids.get("mal")) if root_ids.get("mal") not in (None,"") else None,
+            "kitsu_id":str(root_ids.get("kitsu")) if root_ids.get("kitsu") not in (None,"") else None,
             "source_format":str(root.get("anime_type") or target.get("anime_type") or "").upper() or None,
             "publish_year":_int_or_none(root.get("year") or target.get("year")),
             "overview":_overview(root) or _overview(target),

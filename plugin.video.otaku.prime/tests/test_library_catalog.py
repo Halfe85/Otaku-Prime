@@ -166,6 +166,8 @@ class LibraryCatalogTests(unittest.TestCase):
             overview="Updated series overview.",
             runtime_minutes=25,
             air_status="finished",
+            genres=["Drama"],
+            themes=["Coming of Age"],
         )
         same_episode = self.catalog.add_episode(
             self.season["local_id"], 1, source_episode_number=1,
@@ -177,6 +179,9 @@ class LibraryCatalogTests(unittest.TestCase):
         self.assertEqual(self.ep1["local_id"], same_episode["local_id"])
         self.assertEqual("Updated series overview.", same_series["overview"])
         self.assertEqual("Arrival Updated", same_episode["title"])
+        detail=self.catalog.library_series_detail(same_series["local_id"])
+        self.assertEqual(["Action","Fantasy","Drama"],detail["genres"])
+        self.assertEqual(["Isekai","Magic","Coming of Age"],detail["themes"])
 
     def test_series_artwork_urls_are_projected_to_tiles_and_detail(self):
         tile=self.catalog.library_series()[0]

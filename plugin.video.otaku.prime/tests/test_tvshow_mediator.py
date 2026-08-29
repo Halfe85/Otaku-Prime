@@ -33,6 +33,26 @@ class HelperProcessor:
     def resolve(self,item): return self.placement
 
 
+class NoFanart:
+    def enrich(self,placement): return placement
+
+
+class PosterEndpoint:
+    def __init__(self,provider,url): self.provider=provider; self.url=url; self.calls=[]
+    def poster(self,provider_id): self.calls.append(str(provider_id)); return self.url
+
+
+class PosterFallbackProcessor(HelperProcessor):
+    def __init__(self,placement,endpoints):
+        super().__init__(placement); self.endpoints=endpoints
+
+
+class ClassificationEndpoint:
+    def __init__(self,value): self.value=value; self.calls=[]
+    def classification(self,provider_id):
+        self.calls.append(str(provider_id)); return self.value
+
+
 class StructurallyPendingProcessor:
     def resolve(self,item):
         placement={
@@ -131,6 +151,58 @@ class WatchlistTVShowMediatorTests(unittest.TestCase):
         self.assertEqual("https://img.example/poster.webp",series["poster_url"])
         self.assertEqual("https://img.example/logo.webp",series["clearlogo_url"])
         self.assertEqual("https://img.example/banner.webp",series["banner_url"])
+
+    def test_missing_fanart_poster_uses_provider_priority_fallback(self):
+        placement=self.placement("simkl")
+        placement["tv_show"].update({
+            "anilist_id":"269","mal_id":"269","kitsu_id":"12","simkl_id":"41066"})
+        endpoints={
+            "anilist":PosterEndpoint("anilist",None),
+            "mal":PosterEndpoint("mal",None),
+            "kitsu":PosterEndpoint("kitsu","https://img.example/kitsu-poster.webp"),
+            "simkl":PosterEndpoint("simkl","https://img.example/simkl-poster.webp"),
+        }
+        service=TVShowMediatorService(
+            self.watchlist,self.catalog,client=object(),
+            processor=PosterFallbackProcessor(placement,endpoints),fanart=NoFanart())
+
+        result=service.run_once()
+        series=self.catalog.list_series()[0]
+
+        self.assertEqual(1,result["placed"])
+        self.assertEqual("https://img.example/kitsu-poster.webp",series["poster_url"])
+        self.assertEqual(["269"],endpoints["anilist"].calls)
+        self.assertEqual(["269"],endpoints["mal"].calls)
+        self.assertEqual(["12"],endpoints["kitsu"].calls)
+        self.assertEqual([],endpoints["simkl"].calls)
+
+    def test_simkl_structure_is_enriched_with_anilist_classification(self):
+        placement=self.placement("simkl")
+        placement["tv_show"].update({
+            "anilist_id":"269","genres":["Action"],"themes":[],
+            "age_rating":None,"mature":False})
+        endpoints={
+            "anilist":ClassificationEndpoint({
+                "genres":["Action","Drama"],"themes":["Military"],
+                "age_rating":"18+","mature":True}),
+            "mal":ClassificationEndpoint({}),
+            "kitsu":ClassificationEndpoint({}),
+            "simkl":ClassificationEndpoint({}),
+        }
+        service=TVShowMediatorService(
+            self.watchlist,self.catalog,client=object(),
+            processor=PosterFallbackProcessor(placement,endpoints),fanart=NoFanart())
+
+        result=service.run_once()
+        detail=self.catalog.library_series_detail(self.catalog.list_series()[0]["local_id"])
+
+        self.assertEqual(1,result["placed"])
+        self.assertEqual(["Action","Drama"],detail["genres"])
+        self.assertEqual(["Military"],detail["themes"])
+        self.assertEqual("18+",detail["age_rating"])
+        self.assertEqual(1,detail["mature"])
+        self.assertEqual(["269"],endpoints["anilist"].calls)
+        self.assertEqual([],endpoints["mal"].calls)
 
     def test_anilist_is_used_when_simkl_is_absent(self):
         item=self.watchlist.list_all()[0]; item["simkl_id"]=None

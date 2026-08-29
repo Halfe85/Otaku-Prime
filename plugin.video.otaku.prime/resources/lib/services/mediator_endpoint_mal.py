@@ -114,7 +114,7 @@ class MALMediatorClient:
     def media(self,mal_id):
         key=str(mal_id)
         if key in self._cache: return self._cache[key]
-        fields=("alternative_titles,start_date,end_date,synopsis,media_type,status,num_episodes,"
+        fields=("alternative_titles,start_date,end_date,synopsis,main_picture,media_type,status,num_episodes,"
                 "average_episode_duration,related_anime,genres,rating,nsfw")
         url=MAL_API_URL+"/anime/{}?".format(key)+urlencode({"fields":fields})
         request=Request(url,headers={"X-MAL-CLIENT-ID":MAL_CLIENT_ID,"Accept":"application/json",
@@ -179,6 +179,17 @@ class MALMediatorEndpoint:
 
     def cast(self,mal_id): return self.client.cast(mal_id)
 
+    def poster(self,mal_id):
+        picture=(self.client.media(mal_id) or {}).get("main_picture") or {}
+        return picture.get("large") or picture.get("medium")
+
+    def classification(self,mal_id):
+        media=self.client.media(mal_id) or {}
+        mature=_mature(media)
+        return {"genres":_genres(media),"themes":[],
+                "age_rating":_rating(media) or ("18+" if mature else None),
+                "mature":mature}
+
     def resolve(self,item,client=None):
         value=item.get("mal_id")
         if value in (None,""): raise MediatorPlacementError("watchlist item has no MAL ID")
@@ -211,6 +222,7 @@ class MALMediatorEndpoint:
             "tv_show":{"name":root_titles["english"] or target_titles["english"],
                        "romaji_name":root_titles["romaji"] or target_titles["romaji"],
                        "simkl_id":None,"tvdb_id":None,"anilist_id":None,
+                       "mal_id":str(root["id"]),
                        "source_format":str(root.get("media_type") or target.get("media_type") or "").upper() or None,
                        "source":"mal_prequel_graph","publish_year":publish_year,
                        "overview":target.get("synopsis") or root.get("synopsis"),

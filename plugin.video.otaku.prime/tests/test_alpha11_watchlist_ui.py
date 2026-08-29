@@ -107,9 +107,12 @@ class Alpha11WatchlistUITests(unittest.TestCase):
         self.assertNotIn('<span class="library-modal-kicker">Prime library</span>',page)
         self.assertIn("item.poster_url",script)
         self.assertIn("item.clearlogo_url",script)
+        self.assertIn("library-tile-logo-wrap",script)
         self.assertIn("series.banner_url",script)
         self.assertIn("series.clearlogo_url",script)
         self.assertIn(".library-tile-poster",styles)
+        self.assertIn("repeat(auto-fill,minmax(min(175px,100%),1fr))",styles)
+        self.assertIn(".library-tile-logo-wrap",styles)
         self.assertIn(".library-series-hero",styles)
 
     def test_watchlist_has_binary_mature_switch_and_library_classification(self):
@@ -129,6 +132,22 @@ class Alpha11WatchlistUITests(unittest.TestCase):
         self.assertIn('id="library-series-age-rating"',library)
         self.assertIn('id="library-series-genres"',library)
         self.assertIn('id="library-series-themes"',library)
+
+    def test_hentai_artwork_blurs_with_mature_off_without_blurring_clearlogo(self):
+        page=render_home(
+            {"username":"admin","role":"admin"},active_tab="library",
+            watchlist_accounts={},watchlist_preferences={"mature":0})
+        script=read_static_asset("components/library/library.js")[1].decode("utf-8")
+        styles=read_static_asset("components/library/library.css")[1].decode("utf-8")
+
+        self.assertIn('data-mature="0"',page)
+        self.assertIn('=== "hentai"',script)
+        self.assertIn('prime:maturechange',script)
+        self.assertIn('.library-tile.mature-artwork-blurred .library-tile-poster',styles)
+        self.assertIn(
+            '.library-series-hero.mature-artwork-blurred .library-hero-art img',styles)
+        self.assertNotIn('.mature-artwork-blurred .library-tile-logo',styles)
+        self.assertNotIn('.mature-artwork-blurred .library-series-logo',styles)
 
     def test_app_logs_preserve_scroll_and_offer_jump_to_newest(self):
         page=render_home(

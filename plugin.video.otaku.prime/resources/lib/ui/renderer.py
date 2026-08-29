@@ -165,6 +165,7 @@ def render_home(user: dict, message: str = "", active_tab: str = "library",
                 watchlist_accounts: Optional[dict] = None,
                 watchlist_preferences: Optional[dict] = None) -> str:
     watchlist_accounts = watchlist_accounts or {}
+    mature=int(bool((watchlist_preferences or {}).get("mature")))
     if active_tab not in {item[0] for item in SETTINGS_CATEGORIES}:
         active_tab = "library"
     tabs, panels = [], []
@@ -174,7 +175,9 @@ def render_home(user: dict, message: str = "", active_tab: str = "library",
         if category_id == "library":
             panel_content = (
                 '<link rel="stylesheet" href="/ui/components/library/library.css">'
-                + _template("components/library/library.html")
+                + _fill(
+                    _template("components/library/library.html"),
+                    MATURE_VALUE=str(mature))
                 + '<script src="/ui/components/library/library.js" defer></script>'
             )
         elif category_id == "accounts":

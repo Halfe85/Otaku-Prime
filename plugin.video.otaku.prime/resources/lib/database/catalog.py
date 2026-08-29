@@ -436,6 +436,10 @@ class CatalogStore:
             if not row:
                 row=self._series_name_match(db,english_name,romaji_name)
             if row:
+                genres_json=self._encode_terms(
+                    self._decode_terms(row["genres_json"])+self._decode_terms(genres_json))
+                themes_json=self._encode_terms(
+                    self._decode_terms(row["themes_json"])+self._decode_terms(themes_json))
                 self._assert_remote_id_available(db,"root_simkl_id",root,row["local_id"])
                 self._assert_remote_id_available(db,"tvdb_id",tvdb,row["local_id"])
                 self._assert_remote_id_available(db,"root_anilist_id",anilist,row["local_id"])

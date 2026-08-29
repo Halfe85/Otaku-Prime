@@ -4,6 +4,7 @@
   var grid = document.getElementById("library-grid");
   if (!grid) return;
 
+  var shell = grid.closest(".library-shell");
   var count = document.getElementById("library-count");
   var message = document.getElementById("library-message");
   var seriesModal = document.getElementById("library-series-modal");
@@ -19,7 +20,8 @@
     stopped: false,
     tileSignature: "",
     detailSignature: "",
-    peopleTab: "characters"
+    peopleTab: "characters",
+    mature: shell && Number(shell.dataset.mature) === 1 ? 1 : 0
   };
 
   function active() {
@@ -32,6 +34,16 @@
       return fallback || "—";
     }
     return String(value);
+  }
+
+  function hasHentaiGenre(series) {
+    return Array.isArray(series && series.genres) && series.genres.some(function (genre) {
+      return String(genre || "").trim().toLowerCase() === "hentai";
+    });
+  }
+
+  function blurMatureArtwork(series) {
+    return state.mature === 0 && hasHentaiGenre(series);
   }
 
   function formatDate(value) {
@@ -172,6 +184,7 @@
       tile.setAttribute("aria-label", "Open " + text(item.title, "series") + " details");
 
       var title = text(item.title, "Untitled series");
+      if (blurMatureArtwork(item)) tile.classList.add("mature-artwork-blurred");
       var artwork = element("div", "library-tile-art");
       if (item.poster_url) {
         artwork.appendChild(artworkImage(item.poster_url,"library-tile-poster",""));
@@ -181,15 +194,18 @@
       artwork.appendChild(element("span", "library-tile-shade"));
       tile.appendChild(artwork);
 
-      var content = element("div", "library-tile-content");
-      var top = element("div", "library-tile-top");
-      var fallbackTitle = element("h3", "library-tile-title", title);
       if (item.clearlogo_url) {
+        var logoWrap = element("div", "library-tile-logo-wrap");
         var logo = artworkImage(item.clearlogo_url,"library-tile-logo",title,function () {
           tile.classList.add("has-logo");
         });
-        top.appendChild(logo);
+        logoWrap.appendChild(logo);
+        tile.appendChild(logoWrap);
       }
+
+      var content = element("div", "library-tile-content");
+      var top = element("div", "library-tile-top");
+      var fallbackTitle = element("h3", "library-tile-title", title);
       top.appendChild(fallbackTitle);
       top.appendChild(element("span", "library-tile-year", item.publish_year ? String(item.publish_year) : "Year pending"));
       content.appendChild(top);
@@ -247,6 +263,7 @@
     var logo = document.getElementById("library-series-logo");
     if (!hero || !banner || !logo) return;
     hero.classList.remove("has-banner","has-logo");
+    hero.classList.toggle("mature-artwork-blurred",blurMatureArtwork(series));
     banner.hidden = true;
     banner.removeAttribute("src");
     logo.hidden = true;
@@ -709,6 +726,17 @@
     if (!event.detail || event.detail.context !== "library") return;
     state.query = event.detail.value || "";
     renderTiles();
+  });
+
+  window.addEventListener("prime:maturechange", function (event) {
+    state.mature=Number(event && event.detail && event.detail.mature) === 1 ? 1 : 0;
+    if (shell) shell.dataset.mature=String(state.mature);
+    renderTiles();
+    if (state.detail) {
+      renderSeriesArtwork(
+        state.detail,text(state.detail.title || state.detail.english_name || state.detail.romaji_name,
+                          "Untitled series"));
+    }
   });
 
   document.addEventListener("visibilitychange", function () {

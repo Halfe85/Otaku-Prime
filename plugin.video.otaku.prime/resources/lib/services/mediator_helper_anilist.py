@@ -82,12 +82,14 @@ class AniListMediatorClient:
             data = self._query(
                 """query($id:Int!){Media(id:$id,type:ANIME){
                   id idMal format episodes status duration description(asHtml:false)
+                  coverImage{extraLarge large medium}
                   genres isAdult tags{name rank isMediaSpoiler isGeneralSpoiler category}
                   title{english romaji native}
                   startDate{year month day} endDate{year month day}
                   nextAiringEpisode{episode airingAt}
                   relations{edges{relationType(version:2) node{
                     id idMal type format episodes status duration description(asHtml:false)
+                    coverImage{extraLarge large medium}
                     genres isAdult tags{name rank isMediaSpoiler isGeneralSpoiler category}
                     title{english romaji native}
                     startDate{year month day} endDate{year month day}
@@ -460,6 +462,7 @@ class AniListMediatorHelper:
                 "simkl_id": None,
                 "tvdb_id": None,
                 "anilist_id": str(root["id"]),
+                "mal_id": str(root["idMal"]) if root.get("idMal") not in (None,"") else None,
                 "source_format": root_format,
                 "source": "anilist_bottom_relation",
                 "publish_year": _year(root) or _year(target),

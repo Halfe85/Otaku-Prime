@@ -171,6 +171,17 @@ class KitsuMediatorEndpoint:
 
     def cast(self,kitsu_id): return self.client.cast(kitsu_id)
 
+    def poster(self,kitsu_id):
+        attrs=_attrs(self.client.anime(kitsu_id))
+        poster=attrs.get("posterImage") or {}
+        return (poster.get("original") or poster.get("large") or
+                poster.get("medium") or poster.get("small") or poster.get("tiny"))
+
+    def classification(self,kitsu_id):
+        attrs=_attrs(self.client.anime(kitsu_id)); age_rating=_age_rating(attrs)
+        return {"genres":self.client.categories(kitsu_id),"themes":[],
+                "age_rating":age_rating,"mature":age_rating=="R18"}
+
     def resolve(self,item,client=None):
         value=item.get("kitsu_id")
         if value in (None,""): raise MediatorPlacementError("watchlist item has no Kitsu ID")
@@ -203,7 +214,8 @@ class KitsuMediatorEndpoint:
         age_rating=_age_rating(target_attrs,root_attrs)
         return {"provider_path":"kitsu","provider_id":str(value),
                 "tv_show":{"name":name,"romaji_name":romaji,"simkl_id":None,"tvdb_id":None,
-                           "anilist_id":None,"source_format":str(root_attrs.get("subtype") or target_attrs.get("subtype") or "").upper() or None,
+                           "anilist_id":None,"kitsu_id":str(root["id"]),
+                           "source_format":str(root_attrs.get("subtype") or target_attrs.get("subtype") or "").upper() or None,
                            "source":"kitsu_prequel_graph","publish_year":publish_year,
                            "overview":target_attrs.get("synopsis") or root_attrs.get("synopsis"),
                            "runtime_minutes":runtime or _runtime(root_attrs),
