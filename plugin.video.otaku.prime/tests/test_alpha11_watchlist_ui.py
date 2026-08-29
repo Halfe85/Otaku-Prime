@@ -23,6 +23,19 @@ class Alpha11WatchlistUITests(unittest.TestCase):
         self.assertNotIn('Browse raw items fetched from connected watchlists.',page)
         self.assertNotIn('Prime watchlist item',page)
 
+    def test_watchlist_pagination_floats_and_reports_in_the_bottom_bar(self):
+        page=render_home(
+            {"username":"admin","role":"admin"},active_tab="watchlist-management",
+            watchlist_accounts={})
+        watchlist_html=read_static_asset(
+            "components/watchlist-management/watchlist-management.css")[1].decode("utf-8")
+        container_css=read_static_asset(
+            "components/main-container/main-container.css")[1].decode("utf-8")
+        self.assertIn('class="bottombar-status" id="watchlist-page-status"',page)
+        self.assertEqual(1,page.count('id="watchlist-page-status"'))
+        self.assertIn(".watchlist-pagination { position:fixed",watchlist_html)
+        self.assertIn("padding: 12px clamp(12px, 1.5vw, 22px) 14px",container_css)
+
     def test_bundled_provider_icons_are_served_as_png(self):
         for provider in ("anilist","mal","kitsu","simkl"):
             asset=read_static_asset(

@@ -41,8 +41,8 @@ class TVShowMediatorService:
     def resolve_item(self,item):
         return self.processor.resolve(item)
 
-    def process_item(self,item):
-        placement=self.resolve_item(item); provider=placement["provider_path"]
+    def _persist_placement(self,item,placement,placement_state="COMPLETE"):
+        provider=placement["provider_path"]
         show=placement["tv_show"]
         series=self.catalog_store.get_or_create_series(
             english_name=show.get("name"),romaji_name=show.get("romaji_name"),
@@ -57,7 +57,13 @@ class TVShowMediatorService:
         season=self.catalog_store.add_watchlist_season(
             series["local_id"],item,season_number=season_data["number"],
             provider_path=provider,placement_source=season_data["number_source"],
-            first_episode=season_data["first_episode"],last_episode=season_data["last_episode"])
+            first_episode=season_data.get("first_episode"),
+            last_episode=season_data.get("last_episode"),
+            english_name=season_data.get("name"),
+            romaji_name=season_data.get("romaji_name"),
+            release_date=season_data.get("release_date"),
+            release_status=season_data.get("release_status"),
+            placement_state=placement_state)
         for episode in placement["episodes"]:
             self.catalog_store.add_episode(
                 season["local_id"],episode["episode_number"],
@@ -65,6 +71,12 @@ class TVShowMediatorService:
                 mal_id=episode.get("mal_id"),simkl_id=episode.get("simkl_id"),
                 release_date=episode.get("release_date"),title=episode.get("title"),
                 overview=episode.get("overview"),runtime_minutes=episode.get("runtime_minutes"))
+        return series,season
+
+    def process_item(self,item):
+        placement=self.resolve_item(item); provider=placement["provider_path"]
+        show=placement["tv_show"]; season_data=placement["season"]
+        self._persist_placement(item,placement,placement_state="COMPLETE")
         LOGGER.info("Mediator placed Prime item %s through %s as %s S%02dE%02d-E%02d",
                     item["local_id"],provider,show.get("name"),season_data["number"],
                     season_data["first_episode"],season_data["last_episode"])
@@ -130,6 +142,20 @@ class TVShowMediatorService:
                         self.process_item(item); placed+=1; progress=True
                     except MediatorMetadataPending as exc:
                         deferred+=1; progress=True
+                        partial=getattr(exc,"placement",None)
+                        if partial:
+                            self._persist_placement(
+                                item,partial,placement_state="STRUCTURE_ONLY")
+                            show=partial.get("tv_show") or {}
+                            season=partial.get("season") or {}
+                            release=season.get("release_date") or "unannounced"
+                            status=season.get("release_status") or "UNKNOWN"
+                            LOGGER.info(
+                                "Mediator positioned deferred Prime item %s through %s as %s "
+                                "S%02d; release=%s status=%s",
+                                item["local_id"],partial.get("provider_path"),
+                                show.get("name"),int(season.get("number") or 0),
+                                release,status)
                         unchanged=(
                             str(item.get("mediator_status") or "").upper()=="DEFERRED"
                             and str(item.get("mediator_error") or "")==str(exc))

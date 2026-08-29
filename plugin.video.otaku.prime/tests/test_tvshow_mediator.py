@@ -28,6 +28,23 @@ class PendingProcessor:
         raise MediatorMetadataPending("Episode metadata has not been published")
 
 
+class StructurallyPendingProcessor:
+    def resolve(self,item):
+        placement={
+            "provider_path":"anilist","provider_id":"185874",
+            "tv_show":{"name":"Bleach","romaji_name":"Bleach",
+                       "anilist_id":"269","source_format":"TV",
+                       "air_status":"NOT_YET_RELEASED"},
+            "season":{"number":18,"number_source":"anilist_prequel_position",
+                      "name":"Bleach Season 18","romaji_name":"Bleach Future",
+                      "first_episode":None,"last_episode":None,
+                      "release_date":None,"release_status":"NOT_YET_RELEASED"},
+            "episodes":[],"relation_path":["269","185874"],
+        }
+        raise MediatorMetadataPending(
+            "Episode metadata has not been published",placement=placement)
+
+
 class WatchlistTVShowMediatorTests(unittest.TestCase):
     def setUp(self):
         handle=tempfile.NamedTemporaryFile(delete=False); handle.close(); self.path=handle.name
@@ -111,6 +128,31 @@ class WatchlistTVShowMediatorTests(unittest.TestCase):
         self.assertEqual(1,result["deferred"])
         self.assertFalse(any(
             "Mediator deferred Prime item" in message for message in logs.output))
+
+    def test_unreleased_item_keeps_structural_library_position_and_watchlist_link(self):
+        service=TVShowMediatorService(
+            self.watchlist,self.catalog,client=object(),
+            processor=StructurallyPendingProcessor())
+
+        result=service.run_once()
+
+        item=self.watchlist.item(self.prime_id)
+        series=self.catalog.list_series()[0]
+        season=self.catalog.list_seasons(series["local_id"])[0]
+        self.assertEqual({"placed":0,"existing":0,"deferred":1,"failed":0},result)
+        self.assertEqual("DEFERRED",item["mediator_status"])
+        self.assertEqual(0,item["added_to_library"])
+        self.assertEqual(self.prime_id,season["watchlist_local_id"])
+        self.assertEqual(18,season["season_number"])
+        self.assertEqual("Bleach Season 18",season["english_name"])
+        self.assertEqual("NOT_YET_RELEASED",season["release_status"])
+        self.assertEqual("STRUCTURE_ONLY",season["placement_state"])
+        self.assertEqual([],self.catalog.list_episodes(season["local_id"]))
+
+        # Reinitialization must not mistake a structure-only placeholder for
+        # a completely published library season.
+        self.watchlist.initialize()
+        self.assertEqual(0,self.watchlist.item(self.prime_id)["added_to_library"])
 
 
 if __name__=="__main__": unittest.main()

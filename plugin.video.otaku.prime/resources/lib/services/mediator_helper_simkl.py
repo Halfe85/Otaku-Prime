@@ -34,6 +34,10 @@ class MediatorPlacementError(RuntimeError):
 class MediatorMetadataPending(MediatorPlacementError):
     """The identity is valid, but providers have not published episodes yet."""
 
+    def __init__(self,message,placement=None):
+        super().__init__(message)
+        self.placement=placement
+
 
 class SimklMediatorClient:
     """Small throttled Simkl client shared by every provider path."""

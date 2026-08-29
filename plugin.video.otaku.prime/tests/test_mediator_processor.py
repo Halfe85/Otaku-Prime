@@ -16,7 +16,9 @@ class Endpoint:
 class PendingEndpoint(Endpoint):
     def resolve(self,item):
         self.calls+=1
-        raise MediatorMetadataPending(self.error or self.name+" episode metadata pending")
+        raise MediatorMetadataPending(
+            self.error or self.name+" episode metadata pending",
+            placement=self.result)
 
 
 def placement(provider,season=1):
@@ -101,6 +103,24 @@ class MediatorProcessorTests(unittest.TestCase):
         self.assertIn("not been published",str(caught.exception))
         self.assertEqual((1,1,1,1),tuple(
             endpoints[name].calls for name in ("simkl","anilist","mal","kitsu")))
+
+    def test_anilist_structural_position_survives_other_pending_providers(self):
+        structural=placement("anilist",season=3)
+        structural["episodes"]=[]
+        structural["season"].update({"first_episode":None,"last_episode":None,
+                                     "release_status":"NOT_YET_RELEASED"})
+        endpoints={
+            "simkl":PendingEndpoint("simkl",error="no episodes"),
+            "anilist":PendingEndpoint("anilist",result=structural,error="no episode count"),
+            "mal":PendingEndpoint("mal",error="no episode count"),
+            "kitsu":PendingEndpoint("kitsu",error="no episode count"),
+        }
+
+        with self.assertRaises(MediatorMetadataPending) as caught:
+            MediatorProcessor(endpoints=endpoints).resolve(self.item())
+
+        self.assertEqual(3,caught.exception.placement["season"]["number"])
+        self.assertEqual("anilist",caught.exception.placement["provider_path"])
 
 
 if __name__=="__main__": unittest.main()

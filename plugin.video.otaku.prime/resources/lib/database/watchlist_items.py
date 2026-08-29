@@ -122,9 +122,15 @@ class WatchlistItemStore:
                 db.execute("DROP TABLE watchlist_items_alpha8")
             table=db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='seasons'").fetchone()
             if table:
+                season_columns={row[1] for row in db.execute("PRAGMA table_info(seasons)")}
+                placement_filter=(
+                    " AND COALESCE(s.placement_state,'COMPLETE')='COMPLETE'"
+                    if "placement_state" in season_columns else "")
                 db.execute("""UPDATE watchlist_items SET added_to_library=1,mediator_ready=0,
                   library_added_at=COALESCE(library_added_at,CURRENT_TIMESTAMP)
-                  WHERE EXISTS(SELECT 1 FROM seasons s WHERE s.watchlist_local_id=watchlist_items.local_id)""")
+                  WHERE EXISTS(SELECT 1 FROM seasons s
+                    WHERE s.watchlist_local_id=watchlist_items.local_id{})""".format(
+                        placement_filter))
             for table_name in (
                 "kodi_duplicate_candidates","kodi_media_ownership","kodi_inventory_episodes",
                 "kodi_inventory_shows","kodi_library_state","kodi_episode_links",

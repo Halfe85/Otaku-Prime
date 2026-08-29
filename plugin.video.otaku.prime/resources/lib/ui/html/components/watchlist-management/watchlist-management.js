@@ -46,7 +46,8 @@
 
   function visiblePageSize() {
     var top = rows.getBoundingClientRect().top;
-    return Math.max(3, Math.floor((window.innerHeight - top - 145) / 59));
+    var controlsTop = document.getElementById("watchlist-pagination").getBoundingClientRect().top;
+    return Math.max(3, Math.floor((controlsTop - top - 10) / 59));
   }
 
   function providerLink(provider, entry) {
@@ -185,7 +186,7 @@
       textCell(row, String(entry.progress || 0) + (entry.episode_count != null ? " / " + entry.episode_count : ""));
       rows.appendChild(row);
     });
-    pageStatus.textContent = "Page " + page + " of " + pages + " · " + visible.length + " items";
+    if (active()) pageStatus.textContent = "Page " + page + " of " + pages + " · " + visible.length + " items";
     previous.disabled = page <= 1;
     next.disabled = page >= pages;
     window.dispatchEvent(new CustomEvent("prime:watchlist-rendered"));
@@ -301,7 +302,12 @@
   }
 
   window.addEventListener("prime:tabchange", function (event) {
-    if (event.detail && event.detail.id === "watchlist-management") loadEntries();
+    if (event.detail && event.detail.id === "watchlist-management") {
+      if (loaded) render();
+      else loadEntries();
+    } else {
+      pageStatus.textContent = "";
+    }
   });
   document.addEventListener("visibilitychange", function () { if (active()) loadEntries(); });
   window.addEventListener("beforeunload", function () { stopped = true; });

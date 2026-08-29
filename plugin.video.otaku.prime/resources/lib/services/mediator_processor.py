@@ -89,7 +89,7 @@ class MediatorProcessor:
         checker=getattr(endpoint,"available",None)
         return bool(checker(item)) if checker else True
 
-    def _try(self,name,item,attempts):
+    def _try(self,name,item,attempts,pending_placements=None):
         endpoint=self.endpoints[name]
         if not self._available(name,endpoint,item):
             reason="Simkl identity is conflicted" if name=="simkl" and str(item.get("identity_resolution_status") or "")=="CONFLICT_EXACT" else "provider ID unavailable"
@@ -99,6 +99,8 @@ class MediatorProcessor:
             return endpoint.resolve(item)
         except MediatorMetadataPending as exc:
             attempts.append({"provider":name,"skipped":False,"pending":True,"error":str(exc)})
+            if pending_placements is not None and getattr(exc,"placement",None):
+                pending_placements.append((name,exc.placement))
             return None
         except Exception as exc:
             attempts.append({"provider":name,"skipped":False,"error":str(exc)})
@@ -106,12 +108,13 @@ class MediatorProcessor:
             return None
 
     def resolve(self,item):
-        attempts=[]
-        simkl=self._try("simkl",item,attempts)
+        attempts=[]; pending_placements=[]
+        simkl=self._try("simkl",item,attempts,pending_placements)
         if simkl:
             simkl["provider_attempts"]=attempts; return simkl
 
-        anilist=self._try("anilist",item,attempts); mal=self._try("mal",item,attempts)
+        anilist=self._try("anilist",item,attempts,pending_placements)
+        mal=self._try("mal",item,attempts,pending_placements)
         if anilist and mal:
             try:
                 combined=_merge_placements(anilist,mal); combined["provider_attempts"]=attempts
@@ -139,13 +142,20 @@ class MediatorProcessor:
         elif mal:
             mal["provider_attempts"]=attempts; return mal
 
-        kitsu=self._try("kitsu",item,attempts)
+        kitsu=self._try("kitsu",item,attempts,pending_placements)
         if kitsu:
             kitsu["provider_attempts"]=attempts; return kitsu
         usable=[row for row in attempts if not row.get("skipped")]
         if not usable: raise MediatorPlacementError("Prime item has no usable provider metadata path")
-        if all(row.get("pending") for row in usable):
+        if pending_placements or all(row.get("pending") for row in usable):
+            partial=next((placement for provider,placement in pending_placements
+                          if provider=="anilist"),None)
+            if partial is None and pending_placements:
+                partial=pending_placements[0][1]
+            if partial is not None:
+                partial["provider_attempts"]=attempts
             raise MediatorMetadataPending(
                 "Episode metadata has not been published by any available provider: "+
-                "; ".join("{}: {}".format(row["provider"],row["error"]) for row in usable))
+                "; ".join("{}: {}".format(row["provider"],row["error"]) for row in usable),
+                placement=partial)
         raise MediatorPlacementError("; ".join("{}: {}".format(row["provider"],row["error"]) for row in usable))

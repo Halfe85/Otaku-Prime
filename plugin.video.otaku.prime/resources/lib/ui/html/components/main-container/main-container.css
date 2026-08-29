@@ -10,7 +10,7 @@
 .tab { padding: 11px 14px; border: 0; border-bottom: 3px solid transparent; background: transparent; color: var(--muted); cursor: pointer; white-space: nowrap; }
 .tab:hover, .tab:focus-visible { color: var(--text); }
 .tab.active { color: var(--text); border-color: var(--accent); }
-.main-content { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0px clamp(00px, 0vw, 0px) 0px; }
+.main-content { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 12px clamp(12px, 1.5vw, 22px) 14px; }
 .content-inner { width: min(1980px, 100%); margin: 0 auto; }
 .panel[hidden] { display: none; }
 .panel-header { margin-bottom: 24px; }
@@ -19,5 +19,7 @@
 .card { margin: 0 0 16px; padding: 20px; border: 1px solid var(--border); border-radius: 16px; background: linear-gradient(145deg, rgba(25,31,48,.95), rgba(17,22,35,.95)); }
 .card h3 { margin: 0 0 6px; font-size: 17px; }
 .field-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
-.bottombar { min-height: 45px; padding: 10px clamp(18px, 4vw, 52px); border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-@media (max-width: 760px) { .brand-row { min-height: 58px;flex-wrap:wrap; } .brand p, .user-name { display: none; } .topbar-search { order:3;width:100%;margin:0; }.topbar-search:has(input:disabled) { display:none; } .main-content { padding-top: 22px; } .bottombar span:last-child { display: none; } }
+.bottombar { min-height: 45px; padding: 10px clamp(18px, 4vw, 52px); border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);align-items:center;gap:16px; }
+.bottombar-status { min-width:150px;text-align:center;color:#c4cbda; }
+.bottom-actions { justify-self:end; }
+@media (max-width: 760px) { .brand-row { min-height: 58px;flex-wrap:wrap; } .brand p, .user-name { display: none; } .topbar-search { order:3;width:100%;margin:0; }.topbar-search:has(input:disabled) { display:none; } .main-content { padding:10px 10px 12px; } .bottombar .bottom-actions { display:none; } }

@@ -195,6 +195,17 @@ def _titles(media):
     }
 
 
+def _season_title(target, root_titles, season_number):
+    """Return a useful catalogue title even before AniList publishes English metadata."""
+    values=target.get("title") or {}
+    english=values.get("english")
+    if english:
+        return english
+    if season_number>1 and root_titles.get("english"):
+        return "{} Season {}".format(root_titles["english"],season_number)
+    return values.get("romaji") or values.get("native") or root_titles.get("english")
+
+
 def _prequel_ids(media):
     result = []
     for edge in (media.get("relations") or {}).get("edges") or []:
@@ -337,27 +348,11 @@ class AniListMediatorHelper:
         root, path = _find_bottom_root(self.client, target)
         season_number, number_source = _season_number(target, path)
         schedule = self.client.schedule(value)
-        count = _episode_count(target, item, schedule)
-        offset = _special_offset(target, path) if season_number == 0 else 0
-        dates = _release_dates(target, schedule)
-        episodes = []
-        for source_number in range(1, count + 1):
-            episodes.append({
-                "source_episode_number": source_number,
-                "episode_number": offset + source_number,
-                "season_number": season_number,
-                "simkl_id": None,
-                "mal_id": None,
-                "title": None,
-                "overview": None,
-                "runtime_minutes": _runtime(target),
-                "release_date": dates.get(source_number),
-            })
         root_titles = _titles(root)
         target_titles = _titles(target)
-        numbers = [row["episode_number"] for row in episodes]
         root_format = str(root.get("format") or "").upper() or None
-        return {
+        season_release_date=_date_string(target.get("startDate")) or item.get("release_date")
+        placement = {
             "provider_path": self.provider,
             "provider_id": str(value),
             "tv_show": {
@@ -377,11 +372,38 @@ class AniListMediatorHelper:
             "season": {
                 "number": season_number,
                 "number_source": number_source,
-                "name": target_titles["english"],
+                "name": _season_title(target,root_titles,season_number),
+                "romaji_name": target_titles["romaji"],
                 "media_type": str(target.get("format") or "").lower(),
-                "first_episode": numbers[0],
-                "last_episode": numbers[-1],
+                "first_episode": None,
+                "last_episode": None,
+                "release_date": season_release_date,
+                "release_status": target.get("status"),
             },
-            "episodes": episodes,
+            "episodes": [],
             "relation_path": [str(node["id"]) for node in path],
         }
+        try:
+            count = _episode_count(target, item, schedule)
+        except MediatorMetadataPending as exc:
+            raise MediatorMetadataPending(str(exc),placement=placement) from exc
+        offset = _special_offset(target, path) if season_number == 0 else 0
+        dates = _release_dates(target, schedule)
+        episodes = []
+        for source_number in range(1, count + 1):
+            episodes.append({
+                "source_episode_number": source_number,
+                "episode_number": offset + source_number,
+                "season_number": season_number,
+                "simkl_id": None,
+                "mal_id": None,
+                "title": None,
+                "overview": None,
+                "runtime_minutes": _runtime(target),
+                "release_date": dates.get(source_number),
+            })
+        numbers = [row["episode_number"] for row in episodes]
+        placement["season"].update({
+            "first_episode":numbers[0],"last_episode":numbers[-1]})
+        placement["episodes"]=episodes
+        return placement

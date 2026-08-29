@@ -5,6 +5,7 @@ import unittest
 from resources.lib.database.catalog import CatalogStore
 from resources.lib.database.watchlist_items import WatchlistItemStore
 from resources.lib.services.mediator_helper_anilist import AniListMediatorHelper
+from resources.lib.services.mediator_helper_simkl import MediatorMetadataPending
 from resources.lib.services.mediator_tvshow import TVShowMediatorService
 
 
@@ -66,6 +67,30 @@ class FakeAniListClient:
 
 
 class AniListMediatorTests(unittest.TestCase):
+    def test_unreleased_third_season_returns_structural_placement_without_episodes(self):
+        root = media(10, "How NOT to Summon a Demon Lord", "TV", 12, year=2018)
+        second = media(20, "How NOT to Summon a Demon Lord Omega", "TV", 10,
+                       prequel=root, year=2021)
+        third = media(30, "Isekai Maou ULT", "TV", None, prequel=second,
+                      status="NOT_YET_RELEASED")
+        third["title"]["english"] = None
+        third["startDate"] = {"year": None, "month": None, "day": None}
+        helper = AniListMediatorHelper(FakeAniListClient([root, second, third]))
+
+        with self.assertRaises(MediatorMetadataPending) as caught:
+            helper.resolve({"anilist_id": "30", "episode_count": None,
+                            "release_date": None})
+
+        placement = caught.exception.placement
+        self.assertIsNotNone(placement)
+        self.assertEqual("How NOT to Summon a Demon Lord", placement["tv_show"]["name"])
+        self.assertEqual(3, placement["season"]["number"])
+        self.assertEqual("How NOT to Summon a Demon Lord Season 3",
+                         placement["season"]["name"])
+        self.assertEqual("NOT_YET_RELEASED", placement["season"]["release_status"])
+        self.assertIsNone(placement["season"]["release_date"])
+        self.assertEqual([], placement["episodes"])
+
     def test_tv_prequel_chain_becomes_numbered_seasons(self):
         root = media(10, "Example", "TV", 12, year=2020)
         second = media(20, "Example Season 2", "TV", 10, prequel=root, year=2022)

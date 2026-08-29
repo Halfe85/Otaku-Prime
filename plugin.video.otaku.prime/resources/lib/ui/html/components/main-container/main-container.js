@@ -1,11 +1,13 @@
 (function () {
   var tabs = Array.prototype.slice.call(document.querySelectorAll("[data-tab]"));
   var search = document.getElementById("prime-search");
+  var bottomStatus = document.getElementById("watchlist-page-status");
   var searchContexts = {
     "library": "Search library titles",
     "watchlist-management": "Search watchlist titles"
   };
   function selectTab(id) {
+    if (bottomStatus) bottomStatus.textContent = "";
     tabs.forEach(function (tab) {
       var selected = tab.getAttribute("data-tab") === id;
       tab.classList.toggle("active", selected);

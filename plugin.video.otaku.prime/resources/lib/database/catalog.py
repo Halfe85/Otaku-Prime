@@ -81,6 +81,9 @@ class CatalogStore:
               romaji_name TEXT,
               media_format TEXT,
               release_date TEXT,
+              release_status TEXT,
+              placement_state TEXT NOT NULL DEFAULT 'COMPLETE'
+                CHECK(placement_state IN('STRUCTURE_ONLY','COMPLETE')),
               created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
               updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
               CHECK(substr(local_id,1,6)=related_series_id),
@@ -119,7 +122,9 @@ class CatalogStore:
                 ("runtime_minutes","INTEGER"),("air_status","TEXT")))
             self._add_columns(db,"seasons",(
                 ("provider_path","TEXT"),("placement_source","TEXT"),
-                ("first_episode","INTEGER"),("last_episode","INTEGER")))
+                ("first_episode","INTEGER"),("last_episode","INTEGER"),
+                ("release_status","TEXT"),
+                ("placement_state","TEXT NOT NULL DEFAULT 'COMPLETE'")))
             self._add_columns(db,"episodes",(
                 ("source_episode_number","INTEGER NOT NULL DEFAULT 1"),
                 ("title","TEXT"),("overview","TEXT"),("runtime_minutes","INTEGER")))
@@ -300,8 +305,16 @@ class CatalogStore:
 
     def add_watchlist_season(self,series_id,watchlist_item,season_number=None,
                              provider_path=None,placement_source=None,
-                             first_episode=None,last_episode=None):
+                             first_episode=None,last_episode=None,
+                             english_name=None,romaji_name=None,release_date=None,
+                             release_status=None,placement_state="COMPLETE"):
         watchlist_id=str(watchlist_item["local_id"])
+        english_name=english_name or watchlist_item.get("english_name")
+        romaji_name=romaji_name or watchlist_item.get("romaji_name")
+        release_date=release_date or watchlist_item.get("release_date")
+        placement_state=str(placement_state or "COMPLETE").upper()
+        if placement_state not in ("STRUCTURE_ONLY","COMPLETE"):
+            raise ValueError("unsupported season placement state")
         with self._connection() as db:
             row=db.execute("SELECT * FROM seasons WHERE watchlist_local_id=?",(watchlist_id,)).fetchone()
             if row:
@@ -315,25 +328,28 @@ class CatalogStore:
                   season_number=?,provider_path=?,placement_source=?,first_episode=?,last_episode=?,
                   english_name=COALESCE(?,english_name),romaji_name=COALESCE(?,romaji_name),
                   media_format=COALESCE(?,media_format),release_date=COALESCE(?,release_date),
+                  release_status=COALESCE(?,release_status),placement_state=?,
                   updated_at=CURRENT_TIMESTAMP WHERE local_id=?""",
                   (watchlist_item.get("anilist_id"),watchlist_item.get("mal_id"),
                    watchlist_item.get("kitsu_id"),watchlist_item.get("simkl_id"),season_number,
                    provider_path,placement_source,first_episode,last_episode,
-                   watchlist_item.get("english_name"),watchlist_item.get("romaji_name"),
-                   watchlist_item.get("media_format"),watchlist_item.get("release_date"),row["local_id"]))
+                   english_name,romaji_name,
+                   watchlist_item.get("media_format"),release_date,release_status,
+                   placement_state,row["local_id"]))
                 return dict(db.execute("SELECT * FROM seasons WHERE local_id=?",(row["local_id"],)).fetchone())
             if not db.execute("SELECT 1 FROM tv_series WHERE local_id=?",(series_id,)).fetchone():
                 raise KeyError("TV series not found")
             local_id=self._new_local_id(db,"seasons",str(series_id))
             db.execute("""INSERT INTO seasons(local_id,related_series_id,watchlist_local_id,
               anilist_id,mal_id,kitsu_id,simkl_id,season_number,english_name,romaji_name,
-              media_format,release_date,provider_path,placement_source,first_episode,last_episode)
-              VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+              media_format,release_date,release_status,placement_state,
+              provider_path,placement_source,first_episode,last_episode)
+              VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
               (local_id,series_id,watchlist_id,watchlist_item.get("anilist_id"),
                watchlist_item.get("mal_id"),watchlist_item.get("kitsu_id"),
-               watchlist_item.get("simkl_id"),season_number,watchlist_item.get("english_name"),
-               watchlist_item.get("romaji_name"),watchlist_item.get("media_format"),
-               watchlist_item.get("release_date"),provider_path,placement_source,
+               watchlist_item.get("simkl_id"),season_number,english_name,
+               romaji_name,watchlist_item.get("media_format"),
+               release_date,release_status,placement_state,provider_path,placement_source,
                first_episode,last_episode))
             return dict(db.execute("SELECT * FROM seasons WHERE local_id=?",(local_id,)).fetchone())
 
