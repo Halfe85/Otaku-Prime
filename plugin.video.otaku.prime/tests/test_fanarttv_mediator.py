@@ -1,4 +1,7 @@
 import json
+import os
+import sqlite3
+import tempfile
 import unittest
 
 from resources.lib.services.mediator_fanarttv import (
@@ -22,7 +25,8 @@ class FanartTVMediatorTests(unittest.TestCase):
                 {"url":"https://assets/poster-en-low.jpg","lang":"en","likes":"2"},
                 {"url":"https://assets/poster-en-high.jpg","lang":"en","likes":"8"},
             ],
-            "hdtvlogo":[{"url":"https://assets/logo.png","lang":"en","likes":"3"}],
+            "clearlogo":[{"url":"https://assets/clearlogo.png","lang":"en","likes":"1"}],
+            "hdtvlogo":[{"url":"https://assets/hdtvlogo.png","lang":"en","likes":"99"}],
             "tvbanner":[{"url":"https://assets/banner.jpg","lang":"00","likes":"5"}],
         }
 
@@ -41,6 +45,21 @@ class FanartTVMediatorTests(unittest.TestCase):
         self.assertEqual("https://webservice.fanart.tv/v3.2/tv/74796",calls[0][0])
         self.assertEqual("project",dict(calls[0][1])["Api-key"])
 
+    def test_client_loads_otaku_packaged_project_key(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=os.path.join(directory,"info.db")
+            with sqlite3.connect(path) as db:
+                db.execute("""CREATE TABLE info(
+                  api_name TEXT PRIMARY KEY,api_key TEXT)""")
+                db.execute("INSERT INTO info(api_name,api_key) VALUES(?,?)",
+                           ("Fanart-TV","otaku-project-key"))
+
+            with self.assertLogs("otaku_prime.services-mediator_fanarttv",level="INFO"):
+                client=FanartTVClient(info_db=path)
+
+        self.assertEqual("otaku-project-key",client.api_key)
+        self.assertTrue(client.configured)
+
     def test_artwork_prefers_language_then_likes_and_enriches_urls(self):
         client=type("Client",(),{
             "configured":True,
@@ -52,7 +71,7 @@ class FanartTVMediatorTests(unittest.TestCase):
 
         show=placement["tv_show"]
         self.assertEqual("https://assets/poster-en-high.jpg",show["poster_url"])
-        self.assertEqual("https://assets/logo.png",show["clearlogo_url"])
+        self.assertEqual("https://assets/clearlogo.png",show["clearlogo_url"])
         self.assertEqual("https://assets/banner.jpg",show["banner_url"])
         self.assertEqual("fanarttv",show["artwork_source"])
 
