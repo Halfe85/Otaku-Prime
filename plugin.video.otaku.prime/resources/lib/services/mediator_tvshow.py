@@ -53,8 +53,8 @@ class TVShowMediatorService:
             return getter(str(anilist_id)) or None
         except Exception as exc:
             LOGGER.warning(
-                "AniList staff/character enrichment unavailable for Prime item %s: %s",
-                item_id,exc)
+                "AniList staff/character enrichment unavailable for Prime item %s "
+                "(AniList ID %s): %s",item_id,anilist_id,exc)
             return None
 
     def _persist_placement(self,item,placement,placement_state="COMPLETE"):
@@ -80,8 +80,16 @@ class TVShowMediatorService:
             placement_state=placement_state)
         series_cast=show.get("cast") or self._anilist_cast(
             show.get("anilist_id"),item.get("local_id"))
-        season_cast=season_data.get("cast") or self._anilist_cast(
-            item.get("anilist_id"),item.get("local_id"))
+        same_anilist_identity=(show.get("anilist_id") not in (None,"") and
+                               str(show.get("anilist_id"))==str(item.get("anilist_id")))
+        if season_data.get("cast"):
+            season_cast=season_data.get("cast")
+        elif same_anilist_identity:
+            # One AniList media row is both the franchise root and this season.
+            # Reuse success or failure so a slow endpoint is never called twice.
+            season_cast=series_cast
+        else:
+            season_cast=self._anilist_cast(item.get("anilist_id"),item.get("local_id"))
         series_credit_count=self.catalog_store.replace_media_credits(
             series_cast,series_id=series["local_id"],
             source_provider=show.get("cast_source") or

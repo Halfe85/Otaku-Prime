@@ -124,6 +124,17 @@ class WatchlistTVShowMediatorTests(unittest.TestCase):
         self.assertEqual("https://img/staff.jpg",detail["cast"][0]["person"]["image_url"])
         self.assertEqual(["269","185874"],processor.endpoints["anilist"].client.calls)
 
+    def test_same_anilist_root_and_season_fetch_enrichment_only_once(self):
+        placement=self.placement("simkl")
+        placement["tv_show"]["anilist_id"]="185874"
+        processor=SimklPlacementWithAniListCredits(placement)
+        service=TVShowMediatorService(
+            self.watchlist,self.catalog,client=object(),processor=processor)
+
+        service.run_once()
+
+        self.assertEqual(["185874"],processor.endpoints["anilist"].client.calls)
+
     def test_anilist_is_tried_after_present_simkl_id_fails(self):
         helpers={name:Helper(name,self.placement(name)) for name in ("simkl","anilist","mal","kitsu")}
         helpers["simkl"]=FailingHelper("simkl",None)

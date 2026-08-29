@@ -90,7 +90,10 @@ class Alpha11WatchlistUITests(unittest.TestCase):
         self.assertIn("function characterCard(character)",script)
         self.assertIn("function staffCard(person)",script)
         self.assertIn("function selectPeopleTab(tab)",script)
+        self.assertIn('portrait(character, "character", portraitStaff)',script)
         self.assertIn(".library-people-grid",styles)
+        self.assertIn(".library-person-portrait.has-staff-portrait:hover",styles)
+        self.assertIn(".library-portrait-layer.alternate",styles)
 
     def test_app_logs_preserve_scroll_and_offer_jump_to_newest(self):
         page=render_home(

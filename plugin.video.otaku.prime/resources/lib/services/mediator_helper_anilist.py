@@ -8,6 +8,7 @@ import time
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from resources.lib.logging_config import get_logger
 from resources.lib.services.anilist_rate_limit import ANILIST_RATE_LIMITER
 from resources.lib.services.mediator_helper_simkl import (
     MediatorMetadataPending,
@@ -18,6 +19,7 @@ from resources.lib.services.mediator_helper_simkl import (
 MAX_PREQUEL_DEPTH = 64
 SPECIAL_FORMATS = ("MOVIE", "OVA", "ONA", "SPECIAL", "MUSIC")
 SEASON_FORMATS = ("TV", "TV_SHORT")
+LOGGER=get_logger(__name__)
 
 
 class AniListMediatorClient:
@@ -60,6 +62,9 @@ class AniListMediatorClient:
                     "AniList GraphQL returned HTTP {}".format(exc.code)
                 ) from exc
             except (URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
+                if attempt == 0:
+                    time.sleep(1)
+                    continue
                 raise MediatorPlacementError("AniList GraphQL failed: {}".format(exc)) from exc
         if not isinstance(payload, dict):
             raise MediatorPlacementError("AniList GraphQL returned an invalid response")
@@ -125,115 +130,100 @@ class AniListMediatorClient:
         key = str(anilist_id)
         if key in self._cast_cache:
             return self._cast_cache[key]
-        page = 1
         result = []
         seen = set()
+        errors=[]
+        character_query="""query($id:Int!,$page:Int!){Media(id:$id,type:ANIME){
+          characters(page:$page,perPage:25){pageInfo{hasNextPage} edges{
+            node{id name{full} description(asHtml:false) image{large}}
+            voiceActors(language:JAPANESE,sort:[RELEVANCE,ID]){id name{full}
+              description(asHtml:false) dateOfBirth{year month day}
+              dateOfDeath{year month day} age image{large}}
+          }}}}"""
+        staff_query="""query($id:Int!,$page:Int!){Media(id:$id,type:ANIME){
+          staff(page:$page,perPage:25){pageInfo{hasNextPage} edges{role node{id
+            name{full} description(asHtml:false) dateOfBirth{year month day}
+            dateOfDeath{year month day} age image{large}}}}}}"""
+
+        page=1
         while True:
-            data = self._query(
-                """query($id:Int!,$page:Int!){Media(id:$id,type:ANIME){
-                  characters(page:$page,perPage:25){
-                    pageInfo{hasNextPage}
-                    edges{
-                      node{id name{full} description(asHtml:false) image{large}}
-                      voiceActors(language:JAPANESE,sort:[RELEVANCE,ID]){
-                        id name{full} description(asHtml:false)
-                        dateOfBirth{year month day} dateOfDeath{year month day}
-                        age image{large}
-                      }
-                    }
-                  }
-                  staff(page:$page,perPage:25){
-                    pageInfo{hasNextPage}
-                    edges{
-                      role
-                      node{id name{full} description(asHtml:false)
-                        dateOfBirth{year month day} dateOfDeath{year month day}
-                        age image{large}}
-                    }
-                  }
-                }}""",
-                {"id": int(key), "page": page},
-            )
-            connection = ((data.get("Media") or {}).get("characters") or {})
+            try:
+                data=self._query(character_query,{"id":int(key),"page":page})
+            except MediatorPlacementError as exc:
+                errors.append("characters: {}".format(exc)); break
+            connection=((data.get("Media") or {}).get("characters") or {})
             for edge in connection.get("edges") or []:
                 character_node=(edge or {}).get("node") or {}
-                character = (character_node.get("name") or {}).get("full")
-                if not character:
-                    continue
+                character=(character_node.get("name") or {}).get("full")
+                if not character: continue
+                character_value={
+                    "anilist_id":str(character_node.get("id")) if character_node.get("id") else None,
+                    "name":str(character),"trivia":character_node.get("description"),
+                    "image_url":(character_node.get("image") or {}).get("large"),
+                }
                 actors=(edge or {}).get("voiceActors") or []
                 if not actors:
                     marker=(None,str(character))
                     if marker not in seen:
-                        seen.add(marker)
-                        result.append({
-                            "person_name":None,"character_name":str(character),
-                            "person":{},
-                            "character":{
-                                "anilist_id":str(character_node.get("id")) if character_node.get("id") else None,
-                                "name":str(character),"trivia":character_node.get("description"),
-                                "image_url":(character_node.get("image") or {}).get("large"),
-                            },
-                            "credit_type":"voice_actor","language":"JAPANESE",
-                            "source_provider":"anilist","sort_order":len(result),
-                        })
+                        seen.add(marker); result.append({
+                            "person_name":None,"character_name":str(character),"person":{},
+                            "character":character_value,"credit_type":"voice_actor",
+                            "language":"JAPANESE","source_provider":"anilist",
+                            "sort_order":len(result)})
                 for actor in actors:
-                    person = ((actor or {}).get("name") or {}).get("full")
-                    if not person:
-                        continue
-                    marker = (str(person), str(character))
-                    if marker in seen:
-                        continue
-                    seen.add(marker)
-                    result.append({
-                        "person_name": str(person),"character_name":str(character),
-                        "person":{
-                            "anilist_id":str(actor.get("id")) if actor.get("id") else None,
-                            "name":str(person),"trivia":actor.get("description"),
-                            "date_of_birth":_fuzzy_date_string(actor.get("dateOfBirth")),
-                            "date_of_death":_fuzzy_date_string(actor.get("dateOfDeath")),
-                            "age":actor.get("age"),
-                            "image_url":(actor.get("image") or {}).get("large"),
-                        },
-                        "character":{
-                            "anilist_id":str(character_node.get("id")) if character_node.get("id") else None,
-                            "name":str(character),"trivia":character_node.get("description"),
-                            "image_url":(character_node.get("image") or {}).get("large"),
-                        },
-                        "credit_type":"voice_actor","language":"JAPANESE",
-                        "source_provider":"anilist",
-                        "sort_order": len(result),
-                    })
-            staff_connection=((data.get("Media") or {}).get("staff") or {})
-            for edge in staff_connection.get("edges") or []:
+                    person=((actor or {}).get("name") or {}).get("full")
+                    if not person: continue
+                    marker=(str(person),str(character))
+                    if marker in seen: continue
+                    seen.add(marker); result.append({
+                        "person_name":str(person),"character_name":str(character),
+                        "person":{"anilist_id":str(actor.get("id")) if actor.get("id") else None,
+                                  "name":str(person),"trivia":actor.get("description"),
+                                  "date_of_birth":_fuzzy_date_string(actor.get("dateOfBirth")),
+                                  "date_of_death":_fuzzy_date_string(actor.get("dateOfDeath")),
+                                  "age":actor.get("age"),
+                                  "image_url":(actor.get("image") or {}).get("large")},
+                        "character":character_value,"credit_type":"voice_actor",
+                        "language":"JAPANESE","source_provider":"anilist",
+                        "sort_order":len(result)})
+            if not (connection.get("pageInfo") or {}).get("hasNextPage"): break
+            page+=1
+            if page>50:
+                errors.append("characters: AniList character list exceeded its safety limit"); break
+
+        page=1
+        while True:
+            try:
+                data=self._query(staff_query,{"id":int(key),"page":page})
+            except MediatorPlacementError as exc:
+                errors.append("staff: {}".format(exc)); break
+            connection=((data.get("Media") or {}).get("staff") or {})
+            for edge in connection.get("edges") or []:
                 person_node=(edge or {}).get("node") or {}
-                person=((person_node.get("name") or {}).get("full"))
+                person=(person_node.get("name") or {}).get("full")
                 role=str((edge or {}).get("role") or "Staff")
-                if not person:
-                    continue
+                if not person: continue
                 marker=("staff",str(person_node.get("id") or person),role)
-                if marker in seen:
-                    continue
-                seen.add(marker)
-                result.append({
+                if marker in seen: continue
+                seen.add(marker); result.append({
                     "person_name":str(person),"character_name":None,
-                    "person":{
-                        "anilist_id":str(person_node.get("id")) if person_node.get("id") else None,
-                        "name":str(person),"trivia":person_node.get("description"),
-                        "date_of_birth":_fuzzy_date_string(person_node.get("dateOfBirth")),
-                        "date_of_death":_fuzzy_date_string(person_node.get("dateOfDeath")),
-                        "age":person_node.get("age"),
-                        "image_url":(person_node.get("image") or {}).get("large"),
-                    },
+                    "person":{"anilist_id":str(person_node.get("id")) if person_node.get("id") else None,
+                              "name":str(person),"trivia":person_node.get("description"),
+                              "date_of_birth":_fuzzy_date_string(person_node.get("dateOfBirth")),
+                              "date_of_death":_fuzzy_date_string(person_node.get("dateOfDeath")),
+                              "age":person_node.get("age"),
+                              "image_url":(person_node.get("image") or {}).get("large")},
                     "character":{},"credit_type":role,"language":"",
-                    "source_provider":"anilist","sort_order":len(result),
-                })
-            has_more_characters=(connection.get("pageInfo") or {}).get("hasNextPage")
-            has_more_staff=(staff_connection.get("pageInfo") or {}).get("hasNextPage")
-            if not has_more_characters and not has_more_staff:
-                break
-            page += 1
-            if page > 50:
-                raise MediatorPlacementError("AniList character/staff list exceeded its safety limit")
+                    "source_provider":"anilist","sort_order":len(result)})
+            if not (connection.get("pageInfo") or {}).get("hasNextPage"): break
+            page+=1
+            if page>50:
+                errors.append("staff: AniList staff list exceeded its safety limit"); break
+
+        if errors and not result:
+            raise MediatorPlacementError("; ".join(errors))
+        if errors:
+            LOGGER.warning("AniList %s enrichment is partial: %s",key,"; ".join(errors))
         self._cast_cache[key] = result
         return result
 

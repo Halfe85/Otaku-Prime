@@ -5,6 +5,7 @@ import unittest
 from resources.lib.database.catalog import CatalogStore
 from resources.lib.database.watchlist_items import WatchlistItemStore
 from resources.lib.services.mediator_helper_anilist import (
+    AniListMediatorClient,
     AniListMediatorHelper,
     _fuzzy_date_string,
 )
@@ -75,6 +76,43 @@ class AniListMediatorTests(unittest.TestCase):
         self.assertEqual("1980-04",_fuzzy_date_string({"year":1980,"month":4}))
         self.assertEqual("1980-04-09",_fuzzy_date_string(
             {"year":1980,"month":4,"day":9}))
+
+    def test_client_keeps_character_credits_and_standalone_staff_separate(self):
+        client=AniListMediatorClient(opener=lambda *_args,**_kwargs: None)
+        def query(source,_variables):
+            if "characters(page:" in source:
+                return {"Media":{"characters":{"pageInfo":{"hasNextPage":False},"edges":[{
+                    "node":{"id":800,"name":{"full":"Hero"},"image":{"large":"hero.jpg"}},
+                    "voiceActors":[{"id":700,"name":{"full":"Voice Actor"},
+                                    "image":{"large":"actor.jpg"}}]}]}}}
+            return {"Media":{"staff":{"pageInfo":{"hasNextPage":False},"edges":[{
+                "role":"Director","node":{"id":900,"name":{"full":"Director"},
+                                              "image":{"large":"director.jpg"}}}]}}}
+        client._query=query
+
+        credits=client.cast("10")
+
+        self.assertEqual(2,len(credits))
+        self.assertEqual("Hero",credits[0]["character"]["name"])
+        self.assertEqual("Voice Actor",credits[0]["person"]["name"])
+        self.assertEqual({},credits[1]["character"])
+        self.assertEqual("Director",credits[1]["credit_type"])
+
+    def test_client_preserves_character_results_when_staff_endpoint_fails(self):
+        client=AniListMediatorClient(opener=lambda *_args,**_kwargs: None)
+        def query(source,_variables):
+            if "characters(page:" in source:
+                return {"Media":{"characters":{"pageInfo":{"hasNextPage":False},"edges":[{
+                    "node":{"id":800,"name":{"full":"Hero"}},"voiceActors":[]} ]}}}
+            from resources.lib.services.mediator_helper_simkl import MediatorPlacementError
+            raise MediatorPlacementError("timed out")
+        client._query=query
+
+        with self.assertLogs("otaku_prime.services-mediator_helper_anilist",level="WARNING"):
+            credits=client.cast("10")
+
+        self.assertEqual(1,len(credits))
+        self.assertEqual("Hero",credits[0]["character"]["name"])
 
     def test_unreleased_third_season_returns_structural_placement_without_episodes(self):
         root = media(10, "How NOT to Summon a Demon Lord", "TV", 12, year=2018)
