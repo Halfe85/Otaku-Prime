@@ -5,6 +5,7 @@
   var staffRoot = document.getElementById("library-series-staff");
   var actorSource = document.getElementById("library-linked-actor-source");
   var seasonsRoot = document.getElementById("library-series-seasons");
+  var libraryGrid = document.getElementById("library-grid");
   var staffCount = document.getElementById("library-staff-count");
   var peopleCount = document.getElementById("library-people-count");
   var characterCount = document.getElementById("library-character-count");
@@ -119,9 +120,17 @@
     document.querySelectorAll(".library-season-cast").forEach(function (node) { node.remove(); });
   }
 
+  function cleanDuplicateTileStatus() {
+    if (!libraryGrid) return;
+    libraryGrid.querySelectorAll(".library-tile-next").forEach(function (node) {
+      if (node.textContent.trim().toLowerCase() === "finished airing") node.remove();
+    });
+  }
+
   var characterObserver = new MutationObserver(scheduleRefresh);
   var staffObserver = new MutationObserver(scheduleRefresh);
   var seasonObserver = seasonsRoot ? new MutationObserver(cleanScopedPeople) : null;
+  var gridObserver = libraryGrid ? new MutationObserver(cleanDuplicateTileStatus) : null;
   var scheduled = false;
 
   function scheduleRefresh() {
@@ -134,6 +143,7 @@
       repartitionStaff();
       charactersRoot.querySelectorAll(".character-card").forEach(decorateCharacter);
       cleanScopedPeople();
+      cleanDuplicateTileStatus();
       characterObserver.observe(charactersRoot, { childList: true, subtree: true });
       staffObserver.observe(staffRoot, { childList: true, subtree: true });
     });
@@ -142,5 +152,7 @@
   characterObserver.observe(charactersRoot, { childList: true, subtree: true });
   staffObserver.observe(staffRoot, { childList: true, subtree: true });
   if (seasonObserver) seasonObserver.observe(seasonsRoot, { childList: true, subtree: true });
+  if (gridObserver) gridObserver.observe(libraryGrid, { childList: true, subtree: true });
   scheduleRefresh();
+  cleanDuplicateTileStatus();
 }());
