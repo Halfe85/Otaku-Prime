@@ -1,0 +1,79 @@
+.library-staff-source[hidden] { display:none !important; }
+
+/* Series characters are the only visible people cards. */
+.library-people-tabs,
+#library-staff-panel,
+.library-season-cast,
+.library-episode-cast-section { display:none !important; }
+
+.character-card {
+  position:relative;
+  min-height:210px;
+  overflow:hidden;
+}
+
+.character-card > .library-person-header,
+.character-card > .library-person-links,
+.character-card > .library-person-trivia {
+  transition:opacity .18s ease, transform .18s ease;
+}
+
+.library-staff-hover-content {
+  position:absolute;
+  inset:0;
+  z-index:3;
+  padding:14px;
+  overflow:auto;
+  background:linear-gradient(145deg,rgba(28,33,52,.99),rgba(12,16,27,.99));
+  opacity:0;
+  transform:translateY(8px) scale(.985);
+  pointer-events:none;
+  transition:opacity .18s ease, transform .18s ease;
+}
+
+.character-card.staff-hover-active > .library-person-header,
+.character-card.staff-hover-active > .library-person-links,
+.character-card.staff-hover-active > .library-person-trivia {
+  opacity:0;
+  transform:translateY(-5px);
+}
+
+.character-card.staff-hover-active > .library-staff-hover-content {
+  opacity:1;
+  transform:translateY(0) scale(1);
+}
+
+.character-card .library-person-portrait.has-staff-portrait {
+  cursor:context-menu;
+}
+
+.character-card .library-person-portrait.has-staff-portrait::after {
+  content:"Staff";
+  position:absolute;
+  right:4px;
+  bottom:4px;
+  z-index:4;
+  padding:2px 5px;
+  border:1px solid rgba(255,255,255,.22);
+  border-radius:999px;
+  background:rgba(7,9,15,.78);
+  color:#dcd8ff;
+  font-size:8px;
+  font-weight:800;
+  letter-spacing:.05em;
+  text-transform:uppercase;
+  opacity:.82;
+  pointer-events:none;
+}
+
+.character-card.staff-hover-active .library-staff-hover-content .library-person-portrait {
+  width:72px;
+  height:72px;
+}
+
+@media (prefers-reduced-motion:reduce) {
+  .character-card > .library-person-header,
+  .character-card > .library-person-links,
+  .character-card > .library-person-trivia,
+  .library-staff-hover-content { transition:none; }
+}

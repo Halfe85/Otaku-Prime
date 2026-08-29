@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import ipaddress
 import os
+import socket
 import threading
 
 import xbmc
@@ -31,6 +33,7 @@ from resources.lib.web import create_server
 from resources.lib.logging_config import configure_logging,get_logger
 
 
+# Bind every IPv4 interface so the authenticated web UI is reachable from the LAN.
 WEB_HOST = "0.0.0.0"
 WEB_PORT = 9898
 USERS_DB_NAME = "users.sqlite"
@@ -45,6 +48,41 @@ def _profile_path() -> str:
     profile = xbmcvfs.translatePath(addon.getAddonInfo("profile"))
     os.makedirs(profile, exist_ok=True)
     return profile
+
+
+def _network_web_urls(port: int) -> list[str]:
+    """Return usable non-loopback IPv4 URLs for startup logging."""
+    addresses = set()
+    try:
+        for result in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            addresses.add(result[4][0])
+    except OSError:
+        pass
+
+    # UDP connect does not send application data; it asks the routing table which
+    # local address would be used and catches hosts whose hostname resolves only
+    # to 127.x.x.x.
+    probe = None
+    try:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        probe.connect(("192.0.2.1", 9))
+        addresses.add(probe.getsockname()[0])
+    except OSError:
+        pass
+    finally:
+        if probe is not None:
+            probe.close()
+
+    usable = []
+    for value in addresses:
+        try:
+            address = ipaddress.ip_address(value)
+        except ValueError:
+            continue
+        if address.version != 4 or address.is_loopback or address.is_unspecified:
+            continue
+        usable.append("http://{}:{}/".format(value, int(port)))
+    return sorted(set(usable))
 
 
 def main() -> None:
@@ -119,7 +157,12 @@ def main() -> None:
     )
     server_thread.start()
     watchlist_watchdog.start()
-    log("INFO","service","Web service started on {}:{}".format(WEB_HOST,WEB_PORT))
+    log("INFO","service","Web service listening on all IPv4 interfaces at port {}".format(WEB_PORT))
+    network_urls = _network_web_urls(WEB_PORT)
+    if network_urls:
+        log("INFO","service","Web UI network access: {}".format(", ".join(network_urls)))
+    else:
+        log("INFO","service","Web UI network access: http://<Kodi-device-LAN-IP>:{}/".format(WEB_PORT))
     log(
         "INFO",
         "watchlist-watchdog",
@@ -127,9 +170,11 @@ def main() -> None:
     )
 
     xbmc.log(
-        f"OTAKU PRIME: web service started on {WEB_HOST}:{WEB_PORT}",
+        f"OTAKU PRIME: web service listening on all IPv4 interfaces at port {WEB_PORT}",
         xbmc.LOGINFO,
     )
+    for url in network_urls:
+        xbmc.log("OTAKU PRIME: web UI network access: {}".format(url), xbmc.LOGINFO)
     xbmc.log(
         f"OTAKU PRIME: user database: {users_db}",
         xbmc.LOGINFO,
