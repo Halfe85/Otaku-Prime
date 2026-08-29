@@ -118,8 +118,9 @@ class WatchlistTVShowMediatorTests(unittest.TestCase):
 
         self.assertEqual(1,result["placed"])
         detail=self.catalog.library_series_detail(self.catalog.list_series()[0]["local_id"])
-        self.assertEqual("Voice Actor",detail["staff"][0]["name"])
+        self.assertEqual([],detail["staff"])
         self.assertEqual("Hero",detail["characters"][0]["name"])
+        self.assertEqual("Voice Actor",detail["characters"][0]["staff"][0]["name"])
         self.assertEqual("https://img/staff.jpg",detail["cast"][0]["person"]["image_url"])
         self.assertEqual(["269","185874"],processor.endpoints["anilist"].client.calls)
 

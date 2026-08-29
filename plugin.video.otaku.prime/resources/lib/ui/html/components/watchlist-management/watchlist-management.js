@@ -40,8 +40,24 @@
     return cell;
   }
 
+  function alternativeTitles(entry) {
+    var titles = entry && entry.alternative_titles;
+    if (Array.isArray(titles)) return titles.filter(Boolean);
+    if (typeof titles === "string" && titles) {
+      try {
+        var decoded = JSON.parse(titles);
+        return Array.isArray(decoded) ? decoded.filter(Boolean) : [titles];
+      } catch (_) {
+        return [titles];
+      }
+    }
+    return [];
+  }
+
   function titleOf(entry) {
-    return entry.english_name || "Untitled";
+    var alternatives = alternativeTitles(entry);
+    return entry.english_name || entry.preferred_name || entry.romaji_name ||
+      entry.native_name || alternatives[0] || "Untitled";
   }
 
   function visiblePageSize() {
@@ -91,8 +107,10 @@
     setText("series-modal-format", entry.media_format || "Unknown");
     setText("series-modal-release", entry.release_date || "Unknown");
     setText("series-modal-english", entry.english_name);
+    setText("series-modal-preferred", entry.preferred_name);
     setText("series-modal-romaji", entry.romaji_name);
     setText("series-modal-native", entry.native_name);
+    setText("series-modal-alternatives", alternativeTitles(entry).join(" · "));
     setText("series-modal-local-id", "Prime ID  " + entry.local_id);
     document.getElementById("series-modal-conflict").hidden = !entry.has_conflict;
     var identityConflict = document.getElementById("series-modal-identity-conflict");
@@ -146,8 +164,9 @@
     var term = searchTerm.trim().toLowerCase();
     var wanted = status.value;
     var visible = entries.filter(function (entry) {
-      var haystack = [titleOf(entry), entry.romaji_name, entry.native_name, entry.anilist_id,
-        entry.mal_id, entry.kitsu_id, entry.simkl_id, entry.connected_providers].join(" ").toLowerCase();
+      var haystack = [titleOf(entry), entry.english_name, entry.preferred_name,
+        entry.romaji_name, entry.native_name].concat(alternativeTitles(entry), [entry.anilist_id,
+        entry.mal_id, entry.kitsu_id, entry.simkl_id, entry.connected_providers]).join(" ").toLowerCase();
       return (!term || haystack.indexOf(term) !== -1) && (!wanted || entry.status === wanted);
     });
     pageSize = visiblePageSize();

@@ -39,6 +39,7 @@ class CatalogStore:
                 # distinguish series, season, and episode credits.
                 db.executescript("""
                 DROP TABLE IF EXISTS character_media_links;
+                DROP TABLE IF EXISTS staff_media_links;
                 DROP TABLE IF EXISTS staff_character_links;
                 DROP TABLE IF EXISTS characters;
                 DROP TABLE IF EXISTS staff;
@@ -156,6 +157,35 @@ class CatalogStore:
             );
             CREATE INDEX IF NOT EXISTS ix_staff_character_character
               ON staff_character_links(character_local_id,staff_local_id);
+
+            CREATE TABLE IF NOT EXISTS staff_media_links(
+              local_id INTEGER PRIMARY KEY AUTOINCREMENT,
+              staff_local_id TEXT NOT NULL,
+              related_series_id TEXT,
+              related_season_id TEXT,
+              related_episode_id TEXT,
+              credit_type TEXT NOT NULL DEFAULT 'staff',
+              language TEXT NOT NULL DEFAULT '',
+              source_provider TEXT,
+              sort_order INTEGER NOT NULL DEFAULT 0,
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              CHECK((related_series_id IS NOT NULL)+(related_season_id IS NOT NULL)+
+                    (related_episode_id IS NOT NULL)=1),
+              FOREIGN KEY(staff_local_id) REFERENCES staff(local_id) ON DELETE CASCADE,
+              FOREIGN KEY(related_series_id) REFERENCES tv_series(local_id) ON DELETE CASCADE,
+              FOREIGN KEY(related_season_id) REFERENCES seasons(local_id) ON DELETE CASCADE,
+              FOREIGN KEY(related_episode_id) REFERENCES episodes(local_id) ON DELETE CASCADE
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_staff_media_series_credit
+              ON staff_media_links(staff_local_id,related_series_id,credit_type,language)
+              WHERE related_series_id IS NOT NULL;
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_staff_media_season_credit
+              ON staff_media_links(staff_local_id,related_season_id,credit_type,language)
+              WHERE related_season_id IS NOT NULL;
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_staff_media_episode_credit
+              ON staff_media_links(staff_local_id,related_episode_id,credit_type,language)
+              WHERE related_episode_id IS NOT NULL;
 
             CREATE TABLE IF NOT EXISTS character_media_links(
               local_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -448,18 +478,19 @@ class CatalogStore:
             if not db.execute("SELECT 1 FROM {} WHERE local_id=?".format(table),(media_id,)).fetchone():
                 raise KeyError("credit media scope was not found")
             db.execute("DELETE FROM character_media_links WHERE {}=?".format(column),(media_id,))
+            db.execute("DELETE FROM staff_media_links WHERE {}=?".format(column),(media_id,))
             inserted=0
             for index,entry in enumerate(credits):
                 staff_value=self._credit_entity(entry,"person","person_name")
                 character_value=self._credit_entity(entry,"character","character_name")
                 character_id=self._upsert_character(db,character_value)
-                if not character_id: continue
                 staff_id=self._upsert_staff(db,staff_value)
+                if not character_id and not staff_id: continue
                 credit_type=str((entry or {}).get("credit_type") or "voice_actor")
                 language=str((entry or {}).get("language") or "")
                 provider=str((entry or {}).get("source_provider") or source_provider or "") or None
                 sort_order=int((entry or {}).get("sort_order",index))
-                if staff_id:
+                if staff_id and character_id:
                     db.execute("""INSERT INTO staff_character_links(staff_local_id,
                       character_local_id,credit_type,language,source_provider)
                       VALUES(?,?,?,?,?) ON CONFLICT(staff_local_id,character_local_id,
@@ -468,11 +499,18 @@ class CatalogStore:
                       (staff_id,character_id,credit_type,language,provider))
                 values={"related_series_id":None,"related_season_id":None,
                         "related_episode_id":None}; values[column]=media_id
-                db.execute("""INSERT OR IGNORE INTO character_media_links(
-                  character_local_id,related_series_id,related_season_id,related_episode_id,
-                  source_provider,sort_order) VALUES(?,?,?,?,?,?)""",
-                  (character_id,values["related_series_id"],values["related_season_id"],
-                   values["related_episode_id"],provider,sort_order))
+                if character_id:
+                    db.execute("""INSERT OR IGNORE INTO character_media_links(
+                      character_local_id,related_series_id,related_season_id,related_episode_id,
+                      source_provider,sort_order) VALUES(?,?,?,?,?,?)""",
+                      (character_id,values["related_series_id"],values["related_season_id"],
+                       values["related_episode_id"],provider,sort_order))
+                elif staff_id:
+                    db.execute("""INSERT OR IGNORE INTO staff_media_links(
+                      staff_local_id,related_series_id,related_season_id,related_episode_id,
+                      credit_type,language,source_provider,sort_order) VALUES(?,?,?,?,?,?,?,?)""",
+                      (staff_id,values["related_series_id"],values["related_season_id"],
+                       values["related_episode_id"],credit_type,language,provider,sort_order))
                 inserted+=1
             return inserted
 
@@ -511,6 +549,29 @@ class CatalogStore:
                              "name":row["character_name"],"trivia":row["character_trivia"],
                              "image_url":row["character_image_url"]},
             })
+        staff_rows=db.execute("""SELECT link.credit_type,link.language,link.source_provider,
+          link.sort_order,staff.local_id AS staff_local_id,staff.anilist_id AS staff_anilist_id,
+          staff.name AS staff_name,staff.trivia AS staff_trivia,staff.date_of_birth,
+          staff.date_of_death,staff.age,staff.image_url AS staff_image_url
+          FROM staff_media_links link JOIN staff ON staff.local_id=link.staff_local_id
+          WHERE link.{}=? ORDER BY link.sort_order,staff.name""".format(column),
+          (str(media_id),)).fetchall()
+        for row in staff_rows:
+            result.append({
+                "person_name":row["staff_name"],"character_name":None,
+                "credit_type":row["credit_type"] or "staff",
+                "language":row["language"] or "",
+                "source_provider":row["source_provider"],"sort_order":row["sort_order"],
+                "person":{"local_id":row["staff_local_id"],
+                          "anilist_id":row["staff_anilist_id"],"name":row["staff_name"],
+                          "trivia":row["staff_trivia"],"date_of_birth":row["date_of_birth"],
+                          "date_of_death":row["date_of_death"],"age":row["age"],
+                          "image_url":row["staff_image_url"]},
+                "character":{},
+            })
+        result.sort(key=lambda value:(int(value.get("sort_order") or 0),
+                                      str(value.get("character_name") or "").casefold(),
+                                      str(value.get("person_name") or "").casefold()))
         return result
 
     @staticmethod
@@ -544,14 +605,35 @@ class CatalogStore:
 
         characters={}
         staff={}
+        linked_staff_ids=set()
         character_staff_seen=set()
-        staff_character_seen=set()
         media_seen=set()
+        staff_media_seen=set()
+        staff_role_seen=set()
         for credits,media in scoped:
             for credit in credits:
+                person=dict(credit.get("person") or {})
+                staff_id=person.get("local_id")
                 character=dict(credit.get("character") or {})
                 character_id=character.get("local_id")
                 if not character_id:
+                    if not staff_id:
+                        continue
+                    staff_view=staff.setdefault(staff_id,dict(
+                        person,roles=[],media_links=[]))
+                    relationship={
+                        "credit_type":credit.get("credit_type") or "staff",
+                        "language":credit.get("language") or "",
+                        "source_provider":credit.get("source_provider"),
+                    }
+                    role_key=(staff_id,relationship["credit_type"],relationship["language"])
+                    if role_key not in staff_role_seen:
+                        staff_view["roles"].append(relationship)
+                        staff_role_seen.add(role_key)
+                    staff_media_key=(staff_id,media["scope"],media["local_id"])
+                    if staff_media_key not in staff_media_seen:
+                        staff_view["media_links"].append(dict(media))
+                        staff_media_seen.add(staff_media_key)
                     continue
                 character_view=characters.setdefault(character_id,dict(
                     character,staff=[],media_links=[]))
@@ -560,10 +642,9 @@ class CatalogStore:
                     character_view["media_links"].append(dict(media))
                     media_seen.add(media_key)
 
-                person=dict(credit.get("person") or {})
-                staff_id=person.get("local_id")
                 if not staff_id:
                     continue
+                linked_staff_ids.add(staff_id)
                 relationship={
                     "credit_type":credit.get("credit_type") or "voice_actor",
                     "language":credit.get("language") or "",
@@ -574,15 +655,10 @@ class CatalogStore:
                 if pair not in character_staff_seen:
                     character_view["staff"].append(dict(person,**relationship))
                     character_staff_seen.add(pair)
-                staff_view=staff.setdefault(staff_id,dict(person,characters=[]))
-                if pair not in staff_character_seen:
-                    staff_view["characters"].append(dict(
-                        character,media_links=character_view["media_links"],**relationship))
-                    staff_character_seen.add(pair)
 
         character_rows=sorted(characters.values(),key=lambda value:
                               str(value.get("name") or "").casefold())
-        staff_rows=sorted(staff.values(),key=lambda value:
+        staff_rows=sorted((value for key,value in staff.items() if key not in linked_staff_ids),key=lambda value:
                          str(value.get("name") or "").casefold())
         return staff_rows,character_rows
 

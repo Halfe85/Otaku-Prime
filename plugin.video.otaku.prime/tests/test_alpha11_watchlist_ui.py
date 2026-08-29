@@ -23,6 +23,18 @@ class Alpha11WatchlistUITests(unittest.TestCase):
         self.assertNotIn('Browse raw items fetched from connected watchlists.',page)
         self.assertNotIn('Prime watchlist item',page)
 
+    def test_watchlist_titles_fall_back_and_include_anilist_alternatives(self):
+        page=render_home(
+            {"username":"admin","role":"admin"},active_tab="watchlist-management",
+            watchlist_accounts={})
+        script=read_static_asset(
+            "components/watchlist-management/watchlist-management.js")[1].decode("utf-8")
+        self.assertIn('id="series-modal-preferred"',page)
+        self.assertIn('id="series-modal-alternatives"',page)
+        self.assertIn("function alternativeTitles(entry)",script)
+        self.assertIn("entry.english_name || entry.preferred_name || entry.romaji_name",script)
+        self.assertIn(".concat(alternativeTitles(entry)",script)
+
     def test_watchlist_pagination_floats_and_reports_in_the_bottom_bar(self):
         page=render_home(
             {"username":"admin","role":"admin"},active_tab="watchlist-management",

@@ -41,7 +41,8 @@ class WatchlistItemStore:
           kitsu_id TEXT UNIQUE, simkl_id TEXT UNIQUE,
           simkl_reference_id TEXT,
           special_locator TEXT,
-          english_name TEXT, romaji_name TEXT, native_name TEXT,
+          english_name TEXT, preferred_name TEXT, romaji_name TEXT, native_name TEXT,
+          alternative_titles_json TEXT NOT NULL DEFAULT '[]',
           status TEXT CHECK(status IN('CURRENT','COMPLETED','PAUSED','DROPPED','PLANNING')),
           progress INTEGER NOT NULL DEFAULT 0,
           episode_count INTEGER, media_format TEXT, release_date TEXT,
@@ -97,6 +98,8 @@ class WatchlistItemStore:
                 ("identity_checked_at","TEXT"),
                 ("simkl_reference_id","TEXT"),
                 ("special_locator","TEXT"),
+                ("preferred_name","TEXT"),
+                ("alternative_titles_json","TEXT NOT NULL DEFAULT '[]'"),
                 ("mediator_ready","INTEGER NOT NULL DEFAULT 0 CHECK(mediator_ready IN(0,1))"),
                 ("added_to_library","INTEGER NOT NULL DEFAULT 0 CHECK(added_to_library IN(0,1))"),
                 ("library_added_at","TEXT"),
@@ -142,15 +145,53 @@ class WatchlistItemStore:
 
     @staticmethod
     def _repair_encoded_text(db):
-        columns=("english_name","romaji_name","native_name")
+        columns=("english_name","preferred_name","romaji_name","native_name")
         for row in db.execute(
-            "SELECT local_id,english_name,romaji_name,native_name FROM watchlist_items"
+            "SELECT local_id,english_name,preferred_name,romaji_name,native_name,"
+            "alternative_titles_json FROM watchlist_items"
         ).fetchall():
             values={name:clean_remote_text(row[name]) for name in columns}
-            if any(values[name]!=row[name] for name in columns):
-                db.execute("""UPDATE watchlist_items SET english_name=?,romaji_name=?,
-                  native_name=?,updated_at=CURRENT_TIMESTAMP WHERE local_id=?""",
-                  tuple(values[name] for name in columns)+(row["local_id"],))
+            alternatives=WatchlistItemStore._encode_alternative_titles(
+                row["alternative_titles_json"])
+            if (any(values[name]!=row[name] for name in columns) or
+                    alternatives!=(row["alternative_titles_json"] or "[]")):
+                db.execute("""UPDATE watchlist_items SET english_name=?,preferred_name=?,
+                  romaji_name=?,native_name=?,alternative_titles_json=?,
+                  updated_at=CURRENT_TIMESTAMP WHERE local_id=?""",
+                  tuple(values[name] for name in columns)+(alternatives,row["local_id"]))
+
+    @staticmethod
+    def _alternative_titles(value):
+        if value in (None,""):
+            return []
+        if isinstance(value,str):
+            try:
+                decoded=json.loads(value)
+            except (TypeError,ValueError,json.JSONDecodeError):
+                decoded=[value]
+        else:
+            decoded=value
+        if not isinstance(decoded,(list,tuple,set)):
+            decoded=[decoded]
+        result=[]; seen=set()
+        for item in decoded:
+            title=clean_remote_text(item)
+            title=str(title).strip() if title not in (None,"") else ""
+            key=title.casefold()
+            if title and key not in seen:
+                result.append(title); seen.add(key)
+        return result
+
+    @classmethod
+    def _encode_alternative_titles(cls,value):
+        return json.dumps(cls._alternative_titles(value),ensure_ascii=False,separators=(",",":"))
+
+    @classmethod
+    def _merge_alternative_titles(cls,*values):
+        combined=[]
+        for value in values:
+            combined.extend(cls._alternative_titles(value))
+        return cls._encode_alternative_titles(combined)
 
     @staticmethod
     def _clean_ids(provider,entry):
@@ -177,17 +218,22 @@ class WatchlistItemStore:
                     "verified identity collision for {}: {} != {}".format(column,target_row[column],other[column]))
         values={column:target_row.get(column) or other.get(column) for column in
                 ("anilist_id","mal_id","kitsu_id","simkl_id","simkl_reference_id","special_locator",
-                 "english_name","romaji_name","native_name","episode_count","media_format","release_date")}
+                 "english_name","preferred_name","romaji_name","native_name","episode_count",
+                 "media_format","release_date")}
+        alternatives=WatchlistItemStore._merge_alternative_titles(
+            target_row.get("alternative_titles_json"),other.get("alternative_titles_json"))
         added=max(int(target_row.get("added_to_library") or 0),int(other.get("added_to_library") or 0))
         ready=0 if added else max(int(target_row.get("mediator_ready") or 0),int(other.get("mediator_ready") or 0))
         db.execute("UPDATE OR REPLACE watchlist_provider_entries SET local_id=? WHERE local_id=?",(target,duplicate))
         db.execute("DELETE FROM watchlist_items WHERE local_id=?",(duplicate,))
         db.execute("""UPDATE watchlist_items SET anilist_id=?,mal_id=?,kitsu_id=?,simkl_id=?,
-          simkl_reference_id=?,special_locator=?,english_name=?,romaji_name=?,native_name=?,
+          simkl_reference_id=?,special_locator=?,english_name=?,preferred_name=?,romaji_name=?,native_name=?,
+          alternative_titles_json=?,
           episode_count=?,media_format=?,release_date=?,is_adult=MAX(is_adult,?),
           added_to_library=?,mediator_ready=?,updated_at=CURRENT_TIMESTAMP WHERE local_id=?""",
           tuple(values[key] for key in ("anilist_id","mal_id","kitsu_id","simkl_id","simkl_reference_id",
-            "special_locator","english_name","romaji_name","native_name","episode_count","media_format",
+            "special_locator","english_name","preferred_name","romaji_name","native_name"))+
+            (alternatives,)+tuple(values[key] for key in ("episode_count","media_format",
             "release_date"))+(other["is_adult"],added,ready,target))
 
     def _upsert_snapshot_row(self,db,provider,entry):
@@ -199,11 +245,18 @@ class WatchlistItemStore:
         assignments=[]; values=[]
         for name,value in ids.items():
             assignments.append("{}=COALESCE({},?)".format(ID_COLUMNS[name],ID_COLUMNS[name])); values.append(value)
-        for column in ("english_name","romaji_name","native_name","episode_count","media_format","release_date"):
+        for column in ("english_name","preferred_name","romaji_name","native_name",
+                       "episode_count","media_format","release_date"):
             value=entry.get(column)
-            if column in ("english_name","romaji_name","native_name"):
+            if column in ("english_name","preferred_name","romaji_name","native_name"):
                 value=clean_remote_text(value)
             assignments.append("{}=COALESCE({},?)".format(column,column)); values.append(value)
+        if "alternative_titles" in entry:
+            current=db.execute("SELECT alternative_titles_json FROM watchlist_items WHERE local_id=?",
+                               (local_id,)).fetchone()
+            alternatives=self._merge_alternative_titles(
+                current[0] if current else None,entry.get("alternative_titles"))
+            assignments.append("alternative_titles_json=?"); values.append(alternatives)
         assignments.extend(("is_adult=MAX(is_adult,?)","updated_at=CURRENT_TIMESTAMP")); values.append(int(bool(entry.get("is_adult"))))
         db.execute("UPDATE watchlist_items SET {} WHERE local_id=?".format(",".join(assignments)),tuple(values)+(local_id,))
         raw=entry.get("raw") if entry.get("raw") is not None else entry
@@ -257,15 +310,17 @@ class WatchlistItemStore:
 
     @staticmethod
     def _order_clause():
-        return "CASE WHEN COALESCE(english_name,romaji_name,native_name,'') GLOB '[A-Za-z]*' THEN 1 ELSE 0 END, LOWER(COALESCE(english_name,romaji_name,native_name,'')),local_id"
+        return "CASE WHEN COALESCE(english_name,preferred_name,romaji_name,native_name,'') GLOB '[A-Za-z]*' THEN 1 ELSE 0 END, LOWER(COALESCE(english_name,preferred_name,romaji_name,native_name,'')),local_id"
 
     def list_provider(self,provider):
         with self._connection() as db:
             return [dict(row) for row in db.execute("""SELECT entry.*,entry.status AS list_status,
               item.anilist_id,item.mal_id,item.kitsu_id,item.simkl_id,item.simkl_reference_id,item.special_locator,
-              item.english_name,item.romaji_name,item.native_name,item.added_to_library,item.mediator_ready
+              item.english_name,item.preferred_name,item.romaji_name,item.native_name,
+              item.alternative_titles_json,item.added_to_library,item.mediator_ready
               FROM watchlist_provider_entries entry JOIN watchlist_items item ON item.local_id=entry.local_id
-              WHERE entry.provider=? ORDER BY LOWER(COALESCE(item.english_name,item.romaji_name,item.native_name,''))""",(provider,))]
+              WHERE entry.provider=? ORDER BY LOWER(COALESCE(item.english_name,item.preferred_name,
+              item.romaji_name,item.native_name,''))""",(provider,))]
 
     def list_all(self):
         with self._connection() as db:
@@ -273,8 +328,8 @@ class WatchlistItemStore:
               GROUP_CONCAT(entry.provider,',') AS connected_providers
               FROM watchlist_items item JOIN watchlist_provider_entries entry ON entry.local_id=item.local_id
               GROUP BY item.local_id ORDER BY
-              CASE WHEN COALESCE(item.english_name,item.romaji_name,item.native_name,'') GLOB '[A-Za-z]*' THEN 1 ELSE 0 END,
-              LOWER(COALESCE(item.english_name,item.romaji_name,item.native_name,'')),item.local_id""")]
+              CASE WHEN COALESCE(item.english_name,item.preferred_name,item.romaji_name,item.native_name,'') GLOB '[A-Za-z]*' THEN 1 ELSE 0 END,
+              LOWER(COALESCE(item.english_name,item.preferred_name,item.romaji_name,item.native_name,'')),item.local_id""")]
 
     def list_ui_items(self):
         """Return only fields used by Watchlist Management.
@@ -284,10 +339,11 @@ class WatchlistItemStore:
         ``list_all``.
         """
         with self._connection() as db:
-            return [dict(row) for row in db.execute("""SELECT
+            result=[dict(row) for row in db.execute("""SELECT
               item.local_id,item.anilist_id,item.mal_id,item.kitsu_id,item.simkl_id,
               item.simkl_reference_id,item.special_locator,
-              item.english_name,item.romaji_name,item.native_name,
+              item.english_name,item.preferred_name,item.romaji_name,item.native_name,
+              item.alternative_titles_json,
               item.status,item.progress,item.episode_count,item.media_format,item.release_date,
               item.has_conflict,item.identity_resolution_status,item.identity_resolution_error,
               item.mediator_status,item.mediator_provider,item.mediator_error,
@@ -296,8 +352,12 @@ class WatchlistItemStore:
               FROM watchlist_items item
               JOIN watchlist_provider_entries entry ON entry.local_id=item.local_id
               GROUP BY item.local_id ORDER BY
-              CASE WHEN COALESCE(item.english_name,item.romaji_name,item.native_name,'') GLOB '[A-Za-z]*' THEN 1 ELSE 0 END,
-              LOWER(COALESCE(item.english_name,item.romaji_name,item.native_name,'')),item.local_id""")]
+              CASE WHEN COALESCE(item.english_name,item.preferred_name,item.romaji_name,item.native_name,'') GLOB '[A-Za-z]*' THEN 1 ELSE 0 END,
+              LOWER(COALESCE(item.english_name,item.preferred_name,item.romaji_name,item.native_name,'')),item.local_id""")]
+            for item in result:
+                item["alternative_titles"]=self._alternative_titles(
+                    item.pop("alternative_titles_json",None))
+            return result
 
     def list_ui_library_states(self):
         """Return the small mediator-state delta polled by the visible UI tab."""

@@ -121,7 +121,7 @@ class AniListMediatorClient:
         return rows
 
     def cast(self, anilist_id):
-        """Return rich Japanese voice actor -> character credits for one anime."""
+        """Return character voice credits and standalone production staff."""
         key = str(anilist_id)
         if key in self._cast_cache:
             return self._cast_cache[key]
@@ -140,6 +140,15 @@ class AniListMediatorClient:
                         dateOfBirth{year month day} dateOfDeath{year month day}
                         age image{large}
                       }
+                    }
+                  }
+                  staff(page:$page,perPage:25){
+                    pageInfo{hasNextPage}
+                    edges{
+                      role
+                      node{id name{full} description(asHtml:false)
+                        dateOfBirth{year month day} dateOfDeath{year month day}
+                        age image{large}}
                     }
                   }
                 }}""",
@@ -194,11 +203,37 @@ class AniListMediatorClient:
                         "source_provider":"anilist",
                         "sort_order": len(result),
                     })
-            if not (connection.get("pageInfo") or {}).get("hasNextPage"):
+            staff_connection=((data.get("Media") or {}).get("staff") or {})
+            for edge in staff_connection.get("edges") or []:
+                person_node=(edge or {}).get("node") or {}
+                person=((person_node.get("name") or {}).get("full"))
+                role=str((edge or {}).get("role") or "Staff")
+                if not person:
+                    continue
+                marker=("staff",str(person_node.get("id") or person),role)
+                if marker in seen:
+                    continue
+                seen.add(marker)
+                result.append({
+                    "person_name":str(person),"character_name":None,
+                    "person":{
+                        "anilist_id":str(person_node.get("id")) if person_node.get("id") else None,
+                        "name":str(person),"trivia":person_node.get("description"),
+                        "date_of_birth":_fuzzy_date_string(person_node.get("dateOfBirth")),
+                        "date_of_death":_fuzzy_date_string(person_node.get("dateOfDeath")),
+                        "age":person_node.get("age"),
+                        "image_url":(person_node.get("image") or {}).get("large"),
+                    },
+                    "character":{},"credit_type":role,"language":"",
+                    "source_provider":"anilist","sort_order":len(result),
+                })
+            has_more_characters=(connection.get("pageInfo") or {}).get("hasNextPage")
+            has_more_staff=(staff_connection.get("pageInfo") or {}).get("hasNextPage")
+            if not has_more_characters and not has_more_staff:
                 break
             page += 1
             if page > 50:
-                raise MediatorPlacementError("AniList character list exceeded its safety limit")
+                raise MediatorPlacementError("AniList character/staff list exceeded its safety limit")
         self._cast_cache[key] = result
         return result
 

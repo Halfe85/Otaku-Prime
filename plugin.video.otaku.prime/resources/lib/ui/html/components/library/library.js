@@ -208,7 +208,9 @@
   }
 
   function castEntries(value) {
-    return Array.isArray(value) ? value.filter(Boolean) : [];
+    return Array.isArray(value) ? value.filter(function (entry) {
+      return entry && ((entry.character && entry.character.local_id) || entry.character_name);
+    }) : [];
   }
 
   function fallbackCastCard(entry) {
@@ -248,23 +250,32 @@
     }) : [];
   }
 
-  function portrait(entity, kind) {
-    var root = element("div", "library-person-portrait " + kind);
-    var name = text(entity && entity.name, kind === "character" ? "Character" : "Staff");
+  function portraitLayer(entity, className, fallbackName) {
+    var layer = element("span", "library-portrait-layer " + className);
+    var name = text(entity && entity.name, fallbackName);
+    layer.appendChild(element("span", "library-portrait-fallback", name.slice(0, 1).toUpperCase()));
     if (entity && entity.image_url) {
       var image = document.createElement("img");
       image.src = entity.image_url;
       image.alt = name;
       image.loading = "lazy";
-      image.addEventListener("error", function () {
-        root.classList.add("image-missing");
-        image.remove();
-        root.appendChild(element("span", "", name.slice(0, 1).toUpperCase()));
-      }, { once: true });
-      root.appendChild(image);
-    } else {
-      root.classList.add("image-missing");
-      root.appendChild(element("span", "", name.slice(0, 1).toUpperCase()));
+      image.addEventListener("error", function () { image.remove(); }, { once: true });
+      layer.appendChild(image);
+    }
+    return layer;
+  }
+
+  function portrait(entity, kind, alternateStaff) {
+    var root = element("div", "library-person-portrait " + kind);
+    var name = text(entity && entity.name, kind === "character" ? "Character" : "Staff");
+    root.appendChild(portraitLayer(entity, "primary", name));
+    if (alternateStaff && alternateStaff.image_url) {
+      root.classList.add("has-staff-portrait");
+      root.tabIndex = 0;
+      root.title = "View " + text(alternateStaff.name, "linked staff");
+      root.setAttribute("aria-label", name + "; focus to view staff " +
+        text(alternateStaff.name, "member"));
+      root.appendChild(portraitLayer(alternateStaff, "alternate", "Staff"));
     }
     return root;
   }
@@ -325,11 +336,12 @@
 
   function characterCard(character) {
     var card = element("article", "library-person-card character-card");
+    var staff = peopleEntries(character.staff);
+    var portraitStaff = staff.find(function (person) { return !!person.image_url; });
     var header = element("header", "library-person-header");
-    header.appendChild(portrait(character, "character"));
+    header.appendChild(portrait(character, "character", portraitStaff));
     var heading = element("div", "library-person-heading");
     heading.appendChild(element("h4", "", text(character.name, "Unknown character")));
-    var staff = peopleEntries(character.staff);
     var media = Array.isArray(character.media_links) ? character.media_links : [];
     heading.appendChild(element("p", "", staff.length + (staff.length === 1 ? " staff credit" : " staff credits") + " · " + media.length + (media.length === 1 ? " placement" : " placements")));
     header.appendChild(heading);
@@ -357,11 +369,12 @@
     heading.appendChild(element("p", "", life.length ? life.join(" · ") : "Life details unavailable"));
     header.appendChild(heading);
     card.appendChild(header);
-    var characters = peopleEntries(person.characters);
-    card.appendChild(chipList("Characters", characters, function (character) {
-      var language = character.language ? " · " + character.language : "";
-      return text(character.name, "Unknown character") + language;
-    }, "No linked characters"));
+    var roles = Array.isArray(person.roles) ? person.roles : [];
+    var media = Array.isArray(person.media_links) ? person.media_links : [];
+    card.appendChild(chipList("Roles", roles, function (role) {
+      return relationshipLabel(role.credit_type);
+    }, "Staff role unavailable"));
+    card.appendChild(chipList("Appears in", media, mediaLabel, "No media placement"));
     var trivia = triviaBlock(person.trivia);
     if (trivia) card.appendChild(trivia);
     return card;

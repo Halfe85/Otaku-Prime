@@ -67,6 +67,9 @@ class LibraryCatalogTests(unittest.TestCase):
                           "image_url":"https://img/character-1.jpg"},"sort_order":0},
             {"person":{"anilist_id":"502","name":"Actor Two"},
              "character":{"anilist_id":"602","name":"Rival"},"sort_order":1},
+            {"person":{"anilist_id":"503","name":"Series Director","trivia":"Directed it",
+                       "image_url":"https://img/director.jpg"},
+             "character":{},"credit_type":"Director","sort_order":2},
         ], series_id=self.series["local_id"], source_provider="anilist")
         self.season = self.catalog.add_watchlist_season(
             self.series["local_id"], self.item, season_number=1,
@@ -107,7 +110,7 @@ class LibraryCatalogTests(unittest.TestCase):
         detail = self.catalog.library_series_detail(self.series["local_id"])
         self.assertEqual("A mediated series overview.", detail["overview"])
         self.assertEqual(24, detail["runtime_minutes"])
-        self.assertEqual(2, len(detail["cast"]))
+        self.assertEqual(3, len(detail["cast"]))
         self.assertEqual(("Actor One", "Hero"), (
             detail["cast"][0]["person_name"], detail["cast"][0]["character_name"]
         ))
@@ -115,21 +118,26 @@ class LibraryCatalogTests(unittest.TestCase):
         self.assertEqual("1980-01-02",detail["cast"][0]["person"]["date_of_birth"])
         self.assertEqual("https://img/character-1.jpg",
                          detail["cast"][0]["character"]["image_url"])
-        self.assertEqual(2,len(detail["staff"]))
+        self.assertEqual(1,len(detail["staff"]))
         self.assertEqual(2,len(detail["characters"]))
         hero=next(row for row in detail["characters"] if row["name"]=="Hero")
-        actor=next(row for row in detail["staff"] if row["name"]=="Actor One")
+        director=detail["staff"][0]
         self.assertEqual(["Actor One"],[row["name"] for row in hero["staff"]])
         self.assertEqual(["series"],[row["scope"] for row in hero["media_links"]])
-        self.assertEqual(["Hero"],[row["name"] for row in actor["characters"]])
+        self.assertEqual("Series Director",director["name"])
+        self.assertEqual(["Director"],[row["credit_type"] for row in director["roles"]])
+        self.assertEqual(["series"],[row["scope"] for row in director["media_links"]])
         db=sqlite3.connect(self.path)
         try:
-            self.assertEqual(2,db.execute("SELECT COUNT(*) FROM staff").fetchone()[0])
+            self.assertEqual(3,db.execute("SELECT COUNT(*) FROM staff").fetchone()[0])
             self.assertEqual(2,db.execute("SELECT COUNT(*) FROM characters").fetchone()[0])
             self.assertEqual(2,db.execute(
                 "SELECT COUNT(*) FROM staff_character_links").fetchone()[0])
             self.assertEqual(2,db.execute(
                 "SELECT COUNT(*) FROM character_media_links WHERE related_series_id=?",
+                (self.series["local_id"],)).fetchone()[0])
+            self.assertEqual(1,db.execute(
+                "SELECT COUNT(*) FROM staff_media_links WHERE related_series_id=?",
                 (self.series["local_id"],)).fetchone()[0])
         finally:
             db.close()
@@ -167,13 +175,13 @@ class LibraryCatalogTests(unittest.TestCase):
         self.catalog.replace_media_credits(
             None,series_id=self.series["local_id"],source_provider="other")
         detail = self.catalog.library_series_detail(self.series["local_id"])
-        self.assertEqual(2, len(detail["cast"]))
+        self.assertEqual(3, len(detail["cast"]))
 
     def test_empty_provider_cast_does_not_erase_existing_cast(self):
         self.catalog.replace_media_credits(
             [],series_id=self.series["local_id"],source_provider="simkl")
         detail = self.catalog.library_series_detail(self.series["local_id"])
-        self.assertEqual(2,len(detail["cast"]))
+        self.assertEqual(3,len(detail["cast"]))
 
     def test_credits_can_be_scoped_to_season_and_episode(self):
         season_credit={"person_name":"Season Actor","character_name":"Season Character"}
@@ -188,7 +196,7 @@ class LibraryCatalogTests(unittest.TestCase):
         self.assertEqual("Season Character",season["cast"][0]["character"]["name"])
         self.assertEqual("Guest Actor",season["episodes"][0]["cast"][0]["person"]["name"])
         self.assertEqual([],season["episodes"][1]["cast"])
-        self.assertEqual(4,len(detail["staff"]))
+        self.assertEqual(1,len(detail["staff"]))
         self.assertEqual(4,len(detail["characters"]))
         season_character=next(
             row for row in detail["characters"] if row["name"]=="Season Character")

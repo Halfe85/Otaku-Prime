@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from difflib import SequenceMatcher
 from html import unescape
+import json
 import re
 import unicodedata
 
@@ -68,8 +69,20 @@ def payload_titles(payload):
 
 
 def item_titles(item):
-    values = [item.get("english_name"), item.get("romaji_name"), item.get("native_name")]
-    return [clean_remote_text(value) for value in values if value]
+    values = [item.get("english_name"), item.get("preferred_name"),
+              item.get("romaji_name"), item.get("native_name")]
+    alternatives=item.get("alternative_titles")
+    if alternatives is None:
+        alternatives=item.get("alternative_titles_json")
+    if isinstance(alternatives,str):
+        try:
+            alternatives=json.loads(alternatives)
+        except (TypeError,ValueError,json.JSONDecodeError):
+            alternatives=[alternatives]
+    if isinstance(alternatives,(list,tuple,set)):
+        values.extend(alternatives)
+    cleaned=[clean_remote_text(value) for value in values if value]
+    return list(dict.fromkeys(cleaned))
 
 
 def _year(value):

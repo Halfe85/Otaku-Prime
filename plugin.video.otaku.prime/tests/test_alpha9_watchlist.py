@@ -46,6 +46,19 @@ class Alpha9CanonicalWatchlistTests(unittest.TestCase):
         self.store.replace_provider_snapshot("mal",[])
         self.assertEqual([],self.store.list_all())
 
+    def test_alternative_titles_merge_without_duplicates(self):
+        first=entry(1,"CURRENT",1,{"anilist":1,"mal":11},title=None)
+        first.update({"preferred_name":"Preferred","romaji_name":"Romaji",
+                      "alternative_titles":["Alias","Alias","A &amp; B"]})
+        second=entry(11,"CURRENT",1,{"mal":11},title=None)
+        second["alternative_titles"]=["Alias","Second alias"]
+        self.store.replace_provider_snapshot("anilist",[first])
+        self.store.replace_provider_snapshot("mal",[second])
+
+        row=self.store.list_ui_items()[0]
+        self.assertEqual("Preferred",row["preferred_name"])
+        self.assertEqual(["Alias","A & B","Second alias"],row["alternative_titles"])
+
     def test_conflicting_verified_ids_are_not_silently_merged(self):
         self.store.replace_provider_snapshot("anilist",[entry(1,"CURRENT",1,{"anilist":1,"mal":11})])
         self.store.replace_provider_snapshot("kitsu",[entry(21,"CURRENT",1,{"kitsu":21,"mal":22})])

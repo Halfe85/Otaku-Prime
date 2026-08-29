@@ -17,9 +17,11 @@ class Client:
         return [
           {"status":"CURRENT","progress":2,"updatedAt":100,"media":{"id":1,"idMal":11,"isAdult":False,
            "format":"TV","episodes":12,"startDate":{"year":2020,"month":1,"day":2},
-           "title":{"english":"Show","romaji":"Show"}}},
+           "synonyms":["Show Alias","Show &amp; Friends"],
+           "title":{"english":"Show","romaji":"Show","userPreferred":"Preferred Show"}}},
           {"status":"PLANNING","progress":0,"media":{"id":2,"isAdult":True,
-           "format":"OVA","title":{"english":"Mature Show","romaji":"Mature"}}},
+           "format":"OVA","synonyms":["Mature Alias"],
+           "title":{"english":None,"romaji":"Mature","userPreferred":"Mature Preferred"}}},
         ]
 
 
@@ -44,6 +46,15 @@ class AniListSyncTests(unittest.TestCase):
         self.assertEqual("2020-01-02",rows_by_id["1"]["release_date"])
         self.assertEqual(1,rows_by_id["2"]["is_adult"])
         self.assertEqual(2,json.loads(rows_by_id["2"]["raw_json"])["media"]["id"])
+
+    def test_preferred_and_alternative_titles_are_stored_for_ui_and_search(self):
+        self.importer.sync()
+        rows={row["anilist_id"]:row for row in self.items.list_ui_items()}
+        self.assertEqual("Preferred Show",rows["1"]["preferred_name"])
+        self.assertEqual(["Show Alias","Show & Friends"],rows["1"]["alternative_titles"])
+        self.assertIsNone(rows["2"]["english_name"])
+        self.assertEqual("Mature Preferred",rows["2"]["preferred_name"])
+        self.assertEqual(["Mature Alias"],rows["2"]["alternative_titles"])
 
     def test_duplicate_provider_item_is_stored_once(self):
         class DuplicateClient:
@@ -87,6 +98,9 @@ class AniListSyncTests(unittest.TestCase):
         AniListWatchlistClient(opener=opener).fetch(7,"token")
         self.assertEqual("Otaku-Prime/0.1.2",captured[0].get_header("User-agent"))
         self.assertEqual("Bearer token",captured[0].get_header("Authorization"))
+        query=json.loads(captured[0].data.decode("utf-8"))["query"]
+        self.assertIn("synonyms",query)
+        self.assertIn("userPreferred",query)
 
 
 if __name__=="__main__": unittest.main()

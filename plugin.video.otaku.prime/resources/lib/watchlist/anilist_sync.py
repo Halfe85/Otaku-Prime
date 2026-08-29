@@ -21,7 +21,7 @@ class AniListWatchlistClient:
     def fetch(self,user_id,access_token):
         query="""query($userId:Int!){MediaListCollection(userId:$userId,type:ANIME){
           lists{status entries{status progress updatedAt media{id idMal isAdult format episodes
-            startDate{year month day} title{english romaji native}}}}}}"""
+            startDate{year month day} synonyms title{english romaji native userPreferred}}}}}}"""
         body=json.dumps({"query":query,"variables":{"userId":int(user_id)}}).encode("utf-8")
         headers=dict(ANILIST_HEADERS); headers["Authorization"]="Bearer "+access_token
         request=Request(self.API_URL,data=body,method="POST",headers=headers)
@@ -64,7 +64,10 @@ class AniListWatchlistImportService:
         for entry in entries:
             media=entry.get("media") or {}
             titles=media.get("title") or {}
-            title=titles.get("english") or titles.get("romaji") or titles.get("native")
+            synonyms=media.get("synonyms") or []
+            title=(titles.get("english") or titles.get("userPreferred") or
+                   titles.get("romaji") or titles.get("native") or
+                   next((value for value in synonyms if value),None))
             if not media.get("id") or not title:
                 continue
             provider_status=entry.get("status")
@@ -78,8 +81,10 @@ class AniListWatchlistImportService:
                 "provider_item_id":str(media["id"]),
                 "ids":{"anilist":media["id"],"mal":media.get("idMal")},
                 "english_name":titles.get("english"),
+                "preferred_name":titles.get("userPreferred"),
                 "romaji_name":titles.get("romaji"),
                 "native_name":titles.get("native"),
+                "alternative_titles":synonyms,
                 "list_status":status,
                 "provider_status":provider_status,
                 "progress":progress,
