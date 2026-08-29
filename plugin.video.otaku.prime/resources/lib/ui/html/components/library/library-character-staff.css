@@ -1,8 +1,4 @@
-.library-staff-source[hidden] { display:none !important; }
-
-/* Series characters are the only visible people cards. */
-.library-people-tabs,
-#library-staff-panel,
+.library-linked-actor-source[hidden] { display:none !important; }
 .library-season-cast,
 .library-episode-cast-section { display:none !important; }
 
@@ -48,7 +44,7 @@
 }
 
 .character-card .library-person-portrait.has-staff-portrait::after {
-  content:"Staff";
+  content:"Actor";
   position:absolute;
   right:4px;
   bottom:4px;
