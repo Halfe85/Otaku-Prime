@@ -128,9 +128,22 @@ class Alpha11WatchlistUITests(unittest.TestCase):
             self.assertNotIn("identity_checked_at",row)
             self.assertEqual({
                 "local_id","added_to_library","mediator_ready","mediator_status",
-                "mediator_provider","simkl_reference_id","special_locator",
+                "mediator_provider","anilist_id","mal_id","kitsu_id","simkl_id",
+                "simkl_reference_id","special_locator","identity_resolution_status",
+                "identity_resolution_error",
             },set(state))
             self.assertEqual(1,state["mediator_ready"])
+
+    def test_provider_identity_poll_refreshes_modal_ids_and_exposes_simkl_references(self):
+        manager=read_static_asset(
+            "components/watchlist-management/watchlist-management.js")[1].decode("utf-8")
+        states=read_static_asset(
+            "components/watchlist-management/watchlist-library-state.js")[1].decode("utf-8")
+
+        self.assertIn("function providerIdentity(provider, entry)",manager)
+        self.assertIn("entry.simkl_reference_id",manager)
+        self.assertIn('window.addEventListener("prime:watchlist-state"',manager)
+        self.assertIn('window.dispatchEvent(new CustomEvent("prime:watchlist-state"',states)
 
     def test_progress_api_uses_the_watchlist_manager_callback(self):
         with tempfile.TemporaryDirectory() as directory:

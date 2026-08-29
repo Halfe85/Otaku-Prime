@@ -40,7 +40,11 @@
       signal:controller?controller.signal:undefined
     })
       .then(function(response){if(!response.ok) throw new Error("watchlist state unavailable");return response.json();})
-      .then(function(payload){decorate(payload.entries||[]);})
+      .then(function(payload){
+        var entries=payload.entries||[];
+        decorate(entries);
+        window.dispatchEvent(new CustomEvent("prime:watchlist-state",{detail:{entries:entries}}));
+      })
       .catch(function(){/* Main watchlist UI owns user-visible request errors. */})
       .finally(function(){window.clearTimeout(timeout);busy=false;});
   }

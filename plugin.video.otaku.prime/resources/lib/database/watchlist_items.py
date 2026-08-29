@@ -364,7 +364,8 @@ class WatchlistItemStore:
         with self._connection() as db:
             return [dict(row) for row in db.execute("""SELECT local_id,
               added_to_library,mediator_ready,mediator_status,mediator_provider,
-              simkl_reference_id,special_locator
+              anilist_id,mal_id,kitsu_id,simkl_id,simkl_reference_id,special_locator,
+              identity_resolution_status,identity_resolution_error
               FROM watchlist_items ORDER BY local_id""")]
 
     def item(self,local_id):

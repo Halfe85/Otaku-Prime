@@ -66,12 +66,21 @@
     return Math.max(3, Math.floor((controlsTop - top - 10) / 59));
   }
 
-  function providerLink(provider, entry) {
+  function providerIdentity(provider, entry) {
     var id = entry[provider.id + "_id"];
-    var link = document.createElement(id ? "a" : "div");
-    link.className = "provider-link" + (id ? "" : " unavailable");
-    if (id) {
-      link.href = provider.url + encodeURIComponent(String(id));
+    if (id != null && id !== "") return { id: String(id), reference: false };
+    if (provider.id === "simkl" && entry.simkl_reference_id != null && entry.simkl_reference_id !== "") {
+      return { id: String(entry.simkl_reference_id), reference: true };
+    }
+    return null;
+  }
+
+  function providerLink(provider, entry) {
+    var identity = providerIdentity(provider, entry);
+    var link = document.createElement(identity ? "a" : "div");
+    link.className = "provider-link" + (identity ? (identity.reference ? " reference" : "") : " unavailable");
+    if (identity) {
+      link.href = provider.url + encodeURIComponent(identity.id);
       link.target = "_blank";
       link.rel = "noopener noreferrer";
       link.setAttribute("aria-label", "Open " + titleOf(entry) + " on " + provider.label);
@@ -85,17 +94,38 @@
     var name = document.createElement("span");
     name.textContent = provider.label;
     var providerId = document.createElement("strong");
-    providerId.textContent = id ? "ID " + id : "ID unavailable";
+    providerId.textContent = identity
+      ? (identity.reference ? "Reference ID " : "ID ") + identity.id +
+        (identity.reference && entry.special_locator ? " · " + entry.special_locator : "")
+      : "ID unavailable";
     label.appendChild(name);
     label.appendChild(providerId);
     var arrow = document.createElement("span");
     arrow.className = "provider-link-arrow";
     arrow.setAttribute("aria-hidden", "true");
-    arrow.textContent = id ? "↗" : "—";
+    arrow.textContent = identity ? "↗" : "—";
     link.appendChild(icon);
     link.appendChild(label);
     link.appendChild(arrow);
     return link;
+  }
+
+  function renderProviderLinks(entry) {
+    var links = document.getElementById("series-modal-provider-links");
+    links.textContent = "";
+    providers.forEach(function (provider) {
+      if (providerIdentity(provider, entry)) links.appendChild(providerLink(provider, entry));
+    });
+  }
+
+  function renderIdentityConflict(entry) {
+    var identityConflict = document.getElementById("series-modal-identity-conflict");
+    var hasIdentityConflict = String(entry.identity_resolution_status || "").indexOf("CONFLICT") === 0;
+    identityConflict.hidden = !hasIdentityConflict;
+    identityConflict.textContent = hasIdentityConflict
+      ? "Catalog identity conflict: " + value(entry.identity_resolution_error,
+        "Simkl pointed to a different anime, so Prime kept the watchlist provider identity.")
+      : "";
   }
 
   function openModal(entry, trigger) {
@@ -113,18 +143,8 @@
     setText("series-modal-alternatives", alternativeTitles(entry).join(" · "));
     setText("series-modal-local-id", "Prime ID  " + entry.local_id);
     document.getElementById("series-modal-conflict").hidden = !entry.has_conflict;
-    var identityConflict = document.getElementById("series-modal-identity-conflict");
-    var hasIdentityConflict = String(entry.identity_resolution_status || "").indexOf("CONFLICT") === 0;
-    identityConflict.hidden = !hasIdentityConflict;
-    identityConflict.textContent = hasIdentityConflict
-      ? "Catalog identity conflict: " + value(entry.identity_resolution_error,
-        "Simkl pointed to a different anime, so Prime kept the watchlist provider identity.")
-      : "";
-    var links = document.getElementById("series-modal-provider-links");
-    links.textContent = "";
-    providers.forEach(function (provider) {
-      if (entry[provider.id + "_id"]) links.appendChild(providerLink(provider, entry));
-    });
+    renderIdentityConflict(entry);
+    renderProviderLinks(entry);
     modal.hidden = false;
     document.querySelector(".series-modal-close").focus();
   }
@@ -166,7 +186,8 @@
     var visible = entries.filter(function (entry) {
       var haystack = [titleOf(entry), entry.english_name, entry.preferred_name,
         entry.romaji_name, entry.native_name].concat(alternativeTitles(entry), [entry.anilist_id,
-        entry.mal_id, entry.kitsu_id, entry.simkl_id, entry.connected_providers]).join(" ").toLowerCase();
+        entry.mal_id, entry.kitsu_id, entry.simkl_id, entry.simkl_reference_id,
+        entry.special_locator, entry.connected_providers]).join(" ").toLowerCase();
       return (!term || haystack.indexOf(term) !== -1) && (!wanted || entry.status === wanted);
     });
     pageSize = visiblePageSize();
@@ -216,6 +237,23 @@
     searchTerm = event.detail.value || "";
     page = 1;
     render();
+  });
+  window.addEventListener("prime:watchlist-state", function (event) {
+    var updates = event.detail && event.detail.entries;
+    if (!Array.isArray(updates) || !entries.length) return;
+    var byId = {};
+    updates.forEach(function (update) { byId[String(update.local_id)] = update; });
+    entries.forEach(function (entry) {
+      var update = byId[String(entry.local_id)];
+      if (!update) return;
+      ["anilist_id", "mal_id", "kitsu_id", "simkl_id", "simkl_reference_id",
+        "special_locator", "identity_resolution_status", "identity_resolution_error"
+      ].forEach(function (field) { entry[field] = update[field]; });
+    });
+    if (currentEntry) {
+      renderIdentityConflict(currentEntry);
+      renderProviderLinks(currentEntry);
+    }
   });
   status.addEventListener("change", function () { page = 1; render(); });
   previous.addEventListener("click", function () { if (page > 1) { page -= 1; render(); } });
