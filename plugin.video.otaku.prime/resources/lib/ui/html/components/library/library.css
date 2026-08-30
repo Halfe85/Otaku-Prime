@@ -57,7 +57,7 @@
 .library-modal-footer { min-height:58px; padding:10px 18px; border-top:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; gap:14px; background:rgba(10,13,21,.8); }
 .library-series-card > .library-modal-footer { display:grid; grid-template-columns:minmax(0,1fr) auto minmax(0,1fr); }
 .library-local-id { color:#6f7a91; font:11px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace; }
-.library-provider-tile { display:grid; grid-template-columns:repeat(4,34px); gap:6px; width:154px; padding:5px; border:1px solid #303950; border-radius:12px; background:rgba(17,22,35,.88); }
+.library-provider-tile { display:grid; grid-template-columns:repeat(4,34px); gap:6px; width:161px; padding:2px; border:1px solid #303950; border-radius:12px; background:rgba(17,22,35,.88); }
 .library-provider-slot { width:34px; height:34px; display:grid; place-items:center; }
 .library-provider-slot img { display:block; width:26px; height:26px; object-fit:contain; transition:opacity .16s ease,filter .16s ease; }
 .library-provider-slot.available img { opacity:1; filter:none; }
