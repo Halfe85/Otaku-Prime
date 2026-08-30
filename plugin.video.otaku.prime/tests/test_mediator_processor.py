@@ -21,6 +21,13 @@ class PendingEndpoint(Endpoint):
             placement=self.result)
 
 
+class FranchiseEndpoint(Endpoint):
+    def __init__(self,name,result=None,error=None,identity=None):
+        super().__init__(name,result,error); self.identity=identity; self.identity_calls=[]
+    def franchise_identity(self,provider_id):
+        self.identity_calls.append(str(provider_id)); return dict(self.identity)
+
+
 def placement(provider,season=1):
     return {"provider_path":provider,"provider_id":provider,"tv_show":{"name":"Show","romaji_name":"Show"},
       "season":{"number":season,"number_source":provider,"name":"Show","first_episode":1,"last_episode":2},
@@ -36,6 +43,32 @@ class MediatorProcessorTests(unittest.TestCase):
         result=MediatorProcessor(endpoints=endpoints).resolve(self.item())
         self.assertEqual("simkl",result["provider_path"])
         self.assertEqual((1,0,0,0),tuple(endpoints[name].calls for name in ("simkl","anilist","mal","kitsu")))
+
+    def test_simkl_coordinates_use_anilist_canonical_franchise_identity(self):
+        simkl=placement("simkl",season=0)
+        simkl["tv_show"].update({"name":"Bleach the Movie","simkl_id":"41066",
+                                  "tvdb_id":"74796"})
+        endpoints={
+            "simkl":Endpoint("simkl",simkl),
+            "anilist":FranchiseEndpoint("anilist",placement("anilist"),identity={
+                "name":"Bleach","romaji_name":"BLEACH","anilist_id":"269",
+                "mal_id":"269","source_format":"TV","publish_year":2004,
+                "source":"anilist_franchise_relation",
+                "franchise_relation_path":["1686","269"]}),
+            "mal":Endpoint("mal",placement("mal")),
+            "kitsu":Endpoint("kitsu",placement("kitsu")),
+        }
+
+        result=MediatorProcessor(endpoints=endpoints).resolve(self.item())
+
+        self.assertEqual("simkl",result["provider_path"])
+        self.assertEqual(0,result["season"]["number"])
+        self.assertEqual("Bleach",result["tv_show"]["name"])
+        self.assertEqual("269",result["tv_show"]["anilist_id"])
+        self.assertEqual("41066",result["tv_show"]["simkl_id"])
+        self.assertEqual("74796",result["tv_show"]["tvdb_id"])
+        self.assertEqual(["2"],endpoints["anilist"].identity_calls)
+        self.assertEqual(0,endpoints["anilist"].calls)
 
     def test_conflicted_stored_simkl_id_is_bypassed(self):
         endpoints={name:Endpoint(name,placement(name)) for name in ("simkl","anilist","mal","kitsu")}

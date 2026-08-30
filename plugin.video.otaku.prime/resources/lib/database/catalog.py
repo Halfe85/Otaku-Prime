@@ -12,6 +12,8 @@ from resources.lib.services.remote_identity import best_title_similarity,clean_r
 
 
 HEX_SEGMENT_LENGTH=6
+CATALOG_PROJECTION_REVISION="alpha11-split-movie-library-1"
+SPECIAL_SOURCE_FORMATS=("MOVIE","OVA","ONA","SPECIAL","TV_SPECIAL","MUSIC")
 LOGGER=get_logger(__name__)
 
 
@@ -70,6 +72,36 @@ class CatalogStore:
               mature INTEGER NOT NULL DEFAULT 0 CHECK(mature IN(0,1)),
               created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
               updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS movies(
+              local_id TEXT PRIMARY KEY
+                CHECK(length(local_id)=6 AND local_id NOT GLOB '*[^0-9a-f]*'),
+              watchlist_local_id TEXT NOT NULL UNIQUE,
+              anilist_id TEXT UNIQUE,
+              mal_id TEXT UNIQUE,
+              kitsu_id TEXT UNIQUE,
+              simkl_id TEXT UNIQUE,
+              provider_path TEXT,
+              placement_source TEXT,
+              english_name TEXT,
+              romaji_name TEXT,
+              release_date TEXT,
+              release_status TEXT,
+              publish_year INTEGER,
+              overview TEXT,
+              runtime_minutes INTEGER,
+              air_status TEXT,
+              poster_url TEXT,
+              clearlogo_url TEXT,
+              banner_url TEXT,
+              genres_json TEXT NOT NULL DEFAULT '[]',
+              themes_json TEXT NOT NULL DEFAULT '[]',
+              age_rating TEXT,
+              mature INTEGER NOT NULL DEFAULT 0 CHECK(mature IN(0,1)),
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              FOREIGN KEY(watchlist_local_id) REFERENCES watchlist_items(local_id) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS seasons(
@@ -227,6 +259,32 @@ class CatalogStore:
             CREATE UNIQUE INDEX IF NOT EXISTS ux_character_media_episode_credit
               ON character_media_links(character_local_id,related_episode_id)
               WHERE related_episode_id IS NOT NULL;
+
+            CREATE TABLE IF NOT EXISTS movie_staff_links(
+              movie_local_id TEXT NOT NULL,
+              staff_local_id TEXT NOT NULL,
+              credit_type TEXT NOT NULL DEFAULT 'staff',
+              language TEXT NOT NULL DEFAULT '',
+              source_provider TEXT,
+              sort_order INTEGER NOT NULL DEFAULT 0,
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY(movie_local_id,staff_local_id,credit_type,language),
+              FOREIGN KEY(movie_local_id) REFERENCES movies(local_id) ON DELETE CASCADE,
+              FOREIGN KEY(staff_local_id) REFERENCES staff(local_id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS movie_character_links(
+              movie_local_id TEXT NOT NULL,
+              character_local_id TEXT NOT NULL,
+              source_provider TEXT,
+              sort_order INTEGER NOT NULL DEFAULT 0,
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY(movie_local_id,character_local_id),
+              FOREIGN KEY(movie_local_id) REFERENCES movies(local_id) ON DELETE CASCADE,
+              FOREIGN KEY(character_local_id) REFERENCES characters(local_id) ON DELETE CASCADE
+            );
             """)
             existing_series_columns={row[1] for row in db.execute(
                 "PRAGMA table_info(tv_series)")}
@@ -270,6 +328,9 @@ class CatalogStore:
               ON tv_series(tvdb_id) WHERE tvdb_id IS NOT NULL""")
             db.execute("""CREATE UNIQUE INDEX IF NOT EXISTS ux_tv_series_anilist
               ON tv_series(root_anilist_id) WHERE root_anilist_id IS NOT NULL""")
+            db.execute("""CREATE TABLE IF NOT EXISTS prime_catalog_state(
+              key TEXT PRIMARY KEY,value TEXT NOT NULL,
+              updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)""")
             if legacy_cast and db.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='watchlist_items'"
             ).fetchone():
@@ -299,12 +360,52 @@ class CatalogStore:
                     WHERE s.watchlist_local_id=watchlist_items.local_id)""")
                 LOGGER.info(
                     "Queued existing Prime library entries for genres/themes/age-rating refresh")
+            self._repair_franchise_projection(db)
             self._repair_encoded_text(db)
+
+    @staticmethod
+    def _repair_franchise_projection(db):
+        """One-time rebuild of generated special roots from the old PREQUEL-only model."""
+        row=db.execute(
+            "SELECT value FROM prime_catalog_state WHERE key='projection_revision'"
+        ).fetchone()
+        if row and row["value"]==CATALOG_PROJECTION_REVISION:
+            return
+        watchlist_exists=bool(db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='watchlist_items'"
+        ).fetchone())
+        placeholders=",".join("?" for _ in SPECIAL_SOURCE_FORMATS)
+        affected=[value[0] for value in db.execute(
+            """SELECT DISTINCT tv_series.local_id FROM tv_series
+              JOIN seasons ON seasons.related_series_id=tv_series.local_id
+              WHERE UPPER(COALESCE(tv_series.source_media_format,'')) IN ({})
+                 OR UPPER(COALESCE(seasons.media_format,'')) IN ({})""".format(
+                     placeholders,placeholders),
+            SPECIAL_SOURCE_FORMATS+SPECIAL_SOURCE_FORMATS).fetchall()]
+        if affected:
+            ids=",".join("?" for _ in affected)
+            if watchlist_exists:
+                db.execute("""UPDATE watchlist_items SET added_to_library=0,
+                  library_added_at=NULL,mediator_ready=1,mediator_status='PARTIAL',
+                  mediator_provider=NULL,
+                  mediator_error='Franchise ownership rebuild required',
+                  updated_at=CURRENT_TIMESTAMP
+                  WHERE EXISTS(SELECT 1 FROM seasons
+                    WHERE seasons.watchlist_local_id=watchlist_items.local_id
+                      AND seasons.related_series_id IN ({}))""".format(ids),affected)
+            db.execute("DELETE FROM tv_series WHERE local_id IN ({})".format(ids),affected)
+            LOGGER.warning(
+                "Removed %s generated franchise rows created by the old PREQUEL-only model; "
+                "their watchlist items were queued for canonical placement",len(affected))
+        db.execute("""INSERT INTO prime_catalog_state(key,value) VALUES('projection_revision',?)
+          ON CONFLICT(key) DO UPDATE SET value=excluded.value,
+          updated_at=CURRENT_TIMESTAMP""",(CATALOG_PROJECTION_REVISION,))
 
     @staticmethod
     def _repair_encoded_text(db):
         targets={
             "tv_series":("english_name","romaji_name","overview"),
+            "movies":("english_name","romaji_name","overview"),
             "seasons":("english_name","romaji_name"),
             "episodes":("title","overview"),
             "staff":("name","trivia"),
@@ -474,6 +575,72 @@ class CatalogStore:
               clean_remote_text(age_rating),mature_value))
             return dict(db.execute("SELECT * FROM tv_series WHERE local_id=?",(local_id,)).fetchone())
 
+    def add_watchlist_movie(self,watchlist_item,provider_path=None,placement_source=None,
+                            english_name=None,romaji_name=None,release_date=None,
+                            release_status=None,publish_year=None,overview=None,
+                            runtime_minutes=None,air_status=None,poster_url=None,
+                            clearlogo_url=None,banner_url=None,genres=None,themes=None,
+                            age_rating=None,mature=False):
+        """Create or refresh one standalone movie directly from its watchlist row."""
+        watchlist_id=str(watchlist_item["local_id"])
+        values={provider:(str(watchlist_item.get(provider+"_id"))
+                          if watchlist_item.get(provider+"_id") not in (None,"") else None)
+                for provider in ("anilist","mal","kitsu","simkl")}
+        english_name=clean_remote_text(english_name or watchlist_item.get("english_name"))
+        romaji_name=clean_remote_text(romaji_name or watchlist_item.get("romaji_name"))
+        overview=clean_remote_text(overview)
+        release_date=release_date or watchlist_item.get("release_date")
+        try: year=int(publish_year) if publish_year not in (None,"") else (
+            int(str(release_date)[:4]) if str(release_date or "")[:4].isdigit() else None)
+        except (TypeError,ValueError): year=None
+        runtime=int(runtime_minutes) if runtime_minutes not in (None,"") else None
+        genres_json=self._encode_terms(genres); themes_json=self._encode_terms(themes)
+        with self._connection() as db:
+            row=db.execute("SELECT * FROM movies WHERE watchlist_local_id=?",
+                           (watchlist_id,)).fetchone()
+            if not row:
+                for provider,remote_id in values.items():
+                    if remote_id:
+                        row=db.execute("SELECT * FROM movies WHERE {}_id=?".format(provider),
+                                       (remote_id,)).fetchone()
+                        if row: break
+            if row:
+                genres_json=self._encode_terms(
+                    self._decode_terms(row["genres_json"])+self._decode_terms(genres_json))
+                themes_json=self._encode_terms(
+                    self._decode_terms(row["themes_json"])+self._decode_terms(themes_json))
+                db.execute("""UPDATE movies SET watchlist_local_id=?,
+                  anilist_id=COALESCE(?,anilist_id),mal_id=COALESCE(?,mal_id),
+                  kitsu_id=COALESCE(?,kitsu_id),simkl_id=COALESCE(?,simkl_id),
+                  provider_path=?,placement_source=?,
+                  english_name=COALESCE(?,english_name),romaji_name=COALESCE(?,romaji_name),
+                  release_date=COALESCE(?,release_date),release_status=COALESCE(?,release_status),
+                  publish_year=COALESCE(?,publish_year),overview=COALESCE(?,overview),
+                  runtime_minutes=COALESCE(?,runtime_minutes),air_status=COALESCE(?,air_status),
+                  poster_url=COALESCE(?,poster_url),clearlogo_url=COALESCE(?,clearlogo_url),
+                  banner_url=COALESCE(?,banner_url),genres_json=?,themes_json=?,
+                  age_rating=COALESCE(?,age_rating),mature=MAX(mature,?),
+                  updated_at=CURRENT_TIMESTAMP WHERE local_id=?""",
+                  (watchlist_id,values["anilist"],values["mal"],values["kitsu"],
+                   values["simkl"],provider_path,placement_source,english_name,romaji_name,
+                   release_date,release_status,year,overview,runtime,air_status,poster_url,
+                   clearlogo_url,banner_url,genres_json,themes_json,
+                   clean_remote_text(age_rating),int(bool(mature)),row["local_id"]))
+                return dict(db.execute("SELECT * FROM movies WHERE local_id=?",
+                                       (row["local_id"],)).fetchone())
+            local_id=self._new_local_id(db,"movies")
+            db.execute("""INSERT INTO movies(local_id,watchlist_local_id,anilist_id,mal_id,
+              kitsu_id,simkl_id,provider_path,placement_source,english_name,romaji_name,
+              release_date,release_status,publish_year,overview,runtime_minutes,air_status,
+              poster_url,clearlogo_url,banner_url,genres_json,themes_json,age_rating,mature)
+              VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+              (local_id,watchlist_id,values["anilist"],values["mal"],values["kitsu"],
+               values["simkl"],provider_path,placement_source,english_name,romaji_name,
+               release_date,release_status,year,overview,runtime,air_status,poster_url,
+               clearlogo_url,banner_url,genres_json,themes_json,clean_remote_text(age_rating),
+               int(bool(mature))))
+            return dict(db.execute("SELECT * FROM movies WHERE local_id=?",(local_id,)).fetchone())
+
     @staticmethod
     def _encode_terms(values):
         if values in (None,""): return "[]"
@@ -641,6 +808,105 @@ class CatalogStore:
                        values["related_episode_id"],credit_type,language,provider,sort_order))
                 inserted+=1
             return inserted
+
+    def replace_movie_credits(self,credits,movie_id,source_provider=None):
+        """Store normalized staff/character credits for one standalone movie."""
+        if not credits: return 0
+        movie_id=str(movie_id)
+        with self._connection() as db:
+            if not db.execute("SELECT 1 FROM movies WHERE local_id=?",(movie_id,)).fetchone():
+                raise KeyError("movie credit scope was not found")
+            db.execute("DELETE FROM movie_character_links WHERE movie_local_id=?",(movie_id,))
+            db.execute("DELETE FROM movie_staff_links WHERE movie_local_id=?",(movie_id,))
+            inserted=0
+            for index,entry in enumerate(credits):
+                staff_value=self._credit_entity(entry,"person","person_name")
+                character_value=self._credit_entity(entry,"character","character_name")
+                provider=str((entry or {}).get("source_provider") or source_provider or "") or None
+                character_id=self._upsert_character(db,character_value,provider)
+                staff_id=self._upsert_staff(db,staff_value,provider)
+                if not character_id and not staff_id: continue
+                credit_type=str((entry or {}).get("credit_type") or "voice_actor")
+                language=str((entry or {}).get("language") or "")
+                sort_order=int((entry or {}).get("sort_order",index))
+                if staff_id and character_id:
+                    db.execute("""INSERT INTO staff_character_links(staff_local_id,
+                      character_local_id,credit_type,language,source_provider)
+                      VALUES(?,?,?,?,?) ON CONFLICT(staff_local_id,character_local_id,
+                      credit_type,language) DO UPDATE SET source_provider=excluded.source_provider,
+                      updated_at=CURRENT_TIMESTAMP""",
+                      (staff_id,character_id,credit_type,language,provider))
+                if character_id:
+                    db.execute("""INSERT INTO movie_character_links(movie_local_id,
+                      character_local_id,source_provider,sort_order) VALUES(?,?,?,?)
+                      ON CONFLICT(movie_local_id,character_local_id) DO UPDATE SET
+                      source_provider=excluded.source_provider,sort_order=excluded.sort_order,
+                      updated_at=CURRENT_TIMESTAMP""",
+                      (movie_id,character_id,provider,sort_order))
+                elif staff_id:
+                    db.execute("""INSERT INTO movie_staff_links(movie_local_id,staff_local_id,
+                      credit_type,language,source_provider,sort_order) VALUES(?,?,?,?,?,?)
+                      ON CONFLICT(movie_local_id,staff_local_id,credit_type,language) DO UPDATE SET
+                      source_provider=excluded.source_provider,sort_order=excluded.sort_order,
+                      updated_at=CURRENT_TIMESTAMP""",
+                      (movie_id,staff_id,credit_type,language,provider,sort_order))
+                inserted+=1
+            return inserted
+
+    @staticmethod
+    def _movie_credits(db,movie_id):
+        rows=db.execute("""SELECT staff_link.credit_type,staff_link.language,
+          COALESCE(staff_link.source_provider,link.source_provider) AS source_provider,
+          link.sort_order,staff.local_id AS staff_local_id,staff.anilist_id AS staff_anilist_id,
+          staff.mal_id AS staff_mal_id,staff.kitsu_id AS staff_kitsu_id,
+          staff.simkl_id AS staff_simkl_id,staff.name AS staff_name,staff.trivia AS staff_trivia,
+          staff.date_of_birth,staff.date_of_death,staff.age,staff.image_url AS staff_image_url,
+          characters.local_id AS character_local_id,
+          characters.anilist_id AS character_anilist_id,characters.mal_id AS character_mal_id,
+          characters.kitsu_id AS character_kitsu_id,characters.simkl_id AS character_simkl_id,
+          characters.name AS character_name,characters.trivia AS character_trivia,
+          characters.image_url AS character_image_url
+          FROM movie_character_links link
+          JOIN characters ON characters.local_id=link.character_local_id
+          LEFT JOIN staff_character_links staff_link
+            ON staff_link.character_local_id=characters.local_id
+          LEFT JOIN staff ON staff.local_id=staff_link.staff_local_id
+          WHERE link.movie_local_id=? ORDER BY link.sort_order,characters.name,staff.name""",
+          (str(movie_id),)).fetchall()
+        result=[]
+        for row in rows:
+            result.append({"person_name":row["staff_name"],
+              "character_name":row["character_name"],
+              "credit_type":row["credit_type"] or "voice_actor",
+              "language":row["language"] or "","source_provider":row["source_provider"],
+              "sort_order":row["sort_order"],
+              "person":({"local_id":row["staff_local_id"],"anilist_id":row["staff_anilist_id"],
+                "mal_id":row["staff_mal_id"],"kitsu_id":row["staff_kitsu_id"],
+                "simkl_id":row["staff_simkl_id"],"name":row["staff_name"],
+                "trivia":row["staff_trivia"],"date_of_birth":row["date_of_birth"],
+                "date_of_death":row["date_of_death"],"age":row["age"],
+                "image_url":row["staff_image_url"]} if row["staff_local_id"] else {}),
+              "character":{"local_id":row["character_local_id"],
+                "anilist_id":row["character_anilist_id"],"mal_id":row["character_mal_id"],
+                "kitsu_id":row["character_kitsu_id"],"simkl_id":row["character_simkl_id"],
+                "name":row["character_name"],"trivia":row["character_trivia"],
+                "image_url":row["character_image_url"]}})
+        for row in db.execute("""SELECT link.credit_type,link.language,link.source_provider,
+          link.sort_order,staff.* FROM movie_staff_links link
+          JOIN staff ON staff.local_id=link.staff_local_id
+          WHERE link.movie_local_id=? ORDER BY link.sort_order,staff.name""",(str(movie_id),)):
+            result.append({"person_name":row["name"],"character_name":None,
+              "credit_type":row["credit_type"] or "staff","language":row["language"] or "",
+              "source_provider":row["source_provider"],"sort_order":row["sort_order"],
+              "person":{"local_id":row["local_id"],"anilist_id":row["anilist_id"],
+                "mal_id":row["mal_id"],"kitsu_id":row["kitsu_id"],"simkl_id":row["simkl_id"],
+                "name":row["name"],"trivia":row["trivia"],"date_of_birth":row["date_of_birth"],
+                "date_of_death":row["date_of_death"],"age":row["age"],
+                "image_url":row["image_url"]},"character":{}})
+        result.sort(key=lambda value:(int(value.get("sort_order") or 0),
+                                      str(value.get("character_name") or "").casefold(),
+                                      str(value.get("person_name") or "").casefold()))
+        return result
 
     @staticmethod
     def _credits_for_media(db,column,media_id):
@@ -972,9 +1238,45 @@ class CatalogStore:
                 series,cast,seasons)
             return series
 
+    def library_movies(self):
+        """Return standalone movies; franchise movies remain in TV season zero."""
+        with self._connection() as db:
+            result=[]
+            for row in db.execute("SELECT * FROM movies ORDER BY english_name,romaji_name,local_id"):
+                movie=dict(row)
+                movie["genres"]=self._decode_terms(movie.pop("genres_json",None))
+                movie["themes"]=self._decode_terms(movie.pop("themes_json",None))
+                movie["title"]=movie.get("english_name") or movie.get("romaji_name") or "Untitled movie"
+                movie["library_type"]="movie"
+                movie["library_status"]=movie.get("air_status") or movie.get("release_status") or "UNKNOWN"
+                result.append(movie)
+            return result
+
+    def library_movie_detail(self,movie_id):
+        with self._connection() as db:
+            row=db.execute("SELECT * FROM movies WHERE local_id=?",(str(movie_id),)).fetchone()
+            if not row: return None
+            movie=dict(row)
+            movie["genres"]=self._decode_terms(movie.pop("genres_json",None))
+            movie["themes"]=self._decode_terms(movie.pop("themes_json",None))
+            movie["title"]=movie.get("english_name") or movie.get("romaji_name") or "Untitled movie"
+            movie["library_type"]="movie"
+            movie["library_status"]=movie.get("air_status") or movie.get("release_status") or "UNKNOWN"
+            cast=self._movie_credits(db,movie["local_id"])
+            movie["cast"]=cast
+            movie["staff"],movie["characters"]=self._people_for_series(movie,cast,[])
+            for entity in movie["staff"]+movie["characters"]:
+                for link in entity.get("media_links") or []:
+                    if link.get("scope")=="series": link["scope"]="movie"
+            return movie
+
     def list_series(self):
         with self._connection() as db:
             return [dict(row) for row in db.execute("SELECT * FROM tv_series ORDER BY local_id")]
+
+    def list_movies(self):
+        with self._connection() as db:
+            return [dict(row) for row in db.execute("SELECT * FROM movies ORDER BY local_id")]
 
     def list_seasons(self,series_id):
         with self._connection() as db:
@@ -988,4 +1290,5 @@ class CatalogStore:
 
     def linked_watchlist_ids(self):
         with self._connection() as db:
-            return {row[0] for row in db.execute("SELECT watchlist_local_id FROM seasons")}
+            return ({row[0] for row in db.execute("SELECT watchlist_local_id FROM seasons")} |
+                    {row[0] for row in db.execute("SELECT watchlist_local_id FROM movies")})

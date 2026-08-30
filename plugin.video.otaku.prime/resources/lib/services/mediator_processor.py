@@ -114,22 +114,53 @@ class MediatorProcessor:
             LOGGER.info("Mediator %s endpoint could not resolve Prime item %s: %s",name,item.get("local_id"),exc)
             return None
 
+    def _canonicalize_franchise(self,item,placement):
+        """Keep structural coordinates, but resolve library ownership independently."""
+        identity=None
+        for provider in ("anilist","mal"):
+            endpoint=self.endpoints.get(provider)
+            getter=getattr(endpoint,"franchise_identity",None)
+            value=item.get(provider+"_id")
+            if not getter or value in (None,""):
+                continue
+            try:
+                identity=getter(value); break
+            except Exception as exc:
+                LOGGER.info(
+                    "%s franchise identity unavailable for Prime item %s: %s",
+                    provider.title(),item.get("local_id"),exc)
+        if not identity:
+            return placement
+        show=placement.setdefault("tv_show",{})
+        for key in ("name","romaji_name","anilist_id","mal_id","source_format",
+                    "publish_year","source"):
+            if identity.get(key) not in (None,""):
+                show[key]=identity[key]
+        placement["franchise_relation_path"]=identity.get("franchise_relation_path") or []
+        placement["library_type"]=identity.get("library_type") or "series"
+        return placement
+
+    def _finish(self,item,placement,attempts):
+        placement=self._canonicalize_franchise(item,placement)
+        placement["provider_attempts"]=attempts
+        return placement
+
     def resolve(self,item):
         attempts=[]; pending_placements=[]
         simkl=self._try("simkl",item,attempts,pending_placements)
         if simkl:
-            simkl["provider_attempts"]=attempts; return simkl
+            return self._finish(item,simkl,attempts)
 
         anilist=self._try("anilist",item,attempts,pending_placements)
         mal=self._try("mal",item,attempts,pending_placements)
         if anilist and mal:
             try:
-                combined=_merge_placements(anilist,mal); combined["provider_attempts"]=attempts
+                combined=_merge_placements(anilist,mal)
                 if combined.get("provider_consensus_scope")=="partial_episode_coverage":
                     LOGGER.info(
                         "AniList/MAL partial episode coverage accepted for Prime item %s: %s",
                         item.get("local_id"),combined.get("provider_coverage"))
-                return combined
+                return self._finish(item,combined,attempts)
             except MediatorProviderConflict as exc:
                 attempts.append({"provider":"anilist+mal","skipped":False,"error":str(exc)})
                 LOGGER.info(
@@ -140,18 +171,17 @@ class MediatorProcessor:
                 # MAL can enrich or confirm its placement, but must not veto a
                 # valid AniList result merely because the catalogues number a
                 # special or short-form title differently.
-                anilist["provider_attempts"]=attempts
                 anilist["provider_disagreement"]={
                     "provider":"mal","error":str(exc)}
-                return anilist
+                return self._finish(item,anilist,attempts)
         elif anilist:
-            anilist["provider_attempts"]=attempts; return anilist
+            return self._finish(item,anilist,attempts)
         elif mal:
-            mal["provider_attempts"]=attempts; return mal
+            return self._finish(item,mal,attempts)
 
         kitsu=self._try("kitsu",item,attempts,pending_placements)
         if kitsu:
-            kitsu["provider_attempts"]=attempts; return kitsu
+            return self._finish(item,kitsu,attempts)
         usable=[row for row in attempts if not row.get("skipped")]
         if not usable: raise MediatorPlacementError("Prime item has no usable provider metadata path")
         if pending_placements or all(row.get("pending") for row in usable):

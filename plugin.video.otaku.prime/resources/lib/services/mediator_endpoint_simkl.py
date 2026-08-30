@@ -120,6 +120,8 @@ class SimklMediatorEndpoint:
         franchise=self._franchise(client,target,root)
         season_number,number_source=_season_number(target,path)
         target_type=str(target.get("anime_type") or "").lower()
+        library_type=("movie" if target_type=="movie" and
+                      not franchise.get("tvdb_id") else "series")
         candidates=_episodes(client.episodes(simkl_id),target_type in SPECIAL_MEDIA_TYPES)
         episodes=[row for row in candidates if row.get("season_number")==season_number]
         if not episodes:
@@ -133,6 +135,7 @@ class SimklMediatorEndpoint:
             raise MediatorPlacementError("Simkl franchise episode coordinates contain gaps")
         return {
             "provider_path":"simkl","provider_id":simkl_id,"provider_reference_id":None,
+            "library_type":library_type,
             "tv_show":franchise,
             "season":{"number":season_number,"number_source":number_source,
                       "name":_remote_title(target),
@@ -158,6 +161,7 @@ class SimklMediatorEndpoint:
                 "Simkl reference {} has no {}".format(reference,item.get("special_locator")))
         return {
             "provider_path":"simkl","provider_id":None,"provider_reference_id":reference,
+            "library_type":"series",
             "tv_show":franchise,
             "season":{"number":season_number,"number_source":"watchlist_special_locator",
                       "name":item.get("english_name") or item.get("romaji_name"),

@@ -183,6 +183,31 @@ class LibraryCatalogTests(unittest.TestCase):
         self.assertEqual(["Action","Fantasy","Drama"],detail["genres"])
         self.assertEqual(["Isekai","Magic","Coming of Age"],detail["themes"])
 
+    def test_old_special_franchise_projection_is_removed_and_requeued(self):
+        db=sqlite3.connect(self.path)
+        try:
+            db.execute("UPDATE tv_series SET source_media_format='MOVIE' WHERE local_id=?",
+                       (self.series["local_id"],))
+            db.execute("""UPDATE watchlist_items SET added_to_library=1,
+              mediator_ready=0,mediator_status='COMPLETE' WHERE local_id=?""",
+                       (self.item["local_id"],))
+            db.execute("""UPDATE prime_catalog_state SET value='old-model'
+              WHERE key='projection_revision'""")
+            db.commit()
+        finally:
+            db.close()
+
+        with self.assertLogs("otaku_prime.database-catalog",level="WARNING"):
+            CatalogStore(self.path,SegmentFactory()).initialize()
+
+        self.assertEqual([],self.catalog.list_series())
+        repaired=self.watchlist.item(self.item["local_id"])
+        self.assertEqual((0,1,"PARTIAL"),(
+            repaired["added_to_library"],repaired["mediator_ready"],
+            repaired["mediator_status"]))
+        self.assertEqual("Franchise ownership rebuild required",
+                         repaired["mediator_error"])
+
     def test_series_artwork_urls_are_projected_to_tiles_and_detail(self):
         tile=self.catalog.library_series()[0]
         detail=self.catalog.library_series_detail(self.series["local_id"])

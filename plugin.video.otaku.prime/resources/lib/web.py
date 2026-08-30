@@ -297,6 +297,24 @@ def create_server(host: str, port: int, user_store, app_log_store=None,
                 self._send_json(200,{"ok":True,"series":detail})
                 return
 
+            if path == "/api/library/movies":
+                if not self._current_user():
+                    self._send_json(401,{"ok":False,"message":"Sign in again."}); return
+                self._send_json(200,{"ok":True,"movies":catalog.library_movies()})
+                return
+
+            if path.startswith("/api/library/movies/"):
+                if not self._current_user():
+                    self._send_json(401,{"ok":False,"message":"Sign in again."}); return
+                local_id=path[len("/api/library/movies/"):].strip("/").lower()
+                if len(local_id)!=6 or any(char not in "0123456789abcdef" for char in local_id):
+                    self._send_json(400,{"ok":False,"message":"Invalid Prime movie ID."}); return
+                detail=catalog.library_movie_detail(local_id)
+                if not detail:
+                    self._send_json(404,{"ok":False,"message":"Movie not found."}); return
+                self._send_json(200,{"ok":True,"movie":detail})
+                return
+
             if path == "/api/auth/anilist/info":
                 try:
                     info = authenticator_api.provider_info("anilist")

@@ -15,8 +15,8 @@ from resources.lib.services.mediator_helper_simkl import (
 )
 from resources.lib.watchlist.mal import MAL_API_URL,MAL_CLIENT_ID
 
-SPECIAL_FORMATS={"movie","ova","ona","special","music"}
-SEASON_FORMATS={"tv","tv_special"}
+SPECIAL_FORMATS={"movie","ova","ona","special","tv_special","music"}
+SEASON_FORMATS={"tv"}
 MAX_PREQUEL_DEPTH=64
 JIKAN_API_URL="https://api.jikan.moe/v4"
 
@@ -160,6 +160,62 @@ def _find_root(client,target):
     return current,list(reversed(path))
 
 
+def _related_ids(media,relation_types):
+    wanted={str(value).lower() for value in relation_types}; result=[]
+    for relation in media.get("related_anime") or []:
+        if str(relation.get("relation_type") or "").lower() not in wanted: continue
+        node=relation.get("node") or {}
+        if node.get("id") not in (None,""): result.append(str(node["id"]))
+    return list(dict.fromkeys(result))
+
+
+def _mal_date_key(media):
+    return str(media.get("start_date") or "9999-99-99"),int(media.get("id") or 0)
+
+
+def _find_franchise_root(client,relation_root):
+    """Follow explicit MAL parent ownership without confusing it with ordering."""
+    bridge_allowed=_format(relation_root.get("media_type")) in SPECIAL_FORMATS
+    frontier=[relation_root]; seen={str(relation_root["id"])}; path=[relation_root]
+    for _ in range(MAX_PREQUEL_DEPTH):
+        if not frontier: break
+        current=frontier.pop(0)
+        if _format(current.get("media_type")) in SEASON_FORMATS:
+            _unused_root,tv_path=_find_root(client,current)
+            numbered=[node for node in tv_path
+                      if _format(node.get("media_type")) in SEASON_FORMATS]
+            anchor=numbered[0] if numbered else current
+            return anchor,path+([anchor] if str(anchor["id"]) not in seen else []),True
+        parents=[client.media(value) for value in _related_ids(current,{"parent_story"})]
+        if parents:
+            for parent in sorted(parents,key=_mal_date_key):
+                parent_id=str(parent["id"])
+                if parent_id not in seen:
+                    seen.add(parent_id); frontier.append(parent); path.append(parent)
+        if bridge_allowed:
+            alternatives=[]
+            for value in _related_ids(current,{"alternative_setting"}):
+                candidate=client.media(value)
+                if (_format(candidate.get("media_type")) in SEASON_FORMATS and
+                        _mal_date_key(candidate)<_mal_date_key(current)):
+                    alternatives.append(candidate)
+            unique={str(node["id"]):node for node in alternatives}
+            if len(unique)==1:
+                parent=next(iter(unique.values()))
+                _unused_root,tv_path=_find_root(client,parent)
+                numbered=[node for node in tv_path
+                          if _format(node.get("media_type")) in SEASON_FORMATS]
+                anchor=numbered[0] if numbered else parent
+                return anchor,path+([anchor] if str(anchor["id"]) not in seen else []),True
+            for value in _related_ids(current,{"sequel"}):
+                if value in seen: continue
+                candidate=client.media(value)
+                if _format(candidate.get("media_type")) not in SPECIAL_FORMATS|SEASON_FORMATS:
+                    continue
+                seen.add(value); frontier.append(candidate); path.append(candidate)
+    return relation_root,path,False
+
+
 def _season_number(target,path):
     fmt=_format(target.get("media_type"))
     if fmt in SPECIAL_FORMATS: return 0,"mal_special_format"
@@ -190,10 +246,29 @@ class MALMediatorEndpoint:
                 "age_rating":_rating(media) or ("18+" if mature else None),
                 "mature":mature}
 
+    def franchise_identity(self,mal_id):
+        target=self.client.media(mal_id)
+        relation_root,relation_path=_find_root(self.client,target)
+        root,franchise_path,has_tv_franchise=_find_franchise_root(
+            self.client,relation_root)
+        titles=_titles(root)
+        try: publish_year=int(str(root.get("start_date") or "")[:4])
+        except (TypeError,ValueError): publish_year=None
+        return {"name":titles["english"],"romaji_name":titles["romaji"],
+                "mal_id":str(root["id"]),
+                "source_format":str(root.get("media_type") or "").upper() or None,
+                "publish_year":publish_year,"source":"mal_franchise_relation",
+                "relation_path":[str(node["id"]) for node in relation_path],
+                "franchise_relation_path":[str(node["id"]) for node in franchise_path],
+                "library_type":("movie" if _format(target.get("media_type"))=="movie"
+                                and not has_tv_franchise else "series")}
+
     def resolve(self,item,client=None):
         value=item.get("mal_id")
         if value in (None,""): raise MediatorPlacementError("watchlist item has no MAL ID")
-        target=self.client.media(value); root,path=_find_root(self.client,target)
+        target=self.client.media(value); relation_root,path=_find_root(self.client,target)
+        root,franchise_path,has_tv_franchise=_find_franchise_root(
+            self.client,relation_root)
         season_number,source=_season_number(target,path)
         try: count=int(target.get("num_episodes") or item.get("episode_count") or 0)
         except (TypeError,ValueError): count=0
@@ -219,12 +294,14 @@ class MALMediatorEndpoint:
         mature=_mature(root,target)
         return {
             "provider_path":"mal","provider_id":str(value),
+            "library_type":("movie" if _format(target.get("media_type"))=="movie"
+                            and not has_tv_franchise else "series"),
             "tv_show":{"name":root_titles["english"] or target_titles["english"],
                        "romaji_name":root_titles["romaji"] or target_titles["romaji"],
                        "simkl_id":None,"tvdb_id":None,"anilist_id":None,
                        "mal_id":str(root["id"]),
                        "source_format":str(root.get("media_type") or target.get("media_type") or "").upper() or None,
-                       "source":"mal_prequel_graph","publish_year":publish_year,
+                       "source":"mal_franchise_relation","publish_year":publish_year,
                        "overview":target.get("synopsis") or root.get("synopsis"),
                        "runtime_minutes":runtime or _runtime_minutes(root.get("average_episode_duration")),
                        "air_status":target.get("status") or root.get("status"),"cast":None,
@@ -234,4 +311,5 @@ class MALMediatorEndpoint:
             "season":{"number":season_number,"number_source":source,"name":target_titles["english"],
                       "media_type":_format(target.get("media_type")),"first_episode":numbers[0],"last_episode":numbers[-1]},
             "episodes":episodes,"relation_path":[str(node["id"]) for node in path],
+            "franchise_relation_path":[str(node["id"]) for node in franchise_path],
         }

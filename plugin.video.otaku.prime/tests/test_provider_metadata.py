@@ -17,6 +17,24 @@ class MALClient:
                 "rating":"r+","nsfw":"black"}
 
 
+class MALGraphClient:
+    def __init__(self,rows): self.rows={str(row["id"]):row for row in rows}
+    def media(self,mal_id): return self.rows[str(mal_id)]
+
+
+def mal_media(media_id,title,media_type,episodes,year,relations=None):
+    return {"id":media_id,"title":title,"alternative_titles":{"en":title},
+            "start_date":"{}-01-01".format(year),"media_type":media_type,
+            "status":"finished_airing","num_episodes":episodes,
+            "average_episode_duration":1440,"related_anime":relations or [],
+            "genres":[],"rating":"pg_13","nsfw":"white"}
+
+
+def mal_relation(relation_type,row):
+    return {"relation_type":relation_type,
+            "node":{"id":row["id"],"title":row["title"]}}
+
+
 class KitsuClient:
     def anime(self,kitsu_id):
         return {"id":str(kitsu_id),"attributes":{
@@ -52,6 +70,43 @@ class ProviderMetadataTests(unittest.TestCase):
         self.assertEqual(["Action","Fantasy"],show["genres"])
         self.assertEqual("R+",show["age_rating"])
         self.assertTrue(show["mature"])
+
+    def test_mal_movie_parent_is_stored_below_parent_franchise(self):
+        bleach=mal_media(269,"Bleach","tv",366,2004)
+        movie=mal_media(1686,"Bleach Movie 1","movie",1,2006,
+                        [mal_relation("parent_story",bleach)])
+
+        result=MALMediatorEndpoint(MALGraphClient([bleach,movie])).resolve(
+            {"mal_id":"1686"})
+
+        self.assertEqual("269",result["tv_show"]["mal_id"])
+        self.assertEqual("Bleach",result["tv_show"]["name"])
+        self.assertEqual("series",result["library_type"])
+        self.assertEqual(0,result["season"]["number"])
+        self.assertEqual(["1686","269"],result["franchise_relation_path"])
+
+    def test_mal_special_bridge_uses_alternative_setting_franchise(self):
+        bleach=mal_media(269,"Bleach","tv",366,2004)
+        burn=mal_media(41468,"Burn the Witch","ona",3,2020,
+                       [mal_relation("alternative_setting",bleach)])
+        special=mal_media(56671,"Burn the Witch #0.8","tv_special",1,2023,
+                          [mal_relation("sequel",burn)])
+
+        result=MALMediatorEndpoint(MALGraphClient([bleach,burn,special])).resolve(
+            {"mal_id":"56671"})
+
+        self.assertEqual("269",result["tv_show"]["mal_id"])
+        self.assertEqual("Bleach",result["tv_show"]["name"])
+        self.assertEqual(0,result["season"]["number"])
+        self.assertEqual(["56671","41468","269"],
+                         result["franchise_relation_path"])
+
+    def test_mal_standalone_movie_uses_movie_library(self):
+        movie=mal_media(20954,"A Silent Voice","movie",1,2016)
+
+        result=MALMediatorEndpoint(MALGraphClient([movie])).resolve({"mal_id":"20954"})
+
+        self.assertEqual("movie",result["library_type"])
 
     def test_kitsu_exposes_categories_and_native_age_rating(self):
         show=KitsuMediatorEndpoint(KitsuClient()).resolve({"kitsu_id":"1"})["tv_show"]

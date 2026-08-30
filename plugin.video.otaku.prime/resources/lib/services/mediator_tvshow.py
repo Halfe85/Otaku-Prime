@@ -173,6 +173,32 @@ class TVShowMediatorService:
         self._ensure_current(item["local_id"])
         provider=placement["provider_path"]
         show=placement["tv_show"]
+        season_data=placement["season"]
+        if placement.get("library_type")=="movie":
+            movie=self.catalog_store.add_watchlist_movie(
+                item,provider_path=provider,
+                placement_source=season_data.get("number_source"),
+                english_name=season_data.get("name") or show.get("name"),
+                romaji_name=season_data.get("romaji_name") or show.get("romaji_name"),
+                release_date=season_data.get("release_date"),
+                release_status=season_data.get("release_status"),
+                publish_year=show.get("publish_year"),overview=show.get("overview"),
+                runtime_minutes=show.get("runtime_minutes"),air_status=show.get("air_status"),
+                poster_url=show.get("poster_url"),clearlogo_url=show.get("clearlogo_url"),
+                banner_url=show.get("banner_url"),genres=show.get("genres"),
+                themes=show.get("themes"),age_rating=show.get("age_rating"),
+                mature=show.get("mature") or item.get("is_adult"))
+            movie_cast=show.get("cast") or season_data.get("cast")
+            movie_cast_source=show.get("cast_source") or season_data.get("cast_source")
+            if not movie_cast:
+                movie_cast,movie_cast_source=self._staff_cast({
+                    provider:item.get(provider+"_id")
+                    for provider in ("anilist","mal","kitsu","simkl")
+                },item.get("local_id"))
+            self._ensure_current(item["local_id"])
+            self.catalog_store.replace_movie_credits(
+                movie_cast,movie["local_id"],source_provider=movie_cast_source or provider)
+            return movie,None
         series=self.catalog_store.get_or_create_series(
             english_name=show.get("name"),romaji_name=show.get("romaji_name"),
             root_simkl_id=show.get("simkl_id"),tvdb_id=show.get("tvdb_id"),
@@ -184,7 +210,6 @@ class TVShowMediatorService:
             genres=show.get("genres"),themes=show.get("themes"),
             age_rating=show.get("age_rating"),
             mature=show.get("mature") or item.get("is_adult"))
-        season_data=placement["season"]
         season=self.catalog_store.add_watchlist_season(
             series["local_id"],item,season_number=season_data["number"],
             provider_path=provider,placement_source=season_data["number_source"],
@@ -250,15 +275,21 @@ class TVShowMediatorService:
         self._ensure_current(item["local_id"])
         placement=self._enrich_classification(item,placement)
         self._ensure_current(item["local_id"])
-        placement=self.fanart.enrich(placement)
+        if placement.get("library_type")!="movie":
+            placement=self.fanart.enrich(placement)
         placement=self._fallback_poster(item,placement)
         self._ensure_current(item["local_id"])
         provider=placement["provider_path"]
         show=placement["tv_show"]; season_data=placement["season"]
         self._persist_placement(item,placement,placement_state="COMPLETE")
-        LOGGER.info("Mediator placed Prime item %s through %s as %s S%02dE%02d-E%02d",
-                    item["local_id"],provider,show.get("name"),season_data["number"],
-                    season_data["first_episode"],season_data["last_episode"])
+        if placement.get("library_type")=="movie":
+            LOGGER.info("Mediator placed Prime item %s through %s in Movies as %s",
+                        item["local_id"],provider,
+                        season_data.get("name") or show.get("name"))
+        else:
+            LOGGER.info("Mediator placed Prime item %s through %s as %s S%02dE%02d-E%02d",
+                        item["local_id"],provider,show.get("name"),season_data["number"],
+                        season_data["first_episode"],season_data["last_episode"])
         marker=getattr(self.watchlist_store,"mark_added_to_library",None)
         self._ensure_current(item["local_id"])
         if marker:
@@ -306,7 +337,8 @@ class TVShowMediatorService:
         partial=getattr(exc,"placement",None)
         if partial:
             partial=self._enrich_classification(item,partial)
-            partial=self.fanart.enrich(partial)
+            if partial.get("library_type")!="movie":
+                partial=self.fanart.enrich(partial)
             partial=self._fallback_poster(item,partial)
             self._ensure_current(item["local_id"])
             self._persist_placement(item,partial,placement_state="STRUCTURE_ONLY")
@@ -314,11 +346,17 @@ class TVShowMediatorService:
             season=partial.get("season") or {}
             release=season.get("release_date") or "unannounced"
             status=season.get("release_status") or "UNKNOWN"
-            LOGGER.info(
-                "Mediator positioned deferred Prime item %s through %s as %s "
-                "S%02d; release=%s status=%s",
-                item["local_id"],partial.get("provider_path"),
-                show.get("name"),int(season.get("number") or 0),release,status)
+            if partial.get("library_type")=="movie":
+                LOGGER.info(
+                    "Mediator positioned deferred Prime item %s through %s in Movies as %s; "
+                    "release=%s status=%s",item["local_id"],partial.get("provider_path"),
+                    season.get("name") or show.get("name"),release,status)
+            else:
+                LOGGER.info(
+                    "Mediator positioned deferred Prime item %s through %s as %s "
+                    "S%02d; release=%s status=%s",
+                    item["local_id"],partial.get("provider_path"),
+                    show.get("name"),int(season.get("number") or 0),release,status)
         unchanged=(
             str(item.get("mediator_status") or "").upper()=="DEFERRED"
             and str(item.get("mediator_error") or "")==str(exc))

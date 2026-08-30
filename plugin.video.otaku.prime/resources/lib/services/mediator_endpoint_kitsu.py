@@ -213,6 +213,8 @@ class KitsuMediatorEndpoint:
                 if name not in genres: genres.append(name)
         age_rating=_age_rating(target_attrs,root_attrs)
         return {"provider_path":"kitsu","provider_id":str(value),
+                "library_type":("movie" if _format(target)=="movie" and
+                                _format(root)=="movie" else "series"),
                 "tv_show":{"name":name,"romaji_name":romaji,"simkl_id":None,"tvdb_id":None,
                            "anilist_id":None,"kitsu_id":str(root["id"]),
                            "source_format":str(root_attrs.get("subtype") or target_attrs.get("subtype") or "").upper() or None,

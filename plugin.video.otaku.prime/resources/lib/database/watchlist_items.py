@@ -137,15 +137,23 @@ class WatchlistItemStore:
                     if "placement_state" in season_columns else "")
                 db.execute("""UPDATE watchlist_items SET added_to_library=1,mediator_ready=0,
                   library_added_at=COALESCE(library_added_at,CURRENT_TIMESTAMP)
-                  WHERE EXISTS(SELECT 1 FROM seasons s
+                    WHERE EXISTS(SELECT 1 FROM seasons s
                     WHERE s.watchlist_local_id=watchlist_items.local_id{})""".format(
                         placement_filter))
+            movie_table=db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='movies'"
+            ).fetchone()
+            if movie_table:
+                db.execute("""UPDATE watchlist_items SET added_to_library=1,mediator_ready=0,
+                  library_added_at=COALESCE(library_added_at,CURRENT_TIMESTAMP)
+                  WHERE EXISTS(SELECT 1 FROM movies
+                    WHERE movies.watchlist_local_id=watchlist_items.local_id)""")
             for table_name in (
                 "kodi_duplicate_candidates","kodi_media_ownership","kodi_inventory_episodes",
                 "kodi_inventory_shows","kodi_library_state","kodi_episode_links",
                 "kodi_movie_links","kodi_series_links","provider_watch_states",
                 "watch_status_outbox","provider_list_entries","anilist_import_staging",
-                "movies","metadata_resolver_config",
+                "metadata_resolver_config",
             ): db.execute("DROP TABLE IF EXISTS "+table_name)
             self._repair_encoded_text(db)
 

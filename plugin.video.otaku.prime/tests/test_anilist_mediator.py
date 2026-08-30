@@ -54,6 +54,19 @@ def media(media_id, title, media_format, episodes, prequel=None, year=2020,
     }
 
 
+def relate(source, relation_type, destination):
+    source["relations"]["edges"].append({
+        "relationType":relation_type,
+        "node":{
+            "id":destination["id"],"type":"ANIME",
+            "format":destination["format"],"episodes":destination["episodes"],
+            "status":destination.get("status"),"duration":destination.get("duration"),
+            "description":destination.get("description"),"title":destination["title"],
+            "startDate":destination["startDate"],
+        },
+    })
+
+
 class FakeAniListClient:
     def __init__(self, rows, schedules=None, casts=None):
         self.rows = {str(row["id"]): row for row in rows}
@@ -166,13 +179,67 @@ class AniListMediatorTests(unittest.TestCase):
         self.assertEqual("100", result["tv_show"]["anilist_id"])
         self.assertEqual("Original OVA", result["tv_show"]["name"])
         self.assertEqual("OVA", result["tv_show"]["source_format"])
-        self.assertEqual("anilist_bottom_relation", result["tv_show"]["source"])
+        self.assertEqual("anilist_franchise_relation", result["tv_show"]["source"])
         self.assertEqual(["100", "200"], result["relation_path"])
         self.assertEqual(0, result["season"]["number"])
         self.assertEqual((3, 5), (
             result["season"]["first_episode"], result["season"]["last_episode"]
         ))
         self.assertEqual([3, 4, 5], [row["episode_number"] for row in result["episodes"]])
+
+    def test_movie_parent_is_stored_below_the_parent_franchise(self):
+        bleach=media(269,"Bleach","TV",366,year=2004)
+        movie=media(1686,"Bleach the Movie: Memories of Nobody","MOVIE",1,year=2006)
+        relate(movie,"PARENT",bleach)
+        helper=AniListMediatorHelper(FakeAniListClient([bleach,movie]))
+
+        result=helper.resolve({"anilist_id":"1686","episode_count":1})
+
+        self.assertEqual("269",result["tv_show"]["anilist_id"])
+        self.assertEqual("Bleach",result["tv_show"]["name"])
+        self.assertEqual("series",result["library_type"])
+        self.assertEqual(0,result["season"]["number"])
+        self.assertEqual("Bleach the Movie: Memories of Nobody",
+                         result["season"]["name"])
+        self.assertEqual(["1686","269"],result["franchise_relation_path"])
+
+    def test_special_sequel_other_bridge_resolves_the_franchise(self):
+        bleach=media(269,"Bleach","TV",366,year=2004)
+        burn=media(116673,"BURN THE WITCH","ONA",3,year=2020)
+        prequel=media(169362,"BURN THE WITCH #0.8","SPECIAL",1,year=2023)
+        relate(prequel,"SEQUEL",burn)
+        relate(burn,"OTHER",bleach)
+        helper=AniListMediatorHelper(FakeAniListClient([bleach,burn,prequel]))
+
+        result=helper.resolve({"anilist_id":"169362","episode_count":1})
+
+        self.assertEqual("269",result["tv_show"]["anilist_id"])
+        self.assertEqual("Bleach",result["tv_show"]["name"])
+        self.assertEqual(0,result["season"]["number"])
+        self.assertEqual(["169362","116673","269"],
+                         result["franchise_relation_path"])
+
+    def test_standalone_movie_is_classified_for_the_movie_library(self):
+        movie=media(20954,"A Silent Voice","MOVIE",1,year=2016)
+        helper=AniListMediatorHelper(FakeAniListClient([movie]))
+
+        result=helper.resolve({"anilist_id":"20954","episode_count":1})
+
+        self.assertEqual("movie",result["library_type"])
+        self.assertEqual("20954",result["tv_show"]["anilist_id"])
+        self.assertEqual(0,result["season"]["number"])
+
+    def test_movie_with_tv_sequel_remains_in_tv_specials(self):
+        movie=media(100,"Franchise Origin Movie","MOVIE",1,year=2010)
+        television=media(200,"Franchise Television","TV",12,prequel=movie,year=2012)
+        relate(movie,"SEQUEL",television)
+        helper=AniListMediatorHelper(FakeAniListClient([movie,television]))
+
+        result=helper.resolve({"anilist_id":"100","episode_count":1})
+
+        self.assertEqual("series",result["library_type"])
+        self.assertEqual("200",result["tv_show"]["anilist_id"])
+        self.assertEqual(0,result["season"]["number"])
 
     def test_anilist_exposes_series_metadata_and_cast_for_library(self):
         root = media(10, "Example", "TV", 12, year=2020, description="Root description")
@@ -268,6 +335,91 @@ class AniListMediatorTests(unittest.TestCase):
                     os.unlink(handle.name + suffix)
                 except FileNotFoundError:
                     pass
+
+    def test_parent_movie_and_main_series_share_one_catalog_franchise(self):
+        handle=tempfile.NamedTemporaryFile(delete=False); handle.close()
+        try:
+            watchlist=WatchlistItemStore(handle.name); watchlist.initialize()
+            watchlist.replace_provider_snapshot("anilist",[
+                {"provider_item_id":"269","ids":{"anilist":"269"},
+                 "english_name":"Bleach","media_format":"TV","episode_count":366,
+                 "list_status":"CURRENT","progress":1,"raw":{}},
+                {"provider_item_id":"1686","ids":{"anilist":"1686"},
+                 "english_name":"Bleach the Movie: Memories of Nobody",
+                 "media_format":"MOVIE","episode_count":1,
+                 "list_status":"PLANNING","progress":0,"raw":{}},
+            ])
+            watchlist.finalize_merge()
+            for item in watchlist.list_all():
+                watchlist.mark_mediator_ready(item["local_id"],True)
+            catalog=CatalogStore(handle.name,SegmentFactory()); catalog.initialize()
+            bleach=media(269,"Bleach","TV",366,year=2004)
+            movie=media(1686,"Bleach the Movie: Memories of Nobody","MOVIE",1,year=2006)
+            relate(movie,"PARENT",bleach)
+            service=TVShowMediatorService(
+                watchlist,catalog,client=object(),
+                helpers={"anilist":AniListMediatorHelper(
+                    FakeAniListClient([bleach,movie]))})
+
+            result=service.run_once()
+
+            self.assertEqual(2,result["placed"])
+            series=catalog.list_series()
+            self.assertEqual(1,len(series))
+            self.assertEqual(("Bleach","269"),(
+                series[0]["english_name"],series[0]["root_anilist_id"]))
+            seasons=catalog.list_seasons(series[0]["local_id"])
+            self.assertEqual([0,1],sorted(row["season_number"] for row in seasons))
+            self.assertEqual({"269","1686"},{row["anilist_id"] for row in seasons})
+        finally:
+            for suffix in ("","-wal","-shm"):
+                try: os.unlink(handle.name+suffix)
+                except FileNotFoundError: pass
+
+    def test_standalone_movie_is_persisted_without_fake_series_or_episode_rows(self):
+        handle=tempfile.NamedTemporaryFile(delete=False); handle.close()
+        try:
+            watchlist=WatchlistItemStore(handle.name); watchlist.initialize()
+            watchlist.replace_provider_snapshot("anilist",[{
+                "provider_item_id":"20954","ids":{"anilist":"20954"},
+                "english_name":"A Silent Voice","romaji_name":"Koe no Katachi",
+                "media_format":"MOVIE","episode_count":1,
+                "list_status":"COMPLETED","progress":1,"raw":{}}])
+            watchlist.finalize_merge(); item=watchlist.list_all()[0]
+            watchlist.mark_mediator_ready(item["local_id"],True)
+            catalog=CatalogStore(handle.name,SegmentFactory()); catalog.initialize()
+            movie=media(20954,"A Silent Voice","MOVIE",1,year=2016,
+                        description="Standalone movie")
+            service=TVShowMediatorService(
+                watchlist,catalog,client=object(),helpers={
+                    "anilist":AniListMediatorHelper(FakeAniListClient([movie],casts={
+                        "20954":[{"person":{"anilist_id":"10","name":"Actor"},
+                                  "character":{"anilist_id":"20","name":"Shouko"},
+                                  "source_provider":"anilist"}]}))})
+
+            result=service.run_once()
+
+            self.assertEqual(1,result["placed"])
+            self.assertEqual([],catalog.list_series())
+            stored=catalog.list_movies()
+            self.assertEqual(1,len(stored))
+            self.assertEqual(("A Silent Voice","20954"),(
+                stored[0]["english_name"],stored[0]["anilist_id"]))
+            detail=catalog.library_movie_detail(stored[0]["local_id"])
+            self.assertEqual("Shouko",detail["characters"][0]["name"])
+            self.assertEqual("Actor",detail["characters"][0]["staff"][0]["name"])
+            self.assertIn(item["local_id"],catalog.linked_watchlist_ids())
+            import sqlite3
+            with sqlite3.connect(handle.name) as db:
+                db.execute("UPDATE watchlist_items SET added_to_library=0,mediator_ready=1")
+            WatchlistItemStore(handle.name).initialize()
+            restarted=WatchlistItemStore(handle.name).item(item["local_id"])
+            self.assertEqual((1,0),(
+                restarted["added_to_library"],restarted["mediator_ready"]))
+        finally:
+            for suffix in ("","-wal","-shm"):
+                try: os.unlink(handle.name+suffix)
+                except FileNotFoundError: pass
 
 
 if __name__ == "__main__":

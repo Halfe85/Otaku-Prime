@@ -12,8 +12,11 @@
   var expandedSeasons = new Set();
   var state = {
     series: [],
+    movies: [],
+    kind: "series",
     query: "",
     openSeriesId: null,
+    openType: null,
     detail: null,
     busyTiles: false,
     busyDetail: false,
@@ -152,8 +155,9 @@
 
   function filteredSeries() {
     var query = state.query.trim().toLocaleLowerCase();
-    if (!query) return state.series.slice();
-    return state.series.filter(function (item) {
+    var source = state.kind === "movies" ? state.movies : state.series;
+    if (!query) return source.slice();
+    return source.filter(function (item) {
       return [item.title, item.english_name, item.romaji_name, item.publish_year]
         .filter(function (value) { return value !== null && value !== undefined; })
         .some(function (value) { return String(value).toLocaleLowerCase().indexOf(query) >= 0; });
@@ -162,17 +166,19 @@
 
   function renderTiles() {
     var rows = filteredSeries();
+    var source = state.kind === "movies" ? state.movies : state.series;
+    var noun = state.kind === "movies" ? "movie" : "series";
     grid.replaceChildren();
     if (count) {
-      count.textContent = state.series.length === 1
-        ? "1 mediated series"
-        : state.series.length + " mediated series";
+      count.textContent = source.length === 1
+        ? "1 mediated " + noun
+        : source.length + " mediated " + noun;
     }
     if (!rows.length) {
       var empty = element("div", "library-empty");
-      empty.textContent = state.series.length
+      empty.textContent = source.length
         ? "No library titles match this search."
-        : "The library is empty. Tiles will appear here as the mediator resolves series.";
+        : "This library is empty. Titles will appear here as the mediator resolves the watchlist.";
       grid.appendChild(empty);
       return;
     }
@@ -181,7 +187,8 @@
       var tile = element("button", "library-tile");
       tile.type = "button";
       tile.dataset.seriesId = item.local_id;
-      tile.setAttribute("aria-label", "Open " + text(item.title, "series") + " details");
+      tile.dataset.libraryType = state.kind === "movies" ? "movie" : "series";
+      tile.setAttribute("aria-label", "Open " + text(item.title, noun) + " details");
 
       var title = text(item.title, "Untitled series");
       if (blurMatureArtwork(item)) tile.classList.add("mature-artwork-blurred");
@@ -211,7 +218,9 @@
       content.appendChild(top);
 
       var body = element("div", "library-tile-next");
-      body.textContent = item.next_episode_release_date
+      body.textContent = state.kind === "movies"
+        ? (item.release_date ? "Released · " + formatDate(item.release_date) : airingLabel(item))
+        : item.next_episode_release_date
         ? "Next: E" + text(item.next_episode_number, "?") + " · " + formatDate(item.next_episode_release_date)
         : airingLabel(item);
       content.appendChild(body);
@@ -219,14 +228,20 @@
       var meta = element("div", "library-tile-meta");
       meta.appendChild(element("span", "library-chip " + statusClass(item),
         item.next_episode_release_date ? "Running" : airingLabel(item)));
-      meta.appendChild(element("span", "library-chip",
-        text(item.season_count, "0") + (Number(item.season_count) === 1 ? " season" : " seasons")));
-      meta.appendChild(element("span", "library-chip",
-        text(item.episode_count, "0") + (Number(item.episode_count) === 1 ? " episode" : " episodes")));
+      if (state.kind === "movies") {
+        meta.appendChild(element("span", "library-chip", runtime(item.runtime_minutes)));
+      } else {
+        meta.appendChild(element("span", "library-chip",
+          text(item.season_count, "0") + (Number(item.season_count) === 1 ? " season" : " seasons")));
+        meta.appendChild(element("span", "library-chip",
+          text(item.episode_count, "0") + (Number(item.episode_count) === 1 ? " episode" : " episodes")));
+      }
       content.appendChild(meta);
       tile.appendChild(content);
 
-      tile.addEventListener("click", function () { openSeries(item.local_id); });
+      tile.addEventListener("click", function () {
+        openLibraryItem(state.kind === "movies" ? "movie" : "series",item.local_id);
+      });
       grid.appendChild(tile);
     });
   }
@@ -235,11 +250,15 @@
     if (state.busyTiles || !active()) return;
     state.busyTiles = true;
     try {
-      var payload = await fetchJson("/api/library/series");
-      var nextSeries = Array.isArray(payload.series) ? payload.series : [];
-      var signature = JSON.stringify(nextSeries);
+      var payloads = await Promise.all([
+        fetchJson("/api/library/series"),fetchJson("/api/library/movies")
+      ]);
+      var nextSeries = Array.isArray(payloads[0].series) ? payloads[0].series : [];
+      var nextMovies = Array.isArray(payloads[1].movies) ? payloads[1].movies : [];
+      var signature = JSON.stringify([nextSeries,nextMovies]);
       if (signature !== state.tileSignature) {
         state.series = nextSeries;
+        state.movies = nextMovies;
         state.tileSignature = signature;
         renderTiles();
       }
@@ -376,6 +395,7 @@
 
   function mediaLabel(link) {
     if (!link) return "Library";
+    if (link.scope === "movie") return "Movie";
     if (link.scope === "episode") {
       var season = String(link.season_number === null || link.season_number === undefined ? "?" : link.season_number).padStart(2, "0");
       var episode = String(link.episode_number === null || link.episode_number === undefined ? "?" : link.episode_number).padStart(2, "0");
@@ -628,9 +648,12 @@
     renderTerms("library-series-genres", series.genres);
     renderTerms("library-series-themes", series.themes);
     setSeriesText("library-series-overview", series.overview, "Metadata has not been resolved yet.");
-    setSeriesText("library-series-local-id", "Prime series · " + series.local_id);
+    var isMovie=series.library_type === "movie";
+    setSeriesText("library-series-local-id", "Prime " + (isMovie ? "movie" : "series") + " · " + series.local_id);
     renderPeople(series);
-    renderSeasons(series);
+    var seasonsSection=document.getElementById("library-series-seasons-section");
+    if (seasonsSection) seasonsSection.hidden=isMovie;
+    if (!isMovie) renderSeasons(series);
   }
 
   function renderTerms(id, values) {
@@ -651,12 +674,14 @@
     if (state.busyDetail || !localId) return;
     state.busyDetail = true;
     try {
-      var payload = await fetchJson("/api/library/series/" + encodeURIComponent(localId));
+      var movie=state.openType === "movie";
+      var payload = await fetchJson("/api/library/"+(movie ? "movies/" : "series/") + encodeURIComponent(localId));
       if (state.openSeriesId !== localId) return;
-      var signature = JSON.stringify(payload.series);
+      var detail=movie ? payload.movie : payload.series;
+      var signature = JSON.stringify(detail);
       if (signature !== state.detailSignature) {
         state.detailSignature = signature;
-        renderSeriesDetail(payload.series);
+        renderSeriesDetail(detail);
       }
     } catch (error) {
       if (!silent) showMessage(error.message || "Could not load series details.", true);
@@ -665,13 +690,14 @@
     }
   }
 
-  async function openSeries(localId) {
+  async function openLibraryItem(type,localId) {
     state.openSeriesId = localId;
+    state.openType = type === "movie" ? "movie" : "series";
     state.detail = null;
     state.detailSignature = "";
     if (seriesModal) seriesModal.hidden = false;
     document.body.classList.add("library-modal-open");
-    setSeriesText("library-series-title", "Loading series…");
+    setSeriesText("library-series-title", state.openType === "movie" ? "Loading movie…" : "Loading series…");
     setSeriesText("library-series-subtitle", "Mediator catalogue");
     renderSeriesArtwork({},"Loading series");
     await loadSeriesDetail(localId, false);
@@ -680,6 +706,7 @@
   function closeSeries() {
     closeEpisode();
     state.openSeriesId = null;
+    state.openType = null;
     state.detail = null;
     state.detailSignature = "";
     if (seriesModal) seriesModal.hidden = true;
@@ -714,6 +741,17 @@
   document.querySelectorAll("[data-library-people-tab]").forEach(function (node) {
     node.addEventListener("click", function () {
       selectPeopleTab(node.dataset.libraryPeopleTab);
+    });
+  });
+  document.querySelectorAll("[data-library-kind]").forEach(function (node) {
+    node.addEventListener("click",function () {
+      state.kind=node.dataset.libraryKind === "movies" ? "movies" : "series";
+      document.querySelectorAll("[data-library-kind]").forEach(function (button) {
+        var selected=button.dataset.libraryKind === state.kind;
+        button.classList.toggle("active",selected);
+        button.setAttribute("aria-selected",selected ? "true" : "false");
+      });
+      renderTiles();
     });
   });
   document.addEventListener("keydown", function (event) {

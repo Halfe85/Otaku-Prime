@@ -19,6 +19,9 @@ from resources.lib.services.mediator_helper_simkl import (
 MAX_PREQUEL_DEPTH = 64
 SPECIAL_FORMATS = ("MOVIE", "OVA", "ONA", "SPECIAL", "MUSIC")
 SEASON_FORMATS = ("TV", "TV_SHORT")
+FRANCHISE_PARENT_RELATIONS = ("PARENT",)
+FRANCHISE_BRIDGE_RELATIONS = ("SEQUEL",)
+FRANCHISE_SECONDARY_RELATIONS = ("OTHER",)
 LOGGER=get_logger(__name__)
 
 
@@ -294,6 +297,19 @@ def _prequel_ids(media):
     return list(dict.fromkeys(result))
 
 
+def _anime_relation_nodes(media, relation_types):
+    relation_types={str(value).upper() for value in relation_types}
+    result=[]
+    for edge in (media.get("relations") or {}).get("edges") or []:
+        node=edge.get("node") or {}
+        if (str(edge.get("relationType") or "").upper() not in relation_types or
+                str(node.get("type") or "ANIME").upper()!="ANIME" or
+                node.get("id") in (None,"")):
+            continue
+        result.append(node)
+    return result
+
+
 def _find_bottom_root(client, target):
     """Return the terminal PREQUEL root and its exact root-to-target path."""
     target_id = str(target["id"])
@@ -325,6 +341,70 @@ def _find_bottom_root(client, target):
         key=lambda path: (-len(path), _date_key(path[-1])),
     )[0]
     return selected[-1], list(reversed(selected))
+
+
+def _find_franchise_root(client, relation_root):
+    """Attach a watchlist root to its explicit parent franchise when possible.
+
+    PREQUEL answers where the watchlist item sits in its own sequence.  It does
+    not answer which Prime TV-show/franchise owns a movie, OVA, or spin-off.
+    AniList exposes that second fact separately: normally through PARENT, and
+    occasionally through a short special -> sequel -> OTHER bridge (for
+    example BURN THE WITCH #0.8 -> BURN THE WITCH -> Bleach).
+
+    OTHER is deliberately accepted only while walking a special-format bridge
+    and only when it points backwards to one unambiguous TV root.  This avoids
+    turning ordinary crossover relations between TV series into ownership.
+    """
+    root_format=str(relation_root.get("format") or "").upper()
+    frontier=[relation_root]
+    seen={str(relation_root["id"])}
+    path=[relation_root]
+    bridge_allowed=root_format in SPECIAL_FORMATS
+    for _ in range(MAX_PREQUEL_DEPTH):
+        if not frontier:
+            break
+        current=frontier.pop(0)
+        if str(current.get("format") or "").upper() in SEASON_FORMATS:
+            _unused_root,tv_path=_find_bottom_root(client,current)
+            numbered=[node for node in tv_path
+                      if str(node.get("format") or "").upper() in SEASON_FORMATS]
+            anchor=numbered[0] if numbered else current
+            return anchor,path+([anchor] if str(anchor["id"]) not in seen else []),True
+        parents=_anime_relation_nodes(current,FRANCHISE_PARENT_RELATIONS)
+        if parents:
+            for parent in sorted((client.media(node["id"]) for node in parents),key=_date_key):
+                parent_id=str(parent["id"])
+                if parent_id not in seen:
+                    seen.add(parent_id); frontier.append(parent); path.append(parent)
+
+        if bridge_allowed:
+            secondary=[]
+            current_key=_date_key(current)
+            for node in _anime_relation_nodes(current,FRANCHISE_SECONDARY_RELATIONS):
+                candidate=client.media(node["id"])
+                if (str(candidate.get("format") or "").upper() in SEASON_FORMATS and
+                        _date_key(candidate)<current_key):
+                    secondary.append(candidate)
+            unique={str(node["id"]):node for node in secondary}
+            if len(unique)==1:
+                parent=next(iter(unique.values()))
+                _unused_root,tv_path=_find_bottom_root(client,parent)
+                numbered=[node for node in tv_path
+                          if str(node.get("format") or "").upper() in SEASON_FORMATS]
+                anchor=numbered[0] if numbered else parent
+                return anchor,path+([anchor] if str(anchor["id"]) not in seen else []),True
+
+            for node in _anime_relation_nodes(current,FRANCHISE_BRIDGE_RELATIONS):
+                node_id=str(node["id"])
+                if node_id in seen:
+                    continue
+                candidate=client.media(node_id)
+                if str(candidate.get("format") or "").upper() not in (
+                        SPECIAL_FORMATS+SEASON_FORMATS):
+                    continue
+                seen.add(node_id); frontier.append(candidate); path.append(candidate)
+    return relation_root,path,False
 
 
 def _season_number(target, path):
@@ -436,6 +516,25 @@ class AniListMediatorHelper:
     def __init__(self, client=None):
         self.client = client or AniListMediatorClient()
 
+    def franchise_identity(self, anilist_id):
+        """Return canonical Prime franchise identity without resolving episodes."""
+        target=self.client.media(anilist_id)
+        relation_root,relation_path=_find_bottom_root(self.client,target)
+        root,franchise_path,has_tv_franchise=_find_franchise_root(
+            self.client,relation_root)
+        titles=_titles(root)
+        return {
+            "name":titles["english"],"romaji_name":titles["romaji"],
+            "anilist_id":str(root["id"]),
+            "mal_id":str(root["idMal"]) if root.get("idMal") not in (None,"") else None,
+            "source_format":str(root.get("format") or "").upper() or None,
+            "publish_year":_year(root),"source":"anilist_franchise_relation",
+            "relation_path":[str(node["id"]) for node in relation_path],
+            "franchise_relation_path":[str(node["id"]) for node in franchise_path],
+            "library_type":("movie" if str(target.get("format") or "").upper()=="MOVIE"
+                            and not has_tv_franchise else "series"),
+        }
+
     def resolve(self, item, client=None):
         value = item.get("anilist_id")
         if value in (None, ""):
@@ -443,7 +542,9 @@ class AniListMediatorHelper:
         target = self.client.media(value)
         if str(target.get("id")) != str(value):
             raise MediatorPlacementError("AniList returned a different media identity")
-        root, path = _find_bottom_root(self.client, target)
+        relation_root, path = _find_bottom_root(self.client, target)
+        root, franchise_path, has_tv_franchise = _find_franchise_root(
+            self.client, relation_root)
         season_number, number_source = _season_number(target, path)
         schedule = self.client.schedule(value)
         root_titles = _titles(root)
@@ -456,6 +557,8 @@ class AniListMediatorHelper:
         placement = {
             "provider_path": self.provider,
             "provider_id": str(value),
+            "library_type": ("movie" if str(target.get("format") or "").upper()=="MOVIE"
+                             and not has_tv_franchise else "series"),
             "tv_show": {
                 "name": root_titles["english"] or target_titles["english"],
                 "romaji_name": root_titles["romaji"] or target_titles["romaji"],
@@ -464,7 +567,7 @@ class AniListMediatorHelper:
                 "anilist_id": str(root["id"]),
                 "mal_id": str(root["idMal"]) if root.get("idMal") not in (None,"") else None,
                 "source_format": root_format,
-                "source": "anilist_bottom_relation",
+                "source": "anilist_franchise_relation",
                 "publish_year": _year(root) or _year(target),
                 "overview": target.get("description") or root.get("description"),
                 "runtime_minutes": _runtime(target) or _runtime(root),
@@ -488,6 +591,7 @@ class AniListMediatorHelper:
             },
             "episodes": [],
             "relation_path": [str(node["id"]) for node in path],
+            "franchise_relation_path": [str(node["id"]) for node in franchise_path],
         }
         try:
             count = _episode_count(target, item, schedule)

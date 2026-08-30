@@ -115,6 +115,18 @@ class Alpha11WatchlistUITests(unittest.TestCase):
         self.assertIn(".library-tile-logo-wrap",styles)
         self.assertIn(".library-series-hero",styles)
 
+    def test_library_separates_tv_series_and_standalone_movies(self):
+        page=render_home(
+            {"username":"admin","role":"admin"},active_tab="library",
+            watchlist_preferences={"mature":0})
+        script=read_static_asset("components/library/library.js")[1].decode("utf-8")
+
+        self.assertIn('data-library-kind="series"',page)
+        self.assertIn('data-library-kind="movies"',page)
+        self.assertIn('fetchJson("/api/library/movies")',script)
+        self.assertIn('movie ? "movies/" : "series/"',script)
+        self.assertIn('id="library-series-seasons-section"',page)
+
     def test_watchlist_has_binary_mature_switch_and_library_classification(self):
         page=render_home(
             {"username":"admin","role":"admin"},active_tab="watchlist",
