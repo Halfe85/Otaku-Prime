@@ -172,5 +172,25 @@ class MediatorProcessorTests(unittest.TestCase):
         self.assertEqual(3,caught.exception.placement["season"]["number"])
         self.assertEqual("anilist",caught.exception.placement["provider_path"])
 
+    def test_mal_structure_survives_when_simkl_and_anilist_cannot_resolve(self):
+        structural=placement("mal",season=2)
+        structural["episodes"]=[]
+        structural["season"].update({"first_episode":None,"last_episode":None,
+                                     "release_date":"2027-10-01"})
+        endpoints={
+            "simkl":Endpoint("simkl",error="franchise not found"),
+            "anilist":Endpoint("anilist",error="relation graph unavailable"),
+            "mal":PendingEndpoint("mal",result=structural,error="no episode count"),
+            "kitsu":PendingEndpoint("kitsu",error="no episode count"),
+        }
+
+        with self.assertRaises(MediatorMetadataPending) as caught:
+            MediatorProcessor(endpoints=endpoints).resolve(self.item())
+
+        self.assertEqual("mal",caught.exception.placement["provider_path"])
+        self.assertEqual(2,caught.exception.placement["season"]["number"])
+        self.assertEqual("2027-10-01",
+                         caught.exception.placement["season"]["release_date"])
+
 
 if __name__=="__main__": unittest.main()

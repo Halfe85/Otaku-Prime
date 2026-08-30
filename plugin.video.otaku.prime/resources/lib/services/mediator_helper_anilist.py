@@ -593,6 +593,12 @@ class AniListMediatorHelper:
             "relation_path": [str(node["id"]) for node in path],
             "franchise_relation_path": [str(node["id"]) for node in franchise_path],
         }
+        # A standalone movie is itself the playable library object.  Prime's
+        # Movies table does not require synthetic episode rows, so a provider
+        # may omit ``episodes`` without preventing the movie from being
+        # catalogued.
+        if placement["library_type"] == "movie":
+            return placement
         try:
             count = _episode_count(target, item, schedule)
         except MediatorMetadataPending as exc:

@@ -270,32 +270,16 @@ class MALMediatorEndpoint:
         root,franchise_path,has_tv_franchise=_find_franchise_root(
             self.client,relation_root)
         season_number,source=_season_number(target,path)
-        try: count=int(target.get("num_episodes") or item.get("episode_count") or 0)
-        except (TypeError,ValueError): count=0
-        if count<=0: raise MediatorMetadataPending("MAL has no episode count for this anime")
-        offset=0
-        if season_number==0:
-            target_id=str(target["id"])
-            for node in path:
-                if str(node["id"])==target_id: break
-                if _format(node.get("media_type")) in SPECIAL_FORMATS:
-                    try: offset+=max(0,int(node.get("num_episodes") or 0))
-                    except (TypeError,ValueError): pass
         runtime=_runtime_minutes(target.get("average_episode_duration"))
-        episodes=[]
-        for source_number in range(1,count+1):
-            episodes.append({"source_episode_number":source_number,"episode_number":offset+source_number,
-                             "season_number":season_number,"simkl_id":None,"mal_id":None,
-                             "title":None,"overview":None,"runtime_minutes":runtime,
-                             "release_date":target.get("start_date") if source_number==1 else None})
-        root_titles=_titles(root); target_titles=_titles(target); numbers=[row["episode_number"] for row in episodes]
+        root_titles=_titles(root); target_titles=_titles(target)
         try: publish_year=int(str(root.get("start_date") or target.get("start_date") or "")[:4])
         except (TypeError,ValueError): publish_year=None
         mature=_mature(root,target)
-        return {
+        library_type=("movie" if _format(target.get("media_type"))=="movie"
+                      and not has_tv_franchise else "series")
+        placement={
             "provider_path":"mal","provider_id":str(value),
-            "library_type":("movie" if _format(target.get("media_type"))=="movie"
-                            and not has_tv_franchise else "series"),
+            "library_type":library_type,
             "tv_show":{"name":root_titles["english"] or target_titles["english"],
                        "romaji_name":root_titles["romaji"] or target_titles["romaji"],
                        "simkl_id":None,"tvdb_id":None,"anilist_id":None,
@@ -309,7 +293,39 @@ class MALMediatorEndpoint:
                        "age_rating":_rating(target) or _rating(root) or
                                     ("18+" if mature else None),"mature":mature},
             "season":{"number":season_number,"number_source":source,"name":target_titles["english"],
-                      "media_type":_format(target.get("media_type")),"first_episode":numbers[0],"last_episode":numbers[-1]},
-            "episodes":episodes,"relation_path":[str(node["id"]) for node in path],
+                      "romaji_name":target_titles["romaji"],
+                      "media_type":_format(target.get("media_type")),
+                      "first_episode":None,"last_episode":None,
+                      "release_date":target.get("start_date") or item.get("release_date"),
+                      "release_status":target.get("status")},
+            "episodes":[],"relation_path":[str(node["id"]) for node in path],
             "franchise_relation_path":[str(node["id"]) for node in franchise_path],
         }
+        # Movies do not use Prime episode rows.  Once MAL confirms that the
+        # movie has no TV franchise parent, its missing episode count is not a
+        # reason to defer the Movies record.
+        if library_type=="movie":
+            return placement
+        try: count=int(target.get("num_episodes") or item.get("episode_count") or 0)
+        except (TypeError,ValueError): count=0
+        if count<=0:
+            raise MediatorMetadataPending(
+                "MAL has no episode count for this anime",placement=placement)
+        offset=0
+        if season_number==0:
+            target_id=str(target["id"])
+            for node in path:
+                if str(node["id"])==target_id: break
+                if _format(node.get("media_type")) in SPECIAL_FORMATS:
+                    try: offset+=max(0,int(node.get("num_episodes") or 0))
+                    except (TypeError,ValueError): pass
+        episodes=[]
+        for source_number in range(1,count+1):
+            episodes.append({"source_episode_number":source_number,"episode_number":offset+source_number,
+                             "season_number":season_number,"simkl_id":None,"mal_id":None,
+                             "title":None,"overview":None,"runtime_minutes":runtime,
+                             "release_date":target.get("start_date") if source_number==1 else None})
+        numbers=[row["episode_number"] for row in episodes]
+        placement["season"].update({"first_episode":numbers[0],"last_episode":numbers[-1]})
+        placement["episodes"]=episodes
+        return placement

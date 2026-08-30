@@ -5,6 +5,7 @@ import unittest
 from resources.lib.database.catalog import CatalogStore
 from resources.lib.database.watchlist_items import WatchlistItemStore
 from resources.lib.services.mediator_tvshow import TVShowMediatorService
+from resources.lib.services.mediator_endpoint_simkl import SimklMediatorEndpoint
 from resources.lib.services.mediator_helper_simkl import (
     MediatorMetadataPending,
     SimklMediatorHelper,
@@ -102,7 +103,8 @@ class WatchlistTVShowMediatorTests(unittest.TestCase):
         handle=tempfile.NamedTemporaryFile(delete=False); handle.close(); self.path=handle.name
         self.watchlist=WatchlistItemStore(self.path); self.watchlist.initialize()
         self.watchlist.replace_provider_snapshot("anilist",[{
-            "provider_item_id":"185874","ids":{"anilist":"185874","simkl":"2671730"},
+            "provider_item_id":"185874","ids":{"anilist":"185874","mal":"62401",
+                                                   "kitsu":"50001","simkl":"2671730"},
             "english_name":"BLEACH: Thousand-Year Blood War - The Calamity",
             "list_status":"PLANNING","progress":0,"raw":{}}])
         self.watchlist.finalize_merge(); self.prime_id=self.watchlist.list_all()[0]["local_id"]
@@ -133,6 +135,33 @@ class WatchlistTVShowMediatorTests(unittest.TestCase):
         self.assertEqual((17,41,42,"simkl"),(season["season_number"],season["first_episode"],season["last_episode"],season["provider_path"]))
         self.assertEqual([(1,41),(2,42)],[(row["source_episode_number"],row["episode_number"]) for row in episodes])
         self.assertEqual(1,self.watchlist.item(self.prime_id)["added_to_library"])
+
+    def test_special_provider_ids_follow_into_every_ova_episode(self):
+        placement=self.placement("anilist")
+        placement["library_type"]="series"
+        placement["season"].update({
+            "number":0,"media_type":"ova","name":"Bleach OVA",
+            "first_episode":5,"last_episode":6})
+        placement["episodes"]=[
+            {"source_episode_number":1,"episode_number":5,
+             "season_number":0,"simkl_id":"remote-episode-1","mal_id":None,
+             "release_date":"2008-12-13"},
+            {"source_episode_number":2,"episode_number":6,
+             "season_number":0,"simkl_id":"remote-episode-2","mal_id":None,
+             "release_date":"2009-01-10"}]
+        service=TVShowMediatorService(
+            self.watchlist,self.catalog,client=object(),
+            processor=HelperProcessor(placement),fanart=NoFanart())
+
+        result=service.run_once()
+
+        season=self.catalog.list_seasons(self.catalog.list_series()[0]["local_id"])[0]
+        episodes=self.catalog.list_episodes(season["local_id"])
+        self.assertEqual(1,result["placed"])
+        self.assertEqual(2,len(episodes))
+        for episode in episodes:
+            self.assertEqual(("185874","62401","50001","2671730"),tuple(
+                episode[name+"_id"] for name in ("anilist","mal","kitsu","simkl")))
 
     def test_mediator_persists_series_artwork(self):
         placement=self.placement("simkl")
@@ -251,6 +280,31 @@ class WatchlistTVShowMediatorTests(unittest.TestCase):
               {"type":"special","episode":1,"ids":{"simkl_id":2},"tvdb":{"season":0,"episode":8}}]
         self.assertEqual(["1"],[row["simkl_id"] for row in _episodes(rows,False)])
         self.assertEqual(["1","2"],[row["simkl_id"] for row in _episodes(rows,True)])
+
+    def test_simkl_special_range_resolves_every_requested_s00_episode(self):
+        class Client:
+            def anime(self,_simkl_id):
+                return {"ids":{"simkl":"900","tvdb":"100"},"title":"Parent",
+                        "anime_type":"tv","relations":[]}
+            def tv_franchise(self,_target,root_detail=None):
+                return {"name":"Parent","simkl_id":"900","tvdb_id":"100",
+                        "source":"simkl_tvdb_anime_group"}
+            def episodes(self,_simkl_id):
+                return [
+                    {"type":"special","episode":1,"ids":{"simkl_id":"8001"},
+                     "tvdb":{"season":0,"episode":8}},
+                    {"type":"special","episode":2,"ids":{"simkl_id":"8002"},
+                     "tvdb":{"season":0,"episode":9}}]
+
+        placement=SimklMediatorEndpoint(Client()).resolve({
+            "simkl_id":None,"simkl_reference_id":"900",
+            "special_locator":"S00E08-E09","media_format":"OAV",
+            "english_name":"Example OAV"})
+
+        self.assertEqual((0,8,9),(
+            placement["season"]["number"],placement["season"]["first_episode"],
+            placement["season"]["last_episode"]))
+        self.assertEqual([8,9],[row["episode_number"] for row in placement["episodes"]])
 
     def test_simkl_mediator_uses_only_the_canonical_simkl_id(self):
         class Client:

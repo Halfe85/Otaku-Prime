@@ -13,7 +13,7 @@ from resources.lib.services.remote_identity import best_title_similarity,clean_r
 
 HEX_SEGMENT_LENGTH=6
 CATALOG_PROJECTION_REVISION="alpha11-split-movie-library-1"
-SPECIAL_SOURCE_FORMATS=("MOVIE","OVA","ONA","SPECIAL","TV_SPECIAL","MUSIC")
+SPECIAL_SOURCE_FORMATS=("MOVIE","OVA","OAV","ONA","SPECIAL","TV_SPECIAL","MUSIC","MUSIC_VIDEO")
 LOGGER=get_logger(__name__)
 
 
@@ -81,7 +81,7 @@ class CatalogStore:
               anilist_id TEXT UNIQUE,
               mal_id TEXT UNIQUE,
               kitsu_id TEXT UNIQUE,
-              simkl_id TEXT UNIQUE,
+              simkl_id TEXT,
               provider_path TEXT,
               placement_source TEXT,
               english_name TEXT,
@@ -140,7 +140,9 @@ class CatalogStore:
               related_season_id TEXT NOT NULL,
               episode_number INTEGER NOT NULL CHECK(episode_number>0),
               source_episode_number INTEGER NOT NULL DEFAULT 1 CHECK(source_episode_number>0),
+              anilist_id TEXT,
               mal_id TEXT,
+              kitsu_id TEXT,
               simkl_id TEXT UNIQUE,
               title TEXT,
               overview TEXT,
@@ -314,7 +316,16 @@ class CatalogStore:
                 ("placement_state","TEXT NOT NULL DEFAULT 'COMPLETE'")))
             self._add_columns(db,"episodes",(
                 ("source_episode_number","INTEGER NOT NULL DEFAULT 1"),
+                ("anilist_id","TEXT"),("kitsu_id","TEXT"),
                 ("title","TEXT"),("overview","TEXT"),("runtime_minutes","INTEGER")))
+            if self._remove_episode_simkl_uniqueness(db):
+                LOGGER.info(
+                    "Removed the legacy unique Simkl episode constraint for multi-episode specials")
+            special_episode_ids_updated=self._backfill_special_episode_provider_ids(db)
+            if special_episode_ids_updated:
+                LOGGER.info(
+                    "Copied provider identities onto %s existing special episode rows",
+                    special_episode_ids_updated)
             self._add_columns(db,"staff",(
                 ("mal_id","TEXT"),("kitsu_id","TEXT"),("simkl_id","TEXT")))
             self._add_columns(db,"characters",(
@@ -429,6 +440,81 @@ class CatalogStore:
         for name,declaration in columns:
             if name not in existing:
                 db.execute("ALTER TABLE {} ADD COLUMN {} {}".format(table,name,declaration))
+
+    @staticmethod
+    def _remove_episode_simkl_uniqueness(db):
+        """Permit one special media identity to cover several S00 episodes."""
+        schema=db.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='episodes'"
+        ).fetchone()
+        if not schema or "simkl_id TEXT UNIQUE" not in str(schema["sql"] or ""):
+            return False
+        columns=("local_id","related_season_id","episode_number","source_episode_number",
+                 "anilist_id","mal_id","kitsu_id","simkl_id","title","overview",
+                 "runtime_minutes","watch_status","release_date","created_at","updated_at")
+        db.commit()
+        db.execute("PRAGMA foreign_keys=OFF")
+        try:
+            db.executescript("""
+            CREATE TABLE episodes_rebuild(
+              local_id TEXT PRIMARY KEY
+                CHECK(length(local_id)=18 AND local_id NOT GLOB '*[^0-9a-f]*'),
+              related_season_id TEXT NOT NULL,
+              episode_number INTEGER NOT NULL CHECK(episode_number>0),
+              source_episode_number INTEGER NOT NULL DEFAULT 1 CHECK(source_episode_number>0),
+              anilist_id TEXT,
+              mal_id TEXT,
+              kitsu_id TEXT,
+              simkl_id TEXT,
+              title TEXT,
+              overview TEXT,
+              runtime_minutes INTEGER,
+              watch_status INTEGER NOT NULL DEFAULT 0 CHECK(watch_status IN(0,1)),
+              release_date TEXT,
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              CHECK(substr(local_id,1,12)=related_season_id),
+              UNIQUE(related_season_id,episode_number),
+              FOREIGN KEY(related_season_id) REFERENCES seasons(local_id) ON DELETE CASCADE
+            );
+            """)
+            names=",".join(columns)
+            db.execute(
+                "INSERT INTO episodes_rebuild({}) SELECT {} FROM episodes".format(names,names))
+            db.execute("DROP TABLE episodes")
+            db.execute("ALTER TABLE episodes_rebuild RENAME TO episodes")
+            db.execute("CREATE INDEX ix_episodes_season ON episodes(related_season_id,episode_number)")
+            db.commit()
+        finally:
+            db.execute("PRAGMA foreign_keys=ON")
+        violations=db.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            raise sqlite3.IntegrityError(
+                "episode schema upgrade created foreign-key violations")
+        return True
+
+    @staticmethod
+    def _backfill_special_episode_provider_ids(db):
+        """Copy each special watchlist identity directly onto all of its S00 episodes."""
+        updated=set()
+        placeholders=",".join("?" for _ in SPECIAL_SOURCE_FORMATS)
+        for provider in ("anilist","mal","kitsu","simkl"):
+            column=provider+"_id"
+            rows=db.execute("""SELECT episodes.local_id,seasons.{} AS provider_id
+              FROM episodes JOIN seasons ON seasons.local_id=episodes.related_season_id
+              WHERE seasons.{} IS NOT NULL
+                AND REPLACE(UPPER(COALESCE(seasons.media_format,'')),' ','_') IN ({})""".format(
+                         column,column,placeholders),SPECIAL_SOURCE_FORMATS).fetchall()
+            for row in rows:
+                current=db.execute(
+                    "SELECT {} FROM episodes WHERE local_id=?".format(column),
+                    (row["local_id"],)).fetchone()[0]
+                if current==row["provider_id"]: continue
+                db.execute(
+                    "UPDATE episodes SET {}=?,updated_at=CURRENT_TIMESTAMP WHERE local_id=?".format(
+                        column),(row["provider_id"],row["local_id"]))
+                updated.add(row["local_id"])
+        return len(updated)
 
     def _new_local_id(self,db,table,prefix=""):
         for _ in range(256):
@@ -1120,32 +1206,39 @@ class CatalogStore:
             return dict(db.execute("SELECT * FROM seasons WHERE local_id=?",(local_id,)).fetchone())
 
     def add_episode(self,season_id,episode_number,source_episode_number=None,mal_id=None,simkl_id=None,
-                    watch_status=False,release_date=None,title=None,overview=None,runtime_minutes=None):
+                    anilist_id=None,kitsu_id=None,watch_status=False,release_date=None,title=None,
+                    overview=None,runtime_minutes=None):
         number=int(episode_number)
         title=clean_remote_text(title)
         overview=clean_remote_text(overview)
+        incoming_anilist=str(anilist_id) if anilist_id not in (None,"") else None
         incoming_mal=str(mal_id) if mal_id not in (None,"") else None
+        incoming_kitsu=str(kitsu_id) if kitsu_id not in (None,"") else None
         incoming_simkl=str(simkl_id) if simkl_id not in (None,"") else None
         runtime=int(runtime_minutes) if runtime_minutes not in (None,"") else None
         with self._connection() as db:
             row=db.execute("SELECT * FROM episodes WHERE related_season_id=? AND episode_number=?",
                            (season_id,number)).fetchone()
             if row:
-                db.execute("""UPDATE episodes SET source_episode_number=?,mal_id=COALESCE(?,mal_id),
-                  simkl_id=COALESCE(?,simkl_id),title=COALESCE(?,title),overview=COALESCE(?,overview),
+                db.execute("""UPDATE episodes SET source_episode_number=?,
+                  anilist_id=COALESCE(?,anilist_id),mal_id=COALESCE(?,mal_id),
+                  kitsu_id=COALESCE(?,kitsu_id),simkl_id=COALESCE(?,simkl_id),
+                  title=COALESCE(?,title),overview=COALESCE(?,overview),
                   runtime_minutes=COALESCE(?,runtime_minutes),release_date=COALESCE(?,release_date),
                   updated_at=CURRENT_TIMESTAMP WHERE local_id=?""",
-                  (int(source_episode_number or number),incoming_mal,incoming_simkl,title,overview,
-                   runtime,release_date,row["local_id"]))
+                  (int(source_episode_number or number),incoming_anilist,incoming_mal,
+                   incoming_kitsu,incoming_simkl,title,overview,runtime,release_date,row["local_id"]))
                 return dict(db.execute("SELECT * FROM episodes WHERE local_id=?",(row["local_id"],)).fetchone())
             if not db.execute("SELECT 1 FROM seasons WHERE local_id=?",(season_id,)).fetchone():
                 raise KeyError("season not found")
             local_id=self._new_local_id(db,"episodes",str(season_id))
-            db.execute("""INSERT INTO episodes(local_id,related_season_id,episode_number,mal_id,
-              simkl_id,title,overview,runtime_minutes,watch_status,release_date,source_episode_number)
-              VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
-              (local_id,season_id,number,incoming_mal,incoming_simkl,title,overview,runtime,
-               int(bool(watch_status)),release_date,int(source_episode_number or number)))
+            db.execute("""INSERT INTO episodes(local_id,related_season_id,episode_number,
+              anilist_id,mal_id,kitsu_id,simkl_id,title,overview,runtime_minutes,
+              watch_status,release_date,source_episode_number)
+              VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+              (local_id,season_id,number,incoming_anilist,incoming_mal,incoming_kitsu,
+               incoming_simkl,title,overview,runtime,int(bool(watch_status)),release_date,
+               int(source_episode_number or number)))
             return dict(db.execute("SELECT * FROM episodes WHERE local_id=?",(local_id,)).fetchone())
 
     @staticmethod

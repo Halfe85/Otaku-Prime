@@ -37,12 +37,52 @@ class WatchlistIdentityTests(unittest.TestCase):
     def test_true_identity_conflict_is_terminal(self):
         self.items.replace_provider_snapshot("anilist",[{
           "provider_item_id":"1","ids":{"anilist":"1","mal":"11"},"english_name":"Normal TV season",
-          "media_format":"TV","list_status":"PLANNING","provider_status":"PLANNING","progress":0}])
+          "episode_count":12,"release_date":"2025-01-01","media_format":"TV",
+          "list_status":"PLANNING","provider_status":"PLANNING","progress":0}])
         class Client:
             def resolve(self,item): raise IdentityMappingConflict("different normal TV identity")
         result=WatchlistIdentityEnrichmentService(self.items,client=Client(),request_delay=0).run_once()
         row=self.items.list_all()[0]
         self.assertEqual(1,result["unavailable"]); self.assertEqual("CONFLICT_EXACT",row["identity_resolution_status"])
+
+    def test_unpublished_identity_conflict_is_provisional_and_retryable(self):
+        self.items.replace_provider_snapshot("anilist",[{
+          "provider_item_id":"2","ids":{"anilist":"2","mal":"22"},
+          "english_name":"Unannounced sequel","episode_count":None,"release_date":None,
+          "media_format":"TV","list_status":"PLANNING",
+          "provider_status":"PLANNING","progress":0}])
+        class Client:
+            def resolve(self,item):
+                raise IdentityMappingConflict("provisional catalogue mismatch")
+
+        first=WatchlistIdentityEnrichmentService(
+            self.items,client=Client(),request_delay=0).run_once()
+        row=self.items.list_all()[0]
+        self.assertEqual(1,first["partial"])
+        self.assertEqual("PENDING_PUBLICATION",row["identity_resolution_status"])
+        self.assertEqual(1,row["mediator_ready"])
+
+        second=WatchlistIdentityEnrichmentService(
+            self.items,client=Client(),request_delay=0).run_once()
+        self.assertEqual(1,second["partial"])
+        self.assertEqual(
+            "PENDING_PUBLICATION",self.items.list_all()[0]["identity_resolution_status"])
+
+    def test_unpublished_missing_identity_is_pending_instead_of_not_found(self):
+        self.items.replace_provider_snapshot("anilist",[{
+          "provider_item_id":"3","ids":{"anilist":"3"},
+          "english_name":"Unannounced OVA","episode_count":None,"release_date":None,
+          "media_format":"OVA","list_status":"PLANNING",
+          "provider_status":"PLANNING","progress":0}])
+        class Client:
+            def resolve(self,item): return {}
+
+        result=WatchlistIdentityEnrichmentService(
+            self.items,client=Client(),request_delay=0).run_once()
+        row=self.items.list_all()[0]
+        self.assertEqual(1,result["partial"])
+        self.assertEqual("PENDING_PUBLICATION",row["identity_resolution_status"])
+        self.assertEqual(1,row["mediator_ready"])
 
     def test_special_parent_redirect_becomes_simkl_reference_and_locator(self):
         self.items.replace_provider_snapshot("anilist",[{
@@ -60,6 +100,33 @@ class WatchlistIdentityTests(unittest.TestCase):
         self.assertEqual("5978",row["anilist_id"]); self.assertEqual("5978",row["mal_id"])
         self.assertIsNone(row["simkl_id"]); self.assertEqual("3958",row["simkl_reference_id"])
         self.assertEqual("S00E08",row["special_locator"]); self.assertEqual(1,row["mediator_ready"])
+        self.assertEqual(1,result["partial"])
+
+    def test_multi_episode_oav_parent_redirect_keeps_full_special_range(self):
+        self.items.replace_provider_snapshot("anilist",[{
+          "provider_item_id":"700","ids":{"anilist":"700","mal":"701"},
+          "english_name":"Example OAV","media_format":"OAV",
+          "list_status":"PLANNING","provider_status":"PLANNING","progress":0}])
+        class Client(SimklIdentityClient):
+            def _simkl_ids(self,ids): return ["900"]
+            def _detail(self,simkl_id):
+                return {"ids":{"simkl":"900","anilist":"999","mal":"999"}}
+            def _search(self,provider,value): return []
+            def _episodes(self,simkl_id):
+                return [
+                    {"type":"special","title":"Example OAV 1",
+                     "ids":{"anilist":"700","mal":"701"},
+                     "tvdb":{"season":0,"episode":8}},
+                    {"type":"special","title":"Example OAV 2",
+                     "ids":{"anilist":"700","mal":"701"},
+                     "tvdb":{"season":0,"episode":9}}]
+
+        result=WatchlistIdentityEnrichmentService(
+            self.items,client=Client(),request_delay=0).run_once()
+
+        row=self.items.list_all()[0]
+        self.assertEqual("900",row["simkl_reference_id"])
+        self.assertEqual("S00E08-E09",row["special_locator"])
         self.assertEqual(1,result["partial"])
 
     def test_missing_provider_catalog_ids_are_partial_not_failed(self):

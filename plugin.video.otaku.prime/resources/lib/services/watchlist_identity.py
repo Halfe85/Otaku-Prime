@@ -15,7 +15,8 @@ from resources.lib.watchlist.simkl import PACKAGED_CLIENT_ID, SIMKL_API_URL
 
 LOGGER=get_logger(__name__)
 PROVIDERS=("anilist","mal","kitsu","simkl")
-SPECIAL_FORMATS={"SPECIAL","OVA","ONA","TV_SHORT"}
+SPECIAL_FORMATS={
+    "MOVIE","OVA","OAV","ONA","SPECIAL","TV_SPECIAL","TV_SHORT","MUSIC","MUSIC_VIDEO"}
 
 
 class IdentityMappingConflict(ValueError):
@@ -99,7 +100,8 @@ class SimklIdentityClient:
 
     def _special_reference(self,item,simkl_reference_id):
         """Map a provider-only special to one Simkl parent S00Eyy coordinate."""
-        titles=item_titles(item); release=str(item.get("release_date") or "")[:10]; candidates=[]
+        titles=item_titles(item); release=str(item.get("release_date") or "")[:10]
+        candidates=[]; exact_coordinates=[]
         for row in self._episodes(simkl_reference_id):
             coordinate=self._row_coordinate(row)
             if not coordinate or coordinate[0]!=0: continue
@@ -108,12 +110,23 @@ class SimklIdentityClient:
             for provider in ("anilist","mal","kitsu"):
                 known=item.get(provider+"_id"); remote=row_ids.get(provider)
                 if known not in (None,"") and remote not in (None,"") and str(known)==str(remote): exact+=1
+            if exact: exact_coordinates.append(coordinate)
             row_titles=[value for value in (row.get("title"),row.get("name")) if value]
             similarity=best_title_similarity(titles,row_titles) if titles and row_titles else 0.0
             row_date=str(row.get("date") or row.get("first_aired") or "")[:10]
             date_match=bool(release and row_date and release==row_date)
             if exact or similarity>=0.92 or (date_match and similarity>=0.75):
                 candidates.append((exact,1 if date_match else 0,similarity,coordinate))
+        exact_coordinates=sorted(set(exact_coordinates))
+        if exact_coordinates:
+            seasons={coordinate[0] for coordinate in exact_coordinates}
+            numbers=[coordinate[1] for coordinate in exact_coordinates]
+            if len(seasons)!=1 or numbers!=list(range(numbers[0],numbers[-1]+1)):
+                return None
+            season=exact_coordinates[0][0]
+            locator="S{:02d}E{:02d}".format(season,numbers[0])
+            if len(numbers)>1: locator+="-E{:02d}".format(numbers[-1])
+            return {"_simkl_reference_id":str(simkl_reference_id),"_special_locator":locator}
         if not candidates: return None
         candidates.sort(key=lambda value:(value[0],value[1],value[2]),reverse=True); best=candidates[0]
         if len(candidates)>1 and best[0]==0 and candidates[1][0]==0 and best[1]==candidates[1][1] and best[2]-candidates[1][2]<0.05:
@@ -165,6 +178,12 @@ class WatchlistIdentityEnrichmentService:
         return any(item.get(name+"_id") in (None,"") for name in ("anilist","mal","kitsu")) or (
             item.get("simkl_id") in (None,"") and item.get("simkl_reference_id") in (None,""))
 
+    @staticmethod
+    def _publication_unconfirmed(item):
+        try: episode_count=int(item.get("episode_count") or 0)
+        except (TypeError,ValueError): episode_count=0
+        return episode_count<=0 and item.get("release_date") in (None,"")
+
     def _notify_progress(self,processed,total,bucket):
         if not self.on_progress or self._stop.is_set(): return
         try: self.on_progress({"processed":processed,"total":total,"percent":min(100,bucket*10)})
@@ -180,11 +199,16 @@ class WatchlistIdentityEnrichmentService:
                 if self._stop.is_set(): break
                 release_to_mediator=True
                 try:
-                    # A previously confirmed Simkl contradiction should not be re-queried every hour.
-                    # It remains eligible for AniList/MAL/Kitsu mediation.
-                    if str(item.get("identity_resolution_status") or "")=="CONFLICT_EXACT":
+                    identity_status=str(item.get("identity_resolution_status") or "")
+                    publication_unconfirmed=self._publication_unconfirmed(item)
+                    # Published exact contradictions are terminal. An item with no
+                    # episode count and no first-release date is not published
+                    # enough to make a Simkl mismatch permanent, so retry it.
+                    if identity_status=="CONFLICT_EXACT" and not publication_unconfirmed:
                         unavailable+=1
-                    elif self._needs_identity(item):
+                    elif self._needs_identity(item) or (
+                            identity_status in ("CONFLICT_EXACT","PENDING_PUBLICATION") and
+                            publication_unconfirmed):
                         resolved=self.client.resolve(item) or {}
                         ids={name:resolved.get(name) for name in PROVIDERS if resolved.get(name) not in (None,"")}
                         if ids: self.store.apply_resolved_ids(item["local_id"],ids)
@@ -195,6 +219,10 @@ class WatchlistIdentityEnrichmentService:
                         if self._needs_identity(current):
                             if resolved:
                                 partial+=1; self.store.record_identity_resolution(item["local_id"],"PARTIAL")
+                            elif publication_unconfirmed:
+                                partial+=1; self.store.record_identity_resolution(
+                                    item["local_id"],"PENDING_PUBLICATION",
+                                    "Provider identity and publication metadata are not available yet")
                             else:
                                 unavailable+=1; self.store.record_identity_resolution(
                                     item["local_id"],"NOT_FOUND","Provider ID not currently available")
@@ -203,10 +231,20 @@ class WatchlistIdentityEnrichmentService:
                     else:
                         complete+=1; self.store.record_identity_resolution(item["local_id"],"RESOLVED")
                 except IdentityMappingConflict as exc:
-                    unavailable+=1
-                    self.store.record_identity_resolution(item["local_id"],"CONFLICT_EXACT",str(exc))
-                    LOGGER.warning("Simkl identity conflict for Prime item %s; mediator will bypass Simkl: %s",
-                                   item["local_id"],exc)
+                    if self._publication_unconfirmed(item):
+                        partial+=1
+                        self.store.record_identity_resolution(
+                            item["local_id"],"PENDING_PUBLICATION",str(exc))
+                        LOGGER.info(
+                            "Simkl identity for unpublished Prime item %s is provisional; "
+                            "retrying after future watchlist refreshes: %s",item["local_id"],exc)
+                    else:
+                        unavailable+=1
+                        self.store.record_identity_resolution(
+                            item["local_id"],"CONFLICT_EXACT",str(exc))
+                        LOGGER.warning(
+                            "Simkl identity conflict for Prime item %s; mediator will bypass Simkl: %s",
+                            item["local_id"],exc)
                 except Exception as exc:
                     failed+=1; LOGGER.exception("Provider ID enrichment failed for Prime item %s",item["local_id"])
                     self.store.record_identity_resolution(item["local_id"],"PARTIAL",str(exc))

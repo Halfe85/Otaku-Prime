@@ -229,6 +229,17 @@ class AniListMediatorTests(unittest.TestCase):
         self.assertEqual("20954",result["tv_show"]["anilist_id"])
         self.assertEqual(0,result["season"]["number"])
 
+    def test_standalone_movie_does_not_require_an_episode_count(self):
+        movie=media(20954,"A Silent Voice","MOVIE",None,year=2016)
+        helper=AniListMediatorHelper(FakeAniListClient([movie]))
+
+        result=helper.resolve({"anilist_id":"20954","episode_count":None,
+                               "release_date":"2016-09-17"})
+
+        self.assertEqual("movie",result["library_type"])
+        self.assertEqual("2016-01-01",result["season"]["release_date"])
+        self.assertEqual([],result["episodes"])
+
     def test_movie_with_tv_sequel_remains_in_tv_specials(self):
         movie=media(100,"Franchise Origin Movie","MOVIE",1,year=2010)
         television=media(200,"Franchise Television","TV",12,prequel=movie,year=2012)

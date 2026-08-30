@@ -13,7 +13,7 @@ from resources.lib.services.remote_identity import clean_remote_text
 SUPPORTED_WATCHLIST_PROVIDERS=("anilist","mal","kitsu","simkl")
 ID_COLUMNS={provider:provider+"_id" for provider in SUPPORTED_WATCHLIST_PROVIDERS}
 STATUSES=("CURRENT","COMPLETED","PAUSED","DROPPED","PLANNING")
-SPECIAL_LOCATOR_RE=re.compile(r"^S(\d{2,3})E(\d{2,4})$")
+SPECIAL_LOCATOR_RE=re.compile(r"^S(\d{2,3})E(\d{2,4})(?:-E?(\d{2,4}))?$")
 
 
 class WatchlistIdentityConflict(ValueError):
@@ -501,7 +501,10 @@ class WatchlistItemStore:
         reference=str(simkl_reference_id or "").strip()
         locator=str(special_locator or "").upper().strip()
         if not reference: raise ValueError("Simkl special reference ID is required")
-        if not SPECIAL_LOCATOR_RE.match(locator): raise ValueError("special locator must look like S00E08")
+        match=SPECIAL_LOCATOR_RE.match(locator)
+        if not match: raise ValueError("special locator must look like S00E08 or S00E08-E09")
+        if match.group(3) and int(match.group(3))<int(match.group(2)):
+            raise ValueError("special locator range must run forwards")
         with self._connection() as db:
             cursor=db.execute("""UPDATE watchlist_items SET simkl_reference_id=?,special_locator=?,
               identity_resolution_status=CASE WHEN identity_resolution_status='RESOLVED' THEN 'RESOLVED' ELSE 'PARTIAL' END,

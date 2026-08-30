@@ -24,7 +24,7 @@ from resources.lib.watchlist.simkl import PACKAGED_CLIENT_ID,SIMKL_API_URL
 
 
 MAX_PREQUEL_DEPTH=64
-SPECIAL_MEDIA_TYPES=("movie","ova","ona","special","music video")
+SPECIAL_MEDIA_TYPES=("movie","ova","oav","ona","special","tv special","music","music video")
 
 
 class MediatorPlacementError(RuntimeError):

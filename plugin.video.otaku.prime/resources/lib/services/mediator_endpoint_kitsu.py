@@ -188,34 +188,26 @@ class KitsuMediatorEndpoint:
         target=self.client.anime(value); root,path=_find_root(self.client,target)
         target_attrs=_attrs(target); root_attrs=_attrs(root)
         season_number,number_source=_season_number(target,path)
-        try: count=int(target_attrs.get("episodeCount") or item.get("episode_count") or 0)
-        except (TypeError,ValueError): count=0
-        if count<=0: raise MediatorMetadataPending("Kitsu has no episode count for this anime")
-        offset=_special_offset(target,path) if season_number==0 else 0
         runtime=_runtime(target_attrs)
-        episodes=[]
-        for source_number in range(1,count+1):
-            episodes.append({"source_episode_number":source_number,"episode_number":offset+source_number,
-                             "season_number":season_number,"simkl_id":None,"mal_id":None,
-                             "title":None,"overview":None,"runtime_minutes":runtime,
-                             "release_date":target_attrs.get("startDate") if source_number==1 else None})
         titles=root_attrs.get("titles") or {}; target_titles=target_attrs.get("titles") or {}
-        name=titles.get("en") or root_attrs.get("canonicalTitle") or target_titles.get("en") or target_attrs.get("canonicalTitle")
+        franchise_name=(titles.get("en") or root_attrs.get("canonicalTitle") or
+                        target_titles.get("en") or target_attrs.get("canonicalTitle"))
         romaji=titles.get("en_jp") or root_attrs.get("canonicalTitle") or target_titles.get("en_jp") or target_attrs.get("canonicalTitle")
         try: publish_year=int(str(root_attrs.get("startDate") or target_attrs.get("startDate") or "")[:4])
         except (TypeError,ValueError): publish_year=None
-        numbers=[row["episode_number"] for row in episodes]
         genres=[]
         for media in (root,target):
             try: values=self.client.categories(media["id"])
             except Exception: values=[]
-            for name in values:
-                if name not in genres: genres.append(name)
+            for category_name in values:
+                if category_name not in genres: genres.append(category_name)
         age_rating=_age_rating(target_attrs,root_attrs)
-        return {"provider_path":"kitsu","provider_id":str(value),
-                "library_type":("movie" if _format(target)=="movie" and
-                                _format(root)=="movie" else "series"),
-                "tv_show":{"name":name,"romaji_name":romaji,"simkl_id":None,"tvdb_id":None,
+        library_type=("movie" if _format(target)=="movie" and
+                      _format(root)=="movie" else "series")
+        placement={"provider_path":"kitsu","provider_id":str(value),
+                "library_type":library_type,
+                "tv_show":{"name":franchise_name,"romaji_name":romaji,
+                           "simkl_id":None,"tvdb_id":None,
                            "anilist_id":None,"kitsu_id":str(root["id"]),
                            "source_format":str(root_attrs.get("subtype") or target_attrs.get("subtype") or "").upper() or None,
                            "source":"kitsu_prequel_graph","publish_year":publish_year,
@@ -225,5 +217,28 @@ class KitsuMediatorEndpoint:
                            "genres":genres,"themes":[],"age_rating":age_rating,
                            "mature":age_rating=="R18"},
                 "season":{"number":season_number,"number_source":number_source,"name":target_attrs.get("canonicalTitle"),
-                          "media_type":_format(target),"first_episode":numbers[0],"last_episode":numbers[-1]},
-                "episodes":episodes,"relation_path":[str(row["id"]) for row in path]}
+                          "romaji_name":(target_titles.get("en_jp") or
+                                         target_attrs.get("canonicalTitle")),
+                          "media_type":_format(target),"first_episode":None,
+                          "last_episode":None,
+                          "release_date":target_attrs.get("startDate") or item.get("release_date"),
+                          "release_status":target_attrs.get("status")},
+                "episodes":[],"relation_path":[str(row["id"]) for row in path]}
+        if library_type=="movie":
+            return placement
+        try: count=int(target_attrs.get("episodeCount") or item.get("episode_count") or 0)
+        except (TypeError,ValueError): count=0
+        if count<=0:
+            raise MediatorMetadataPending(
+                "Kitsu has no episode count for this anime",placement=placement)
+        offset=_special_offset(target,path) if season_number==0 else 0
+        episodes=[]
+        for source_number in range(1,count+1):
+            episodes.append({"source_episode_number":source_number,"episode_number":offset+source_number,
+                             "season_number":season_number,"simkl_id":None,"mal_id":None,
+                             "title":None,"overview":None,"runtime_minutes":runtime,
+                             "release_date":target_attrs.get("startDate") if source_number==1 else None})
+        numbers=[row["episode_number"] for row in episodes]
+        placement["season"].update({"first_episode":numbers[0],"last_episode":numbers[-1]})
+        placement["episodes"]=episodes
+        return placement

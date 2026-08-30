@@ -13,6 +13,8 @@ from resources.lib.services.mediator_processor import MediatorProcessor
 from resources.lib.services.mediator_fanarttv import FanartTVMediator
 
 LOGGER=get_logger(__name__)
+SPECIAL_EPISODE_FORMATS={
+    "MOVIE","OVA","OAV","ONA","SPECIAL","TV_SPECIAL","MUSIC","MUSIC_VIDEO"}
 
 
 class MediatorRunCancelled(RuntimeError):
@@ -257,12 +259,23 @@ class TVShowMediatorService:
             LOGGER.info(
                 "Stored staff/character metadata for Prime item %s: series=%s season=%s",
                 item.get("local_id"),series_credit_count,season_credit_count)
-        for episode in placement["episodes"]:
+        placement_episodes=placement["episodes"]
+        media_format=str(
+            season_data.get("media_type") or item.get("media_format") or ""
+        ).upper().replace(" ","_").replace("-","_")
+        special_episode=media_format in SPECIAL_EPISODE_FORMATS
+        for episode in placement_episodes:
             self._ensure_current(item["local_id"])
+            provider_ids={
+                name:(item.get(name+"_id") if special_episode else None)
+                for name in ("anilist","mal","kitsu","simkl")}
             stored_episode=self.catalog_store.add_episode(
                 season["local_id"],episode["episode_number"],
                 source_episode_number=episode["source_episode_number"],
-                mal_id=episode.get("mal_id"),simkl_id=episode.get("simkl_id"),
+                anilist_id=provider_ids["anilist"] or episode.get("anilist_id"),
+                mal_id=provider_ids["mal"] or episode.get("mal_id"),
+                kitsu_id=provider_ids["kitsu"] or episode.get("kitsu_id"),
+                simkl_id=provider_ids["simkl"] or episode.get("simkl_id"),
                 release_date=episode.get("release_date"),title=episode.get("title"),
                 overview=episode.get("overview"),runtime_minutes=episode.get("runtime_minutes"))
             self.catalog_store.replace_media_credits(

@@ -19,7 +19,7 @@ from resources.lib.services.mediator_helper_simkl import (
     _season_number,
 )
 
-_LOCATOR=re.compile(r"^S(\d{2,3})E(\d{2,4})$")
+_LOCATOR=re.compile(r"^S(\d{2,3})E(\d{2,4})(?:-E?(\d{2,4}))?$")
 
 
 def _terms(*payloads):
@@ -149,14 +149,20 @@ class SimklMediatorEndpoint:
         match=_LOCATOR.match(str(item.get("special_locator") or "").upper())
         if not reference or not match:
             raise MediatorPlacementError("Simkl special reference is incomplete")
-        season_number=int(match.group(1)); episode_number=int(match.group(2))
+        season_number=int(match.group(1)); first_episode=int(match.group(2))
+        last_episode=int(match.group(3) or first_episode)
+        if last_episode<first_episode:
+            raise MediatorPlacementError("Simkl special reference range is reversed")
         target=client.anime(reference)
         root,path=_find_root(client,target)
         franchise=self._franchise(client,target,root)
         candidates=_episodes(client.episodes(reference),True)
-        selected=next((row for row in candidates
-                       if row.get("season_number")==season_number and row.get("episode_number")==episode_number),None)
-        if not selected:
+        selected=[row for row in candidates
+                  if row.get("season_number")==season_number and
+                  first_episode<=row.get("episode_number",-1)<=last_episode]
+        selected.sort(key=lambda row:row["episode_number"])
+        expected=list(range(first_episode,last_episode+1))
+        if [row["episode_number"] for row in selected]!=expected:
             raise MediatorPlacementError(
                 "Simkl reference {} has no {}".format(reference,item.get("special_locator")))
         return {
@@ -166,8 +172,8 @@ class SimklMediatorEndpoint:
             "season":{"number":season_number,"number_source":"watchlist_special_locator",
                       "name":item.get("english_name") or item.get("romaji_name"),
                       "media_type":str(item.get("media_format") or "SPECIAL").lower(),
-                      "first_episode":episode_number,"last_episode":episode_number},
-            "episodes":[selected],
+                      "first_episode":first_episode,"last_episode":last_episode},
+            "episodes":selected,
             "relation_path":[str((node.get("ids") or {}).get("simkl")) for node in path],
             "special_locator":item.get("special_locator"),
         }

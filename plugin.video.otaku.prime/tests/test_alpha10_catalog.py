@@ -22,19 +22,40 @@ class Alpha10CatalogTests(unittest.TestCase):
           "english_name":"Season Two","romaji_name":"Season Two","media_format":"TV",
           "list_status":"CURRENT","provider_status":"CURRENT","progress":2}])
         self.item=self.watchlist.list_all()[0]
-        self.catalog=CatalogStore(self.path,SegmentFactory("a1b2c3","d4e5f6","123456"))
+        self.catalog=CatalogStore(
+            self.path,SegmentFactory("a1b2c3","d4e5f6","123456","654321"))
         self.catalog.initialize()
     def tearDown(self): self.tmp.cleanup()
 
     def test_hierarchical_ids_embed_every_parent(self):
         series=self.catalog.get_or_create_series("Franchise","Franchise",root_simkl_id="30")
         season=self.catalog.add_watchlist_season(series["local_id"],self.item,season_number=2)
-        episode=self.catalog.add_episode(season["local_id"],1,mal_id="11",simkl_id="3101")
+        episode=self.catalog.add_episode(
+            season["local_id"],1,anilist_id="1",mal_id="11",kitsu_id="21",simkl_id="3101")
         self.assertEqual("a1b2c3",series["local_id"])
         self.assertEqual("a1b2c3d4e5f6",season["local_id"])
         self.assertEqual("a1b2c3d4e5f6123456",episode["local_id"])
         self.assertEqual("a1b2c3",season["related_series_id"])
         self.assertEqual("a1b2c3d4e5f6",episode["related_season_id"])
+        self.assertEqual(("1","11","21","3101"),tuple(
+            episode[name+"_id"] for name in ("anilist","mal","kitsu","simkl")))
+
+    def test_existing_multi_episode_ova_inherits_watchlist_provider_ids(self):
+        series=self.catalog.get_or_create_series("Franchise","Franchise",root_simkl_id="30")
+        movie_item=dict(self.item,media_format="OAV")
+        season=self.catalog.add_watchlist_season(
+            series["local_id"],movie_item,season_number=0)
+        first=self.catalog.add_episode(season["local_id"],1)
+        self.catalog.add_episode(season["local_id"],2)
+        self.assertIsNone(first["anilist_id"])
+
+        self.catalog.initialize()
+
+        repaired=self.catalog.list_episodes(season["local_id"])
+        self.assertEqual(2,len(repaired))
+        for episode in repaired:
+            self.assertEqual(("1","11","21","31"),tuple(
+                episode[name+"_id"] for name in ("anilist","mal","kitsu","simkl")))
 
     def test_only_the_linked_watchlist_item_becomes_a_season(self):
         series=self.catalog.get_or_create_series(root_simkl_id="30")

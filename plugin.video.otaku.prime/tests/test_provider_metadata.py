@@ -5,6 +5,7 @@ from resources.lib.services.mediator_endpoint_kitsu import KitsuMediatorClient,K
 from resources.lib.services.mediator_endpoint_mal import MALMediatorClient,MALMediatorEndpoint
 from resources.lib.services.mediator_endpoint_simkl import (
     SimklMediatorEndpoint,_age_rating,_mature,_terms)
+from resources.lib.services.mediator_helper_simkl import MediatorMetadataPending
 
 
 class MALClient:
@@ -108,11 +109,61 @@ class ProviderMetadataTests(unittest.TestCase):
 
         self.assertEqual("movie",result["library_type"])
 
+    def test_mal_preserves_confirmed_structure_when_episode_count_is_missing(self):
+        television=mal_media(100,"Announced Series","tv",None,2027)
+
+        with self.assertRaises(MediatorMetadataPending) as caught:
+            MALMediatorEndpoint(MALGraphClient([television])).resolve(
+                {"mal_id":"100","episode_count":None,"release_date":"2027-01-01"})
+
+        self.assertEqual("Announced Series",caught.exception.placement["tv_show"]["name"])
+        self.assertEqual("2027-01-01",caught.exception.placement["season"]["release_date"])
+        self.assertEqual([],caught.exception.placement["episodes"])
+
+    def test_mal_standalone_movie_without_episode_count_is_complete(self):
+        movie=mal_media(20954,"A Silent Voice","movie",None,2016)
+
+        result=MALMediatorEndpoint(MALGraphClient([movie])).resolve(
+            {"mal_id":"20954","episode_count":None})
+
+        self.assertEqual("movie",result["library_type"])
+        self.assertEqual([],result["episodes"])
+
     def test_kitsu_exposes_categories_and_native_age_rating(self):
         show=KitsuMediatorEndpoint(KitsuClient()).resolve({"kitsu_id":"1"})["tv_show"]
         self.assertEqual(["Action","Fantasy"],show["genres"])
         self.assertEqual("R18",show["age_rating"])
         self.assertTrue(show["mature"])
+
+    def test_kitsu_preserves_confirmed_structure_when_episode_count_is_missing(self):
+        class PendingKitsuClient(KitsuClient):
+            def anime(self,kitsu_id):
+                row=super().anime(kitsu_id)
+                row["attributes"]["episodeCount"]=None
+                row["attributes"]["startDate"]="2027-04-01"
+                return row
+
+        with self.assertRaises(MediatorMetadataPending) as caught:
+            KitsuMediatorEndpoint(PendingKitsuClient()).resolve(
+                {"kitsu_id":"1","episode_count":None,"release_date":"2027-04-01"})
+
+        self.assertEqual("Example",caught.exception.placement["tv_show"]["name"])
+        self.assertEqual("2027-04-01",caught.exception.placement["season"]["release_date"])
+        self.assertEqual([],caught.exception.placement["episodes"])
+
+    def test_kitsu_standalone_movie_without_episode_count_is_complete(self):
+        class MovieKitsuClient(KitsuClient):
+            def anime(self,kitsu_id):
+                row=super().anime(kitsu_id)
+                row["attributes"]["subtype"]="movie"
+                row["attributes"]["episodeCount"]=None
+                return row
+
+        result=KitsuMediatorEndpoint(MovieKitsuClient()).resolve(
+            {"kitsu_id":"1","episode_count":None})
+
+        self.assertEqual("movie",result["library_type"])
+        self.assertEqual([],result["episodes"])
 
     def test_simkl_accepts_native_genres_themes_and_certification(self):
         values=_terms({"genres":["Action"],"themes":[{"name":"Isekai"}]},
