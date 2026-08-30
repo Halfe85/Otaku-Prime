@@ -111,7 +111,7 @@ class Alpha11WatchlistUITests(unittest.TestCase):
         self.assertIn("series.banner_url",script)
         self.assertIn("series.clearlogo_url",script)
         self.assertIn(".library-tile-poster",styles)
-        self.assertIn("repeat(auto-fill,minmax(min(175px,100%),1fr))",styles)
+        self.assertIn("repeat(auto-fill,minmax(min(230px,100%),1fr))",styles)
         self.assertIn(".library-tile-logo-wrap",styles)
         self.assertIn(".library-series-hero",styles)
 
@@ -126,6 +126,31 @@ class Alpha11WatchlistUITests(unittest.TestCase):
         self.assertIn('fetchJson("/api/library/movies")',script)
         self.assertIn('movie ? "movies/" : "series/"',script)
         self.assertIn('id="library-series-seasons-section"',page)
+
+    def test_movies_and_tv_series_share_hidden_empty_tile_tracks(self):
+        page=render_home(
+            {"username":"admin","role":"admin"},active_tab="library",
+            watchlist_accounts={})
+        styles=read_static_asset("components/library/library.css")[1].decode("utf-8")
+        people_styles=read_static_asset(
+            "components/library/library-character-staff.css")[1].decode("utf-8")
+
+        self.assertEqual(1,page.count('id="library-grid"'))
+        self.assertIn('data-library-kind="series"',page)
+        self.assertIn('data-library-kind="movies"',page)
+        self.assertIn("repeat(auto-fill,minmax(min(230px,100%),1fr))",styles)
+        self.assertIn("repeat(auto-fill,minmax(min(220px,100%),1fr))",styles)
+        self.assertNotIn("repeat(auto-fit",styles)
+        self.assertNotIn(".library-grid",people_styles)
+
+    def test_library_groups_multipart_seasons_by_display_number(self):
+        script=read_static_asset("components/library/library.js")[1].decode("utf-8")
+
+        self.assertIn("function mergeSeasonParts(series)",script)
+        self.assertIn('var key = "season:" + text(normalizedNumber',script)
+        self.assertIn("var seasons = mergeSeasonParts(series);",script)
+        self.assertIn('season.parts.length + " parts"',script)
+        self.assertIn("episode._primeSeasonPart || season",script)
 
     def test_watchlist_has_binary_mature_switch_and_library_classification(self):
         page=render_home(

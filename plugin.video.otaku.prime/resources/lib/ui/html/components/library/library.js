@@ -560,6 +560,75 @@
     fillCastRoot(root, resolved.entries, "No cast metadata resolved for this episode.");
   }
 
+  function episodeMetadataScore(episode) {
+    return ["title", "overview", "release_date", "runtime_minutes", "simkl_id", "anilist_id", "mal_id", "kitsu_id"]
+      .reduce(function (score, key) { return score + (episode && episode[key] ? 1 : 0); }, 0);
+  }
+
+  function mergeSeasonParts(series) {
+    var seasons = Array.isArray(series && series.seasons) ? series.seasons : [];
+    var groups = new Map();
+
+    seasons.forEach(function (season, index) {
+      var number = Number(season.season_number);
+      var normalizedNumber = Number.isFinite(number) ? number : season.season_number;
+      var key = "season:" + text(normalizedNumber, "unknown-" + index);
+      var group = groups.get(key);
+      if (!group) {
+        group = {
+          local_id: text(series && series.local_id, "series") + ":" + key,
+          season_number: normalizedNumber,
+          english_name: season.english_name,
+          romaji_name: season.romaji_name,
+          cast: [],
+          episodes: [],
+          parts: [],
+          next_episode_number: null,
+          next_episode_release_date: null
+        };
+        groups.set(key, group);
+      }
+
+      group.parts.push(season);
+      castEntries(season.cast).forEach(function (credit) { group.cast.push(credit); });
+      if (season.next_episode_release_date &&
+          (!group.next_episode_release_date ||
+           String(season.next_episode_release_date) < String(group.next_episode_release_date))) {
+        group.next_episode_release_date = season.next_episode_release_date;
+        group.next_episode_number = season.next_episode_number;
+      }
+
+      var episodeIndexes = new Map();
+      group.episodes.forEach(function (episode, episodeIndex) {
+        episodeIndexes.set("episode:" + text(episode.episode_number, episode.local_id), episodeIndex);
+      });
+      (Array.isArray(season.episodes) ? season.episodes : []).forEach(function (episode) {
+        var episodeKey = "episode:" + text(episode.episode_number, episode.local_id);
+        var displayEpisode = Object.assign({}, episode, { _primeSeasonPart: season });
+        var existingIndex = episodeIndexes.get(episodeKey);
+        if (existingIndex === undefined) {
+          episodeIndexes.set(episodeKey, group.episodes.length);
+          group.episodes.push(displayEpisode);
+        } else if (episodeMetadataScore(displayEpisode) > episodeMetadataScore(group.episodes[existingIndex])) {
+          group.episodes[existingIndex] = displayEpisode;
+        }
+      });
+    });
+
+    return Array.from(groups.values()).map(function (season) {
+      season.episodes.sort(function (left, right) {
+        return Number(left.episode_number) - Number(right.episode_number);
+      });
+      if (season.parts.length > 1) {
+        season.english_name = text(series && (series.english_name || series.title || series.romaji_name), "Series") +
+          (Number(season.season_number) === 0 ? " specials" : " season " + season.season_number);
+      }
+      return season;
+    }).sort(function (left, right) {
+      return Number(left.season_number) - Number(right.season_number);
+    });
+  }
+
   function episodeButton(series, season, episode) {
     var button = element("button", "library-episode-row");
     button.type = "button";
@@ -568,7 +637,7 @@
     button.appendChild(element("span", "library-episode-date", formatDate(episode.release_date)));
     button.addEventListener("click", function (event) {
       event.stopPropagation();
-      openEpisode(series, season, episode);
+      openEpisode(series, episode._primeSeasonPart || season, episode);
     });
     return button;
   }
@@ -578,7 +647,7 @@
     var seasonCount = document.getElementById("library-season-count");
     if (!root) return;
     root.replaceChildren();
-    var seasons = Array.isArray(series.seasons) ? series.seasons : [];
+    var seasons = mergeSeasonParts(series);
     if (seasonCount) seasonCount.textContent = seasons.length + (seasons.length === 1 ? " season" : " seasons");
     if (!seasons.length) {
       root.appendChild(element("p", "library-muted", "Season placement is still being resolved."));
@@ -599,6 +668,9 @@
         ? "Specials"
         : "Season " + text(season.season_number, "?")));
       label.appendChild(element("span", "", text(season.english_name || season.romaji_name, "Title pending")));
+      if (season.parts.length > 1) {
+        label.lastChild.textContent += " · " + season.parts.length + " parts";
+      }
       toggle.appendChild(label);
 
       var episodes = Array.isArray(season.episodes) ? season.episodes : [];
