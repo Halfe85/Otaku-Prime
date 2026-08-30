@@ -9,7 +9,28 @@
   var staffCount = document.getElementById("library-staff-count");
   var peopleCount = document.getElementById("library-people-count");
   var characterCount = document.getElementById("library-character-count");
+  var staffMore = document.getElementById("library-staff-more");
+  var staffVisibleRows = 1;
   if (!charactersRoot || !staffRoot || !actorSource) return;
+
+  function staffColumns() {
+    var tracks = window.getComputedStyle(staffRoot).gridTemplateColumns;
+    if (!tracks || tracks === "none") return 1;
+    return Math.max(1, tracks.trim().split(/\s+/).length);
+  }
+
+  function applyStaffDisclosure() {
+    var cards = Array.prototype.slice.call(staffRoot.querySelectorAll(":scope > .staff-card"));
+    var columns = staffColumns();
+    var visible = Math.min(cards.length, columns * staffVisibleRows);
+    cards.forEach(function (card, index) { card.hidden = index >= visible; });
+    if (!staffMore) return;
+    var hasMore = visible < cards.length;
+    staffMore.hidden = cards.length <= columns && staffVisibleRows === 1;
+    staffMore.setAttribute("aria-expanded", staffVisibleRows > 1 ? "true" : "false");
+    var label = staffMore.querySelector("span");
+    if (label) label.textContent = hasMore ? "Show 2 more rows" : "Show less";
+  }
 
   function linkedStaffName(portrait) {
     var title = String(portrait && portrait.title || "").trim();
@@ -61,6 +82,7 @@
     if (staffCount) staffCount.textContent = String(visibleStaff);
     if (characterCount) characterCount.textContent = String(visibleCharacters);
     if (peopleCount) peopleCount.textContent = visibleCharacters + " characters · " + visibleStaff + " staff";
+    applyStaffDisclosure();
   }
 
   function staffCard(name) {
@@ -148,6 +170,22 @@
       staffObserver.observe(staffRoot, { childList: true, subtree: true });
     });
   }
+
+  function resetStaffDisclosure() {
+    staffVisibleRows = 1;
+    applyStaffDisclosure();
+  }
+
+  if (staffMore) {
+    staffMore.addEventListener("click", function () {
+      var cards = staffRoot.querySelectorAll(":scope > .staff-card");
+      var visibleLimit = staffColumns() * staffVisibleRows;
+      staffVisibleRows = visibleLimit < cards.length ? staffVisibleRows + 2 : 1;
+      applyStaffDisclosure();
+    });
+  }
+  window.addEventListener("prime:librarymodalreset", resetStaffDisclosure);
+  window.addEventListener("resize", applyStaffDisclosure);
 
   characterObserver.observe(charactersRoot, { childList: true, subtree: true });
   staffObserver.observe(staffRoot, { childList: true, subtree: true });

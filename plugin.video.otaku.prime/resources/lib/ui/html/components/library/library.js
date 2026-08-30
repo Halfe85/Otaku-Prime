@@ -20,6 +20,9 @@
     detail: null,
     busyTiles: false,
     busyDetail: false,
+    detailRequestId: 0,
+    detailLoadKey: null,
+    detailAbortController: null,
     stopped: false,
     tileSignature: "",
     detailSignature: "",
@@ -129,8 +132,9 @@
     message.classList.toggle("warning", !!isError);
   }
 
-  async function fetchJson(url) {
-    var controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+  async function fetchJson(url, requestController) {
+    var controller = requestController ||
+      (typeof AbortController !== "undefined" ? new AbortController() : null);
     var timeout = window.setTimeout(function () { if (controller) controller.abort(); }, 8000);
     try {
       var response = await fetch(url, {
@@ -276,6 +280,66 @@
     if (node) node.textContent = text(value, fallback);
   }
 
+  function clearRoot(id, emptyClass, emptyText) {
+    var root = document.getElementById(id);
+    if (!root) return;
+    root.replaceChildren();
+    if (emptyText) root.appendChild(element("p", emptyClass || "library-muted", emptyText));
+  }
+
+  function resetEpisodeModal() {
+    setSeriesText("library-episode-series", "Series");
+    setSeriesText("library-episode-title", "Episode");
+    setSeriesText("library-episode-number", "—");
+    setSeriesText("library-episode-release", "—");
+    setSeriesText("library-episode-runtime", "—");
+    setSeriesText("library-episode-overview", "Metadata has not been resolved yet.");
+    setSeriesText("library-episode-local-id", "");
+    clearRoot("library-episode-cast", "library-muted", "No cast metadata resolved for this episode.");
+    var body = episodeModal && episodeModal.querySelector(".library-episode-body");
+    if (body) body.scrollTop = 0;
+  }
+
+  function resetSeriesModal(loadingType) {
+    expandedSeasons.clear();
+    state.peopleTab = "characters";
+    setSeriesText("library-series-title", loadingType === "movie" ? "Loading movie…" :
+      loadingType === "series" ? "Loading series…" : "Series");
+    setSeriesText("library-series-subtitle", loadingType ? "Mediator catalogue" : "—");
+    setSeriesText("library-series-english", "—");
+    setSeriesText("library-series-year", "—");
+    setSeriesText("library-series-runtime", "—");
+    setSeriesText("library-series-airing", "—");
+    setSeriesText("library-series-age-rating", "—");
+    setSeriesText("library-series-overview", "Metadata has not been resolved yet.");
+    setSeriesText("library-series-local-id", "");
+    setSeriesText("library-season-count", "");
+    setSeriesText("library-character-count", "0");
+    setSeriesText("library-staff-count", "0");
+    setSeriesText("library-people-count", "");
+    renderSeriesArtwork({}, "");
+    renderTerms("library-series-genres", []);
+    renderTerms("library-series-themes", []);
+    clearRoot("library-series-characters", "library-muted", "No character metadata resolved yet.");
+    clearRoot("library-series-staff", "library-muted", "No staff metadata resolved yet.");
+    clearRoot("library-linked-actor-source");
+    clearRoot("library-series-seasons");
+    var seasonsSection = document.getElementById("library-series-seasons-section");
+    if (seasonsSection) seasonsSection.hidden = false;
+    selectPeopleTab("characters");
+    var body = seriesModal && seriesModal.querySelector(".library-modal-body");
+    if (body) body.scrollTop = 0;
+    window.dispatchEvent(new CustomEvent("prime:librarymodalreset"));
+  }
+
+  function cancelDetailRequest() {
+    state.detailRequestId += 1;
+    state.detailLoadKey = null;
+    state.busyDetail = false;
+    if (state.detailAbortController) state.detailAbortController.abort();
+    state.detailAbortController = null;
+  }
+
   function renderSeriesArtwork(series, title) {
     var hero = document.getElementById("library-series-hero");
     var banner = document.getElementById("library-series-banner");
@@ -283,8 +347,12 @@
     if (!hero || !banner || !logo) return;
     hero.classList.remove("has-banner","has-logo");
     hero.classList.toggle("mature-artwork-blurred",blurMatureArtwork(series));
+    banner.onload = null;
+    banner.onerror = null;
     banner.hidden = true;
     banner.removeAttribute("src");
+    logo.onload = null;
+    logo.onerror = null;
     logo.hidden = true;
     logo.removeAttribute("src");
     logo.alt = "";
@@ -743,12 +811,23 @@
   }
 
   async function loadSeriesDetail(localId, silent) {
-    if (state.busyDetail || !localId) return;
+    if (!localId) return;
+    var openType = state.openType;
+    var loadKey = openType + ":" + localId;
+    if (state.busyDetail && state.detailLoadKey === loadKey) return;
+    if (state.detailAbortController) state.detailAbortController.abort();
+    var controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    var requestId = state.detailRequestId + 1;
+    state.detailRequestId = requestId;
+    state.detailLoadKey = loadKey;
+    state.detailAbortController = controller;
     state.busyDetail = true;
     try {
-      var movie=state.openType === "movie";
-      var payload = await fetchJson("/api/library/"+(movie ? "movies/" : "series/") + encodeURIComponent(localId));
-      if (state.openSeriesId !== localId) return;
+      var movie=openType === "movie";
+      var payload = await fetchJson("/api/library/"+(movie ? "movies/" : "series/") +
+        encodeURIComponent(localId),controller);
+      if (requestId !== state.detailRequestId || state.openSeriesId !== localId ||
+          state.openType !== openType) return;
       var detail=movie ? payload.movie : payload.series;
       var signature = JSON.stringify(detail);
       if (signature !== state.detailSignature) {
@@ -756,32 +835,39 @@
         renderSeriesDetail(detail);
       }
     } catch (error) {
+      if (requestId !== state.detailRequestId || (controller && controller.signal.aborted)) return;
       if (!silent) showMessage(error.message || "Could not load series details.", true);
     } finally {
-      state.busyDetail = false;
+      if (requestId === state.detailRequestId) {
+        state.busyDetail = false;
+        state.detailLoadKey = null;
+        state.detailAbortController = null;
+      }
     }
   }
 
   async function openLibraryItem(type,localId) {
+    cancelDetailRequest();
     state.openSeriesId = localId;
     state.openType = type === "movie" ? "movie" : "series";
     state.detail = null;
     state.detailSignature = "";
+    resetEpisodeModal();
+    resetSeriesModal(state.openType);
     if (seriesModal) seriesModal.hidden = false;
     document.body.classList.add("library-modal-open");
-    setSeriesText("library-series-title", state.openType === "movie" ? "Loading movie…" : "Loading series…");
-    setSeriesText("library-series-subtitle", "Mediator catalogue");
-    renderSeriesArtwork({},"Loading series");
     await loadSeriesDetail(localId, false);
   }
 
   function closeSeries() {
     closeEpisode();
+    cancelDetailRequest();
     state.openSeriesId = null;
     state.openType = null;
     state.detail = null;
     state.detailSignature = "";
     if (seriesModal) seriesModal.hidden = true;
+    resetSeriesModal(null);
     document.body.classList.remove("library-modal-open");
   }
 
@@ -802,6 +888,7 @@
 
   function closeEpisode() {
     if (episodeModal) episodeModal.hidden = true;
+    resetEpisodeModal();
   }
 
   document.querySelectorAll("[data-library-series-close]").forEach(function (node) {
