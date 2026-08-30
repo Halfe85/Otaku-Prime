@@ -200,7 +200,8 @@ class Alpha11WatchlistUITests(unittest.TestCase):
         self.assertIn("renderProviderTile(series);",script)
         self.assertIn("renderProviderTile({});",script)
         self.assertIn("grid-template-columns:repeat(4,34px)",styles)
-        self.assertIn(".library-provider-slot.unavailable",styles)
+        self.assertIn(".library-provider-slot.unavailable img",styles)
+        self.assertNotIn(".library-provider-slot { width:34px; height:34px; display:grid; place-items:center; border:",styles)
 
     def test_app_logs_preserve_scroll_and_offer_jump_to_newest(self):
         page=render_home(
