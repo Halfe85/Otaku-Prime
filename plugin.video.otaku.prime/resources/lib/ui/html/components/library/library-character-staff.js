@@ -9,27 +9,34 @@
   var staffCount = document.getElementById("library-staff-count");
   var peopleCount = document.getElementById("library-people-count");
   var characterCount = document.getElementById("library-character-count");
+  var charactersMore = document.getElementById("library-characters-more");
   var staffMore = document.getElementById("library-staff-more");
-  var staffVisibleRows = 1;
+  var visibleRows = { characters: 1, staff: 1 };
   if (!charactersRoot || !staffRoot || !actorSource) return;
 
-  function staffColumns() {
-    var tracks = window.getComputedStyle(staffRoot).gridTemplateColumns;
+  function gridColumns(root) {
+    if (!root.clientWidth) return 1;
+    var tracks = window.getComputedStyle(root).gridTemplateColumns;
     if (!tracks || tracks === "none") return 1;
     return Math.max(1, tracks.trim().split(/\s+/).length);
   }
 
-  function applyStaffDisclosure() {
-    var cards = Array.prototype.slice.call(staffRoot.querySelectorAll(":scope > .staff-card"));
-    var columns = staffColumns();
-    var visible = Math.min(cards.length, columns * staffVisibleRows);
+  function applyDisclosure(kind, root, selector, button) {
+    var cards = Array.prototype.slice.call(root.querySelectorAll(":scope > " + selector));
+    var columns = gridColumns(root);
+    var visible = Math.min(cards.length, columns * visibleRows[kind]);
     cards.forEach(function (card, index) { card.hidden = index >= visible; });
-    if (!staffMore) return;
+    if (!button) return;
     var hasMore = visible < cards.length;
-    staffMore.hidden = cards.length <= columns && staffVisibleRows === 1;
-    staffMore.setAttribute("aria-expanded", staffVisibleRows > 1 ? "true" : "false");
-    var label = staffMore.querySelector("span");
+    button.hidden = cards.length <= columns && visibleRows[kind] === 1;
+    button.setAttribute("aria-expanded", visibleRows[kind] > 1 ? "true" : "false");
+    var label = button.querySelector("span");
     if (label) label.textContent = hasMore ? "Show 2 more rows" : "Show less";
+  }
+
+  function applyPeopleDisclosures() {
+    applyDisclosure("characters", charactersRoot, ".character-card", charactersMore);
+    applyDisclosure("staff", staffRoot, ".staff-card", staffMore);
   }
 
   function linkedStaffName(portrait) {
@@ -82,7 +89,7 @@
     if (staffCount) staffCount.textContent = String(visibleStaff);
     if (characterCount) characterCount.textContent = String(visibleCharacters);
     if (peopleCount) peopleCount.textContent = visibleCharacters + " characters · " + visibleStaff + " staff";
-    applyStaffDisclosure();
+    applyPeopleDisclosures();
   }
 
   function staffCard(name) {
@@ -171,21 +178,31 @@
     });
   }
 
-  function resetStaffDisclosure() {
-    staffVisibleRows = 1;
-    applyStaffDisclosure();
+  function resetPeopleDisclosure() {
+    visibleRows.characters = 1;
+    visibleRows.staff = 1;
+    applyPeopleDisclosures();
   }
 
-  if (staffMore) {
-    staffMore.addEventListener("click", function () {
-      var cards = staffRoot.querySelectorAll(":scope > .staff-card");
-      var visibleLimit = staffColumns() * staffVisibleRows;
-      staffVisibleRows = visibleLimit < cards.length ? staffVisibleRows + 2 : 1;
-      applyStaffDisclosure();
+  function bindDisclosure(kind, root, selector, button) {
+    if (!button) return;
+    button.addEventListener("click", function () {
+      var cards = root.querySelectorAll(":scope > " + selector);
+      var visibleLimit = gridColumns(root) * visibleRows[kind];
+      visibleRows[kind] = visibleLimit < cards.length ? visibleRows[kind] + 2 : 1;
+      applyDisclosure(kind, root, selector, button);
     });
   }
-  window.addEventListener("prime:librarymodalreset", resetStaffDisclosure);
-  window.addEventListener("resize", applyStaffDisclosure);
+
+  bindDisclosure("characters", charactersRoot, ".character-card", charactersMore);
+  bindDisclosure("staff", staffRoot, ".staff-card", staffMore);
+  document.querySelectorAll("[data-library-people-tab]").forEach(function (tab) {
+    tab.addEventListener("click", function () {
+      window.requestAnimationFrame(applyPeopleDisclosures);
+    });
+  });
+  window.addEventListener("prime:librarymodalreset", resetPeopleDisclosure);
+  window.addEventListener("resize", applyPeopleDisclosures);
 
   characterObserver.observe(charactersRoot, { childList: true, subtree: true });
   staffObserver.observe(staffRoot, { childList: true, subtree: true });
