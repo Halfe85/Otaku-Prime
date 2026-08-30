@@ -186,6 +186,22 @@ class Alpha11WatchlistUITests(unittest.TestCase):
         self.assertNotIn('.mature-artwork-blurred .library-tile-logo',styles)
         self.assertNotIn('.mature-artwork-blurred .library-series-logo',styles)
 
+    def test_library_modal_footer_has_fixed_provider_availability_tile(self):
+        page=render_home(
+            {"username":"admin","role":"admin"},active_tab="library",
+            watchlist_accounts={})
+        script=read_static_asset("components/library/library.js")[1].decode("utf-8")
+        styles=read_static_asset("components/library/library.css")[1].decode("utf-8")
+
+        self.assertIn('id="library-series-providers"',page)
+        for provider in ("anilist","mal","kitsu","simkl"):
+            self.assertIn('data-library-provider="{}"'.format(provider),page)
+        self.assertIn("function hasProviderIdentity(item, provider)",script)
+        self.assertIn("renderProviderTile(series);",script)
+        self.assertIn("renderProviderTile({});",script)
+        self.assertIn("grid-template-columns:repeat(4,34px)",styles)
+        self.assertIn(".library-provider-slot.unavailable",styles)
+
     def test_app_logs_preserve_scroll_and_offer_jump_to_newest(self):
         page=render_home(
             {"username":"admin","role":"admin"},active_tab="library",

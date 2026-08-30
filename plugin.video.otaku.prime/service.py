@@ -31,6 +31,7 @@ from resources.lib.watchlist.provider_importers import (
 )
 from resources.lib.web import create_server
 from resources.lib.logging_config import configure_logging,get_logger
+from resources.lib.service_lifecycle import stop_service_components
 
 
 # Bind every IPv4 interface so the authenticated web UI is reachable from the LAN.
@@ -183,12 +184,17 @@ def main() -> None:
     monitor = PrimeMonitor()
     monitor.waitForAbort()
 
-    server.shutdown()
-    # Watchdog shutdown retires its identity and mediator workers before Kodi
-    # can start a replacement addon service against the same SQLite database.
-    watchlist_watchdog.stop(timeout=35)
-    server.server_close()
-    server_thread.join(timeout=5)
+    # Kodi gives addon services only a short shutdown window during repository
+    # updates.  Release port 9898 first so the newly installed service can bind
+    # it even when a provider request keeps an old worker alive for longer.
+    xbmc.log("OTAKU PRIME: stopping web service", xbmc.LOGINFO)
+    stop_service_components(
+        server,
+        server_thread,
+        watchlist_watchdog,
+        web_join_timeout=1,
+        worker_timeout=35,
+    )
 
     xbmc.log("OTAKU PRIME: service stopped", xbmc.LOGINFO)
 

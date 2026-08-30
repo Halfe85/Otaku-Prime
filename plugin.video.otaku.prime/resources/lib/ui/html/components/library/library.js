@@ -42,6 +42,44 @@
     return String(value);
   }
 
+  var libraryProviders = {
+    anilist: "AniList",
+    mal: "MyAnimeList",
+    kitsu: "Kitsu",
+    simkl: "Simkl"
+  };
+
+  function hasValue(value) {
+    return value !== null && value !== undefined && String(value).trim() !== "";
+  }
+
+  function hasProviderIdentity(item, provider) {
+    if (!item) return false;
+    if (hasValue(item[provider + "_id"])) return true;
+    if (provider === "anilist" && hasValue(item.root_anilist_id)) return true;
+    if (provider === "simkl" && hasValue(item.root_simkl_id)) return true;
+    return (Array.isArray(item.seasons) ? item.seasons : []).some(function (season) {
+      if (hasValue(season && season[provider + "_id"])) return true;
+      return (Array.isArray(season && season.episodes) ? season.episodes : []).some(function (episode) {
+        return hasValue(episode && episode[provider + "_id"]);
+      });
+    });
+  }
+
+  function renderProviderTile(item) {
+    var root = document.getElementById("library-series-providers");
+    if (!root) return;
+    root.querySelectorAll("[data-library-provider]").forEach(function (slot) {
+      var provider = slot.dataset.libraryProvider;
+      var available = hasProviderIdentity(item, provider);
+      var label = libraryProviders[provider] || provider;
+      slot.classList.toggle("available", available);
+      slot.classList.toggle("unavailable", !available);
+      slot.title = label + (available ? " ID available" : " ID unavailable");
+      slot.setAttribute("aria-label", slot.title);
+    });
+  }
+
   function hasHentaiGenre(series) {
     return Array.isArray(series && series.genres) && series.genres.some(function (genre) {
       return String(genre || "").trim().toLowerCase() === "hentai";
@@ -313,6 +351,7 @@
     setSeriesText("library-series-age-rating", "—");
     setSeriesText("library-series-overview", "Metadata has not been resolved yet.");
     setSeriesText("library-series-local-id", "");
+    renderProviderTile({});
     setSeriesText("library-season-count", "");
     setSeriesText("library-character-count", "0");
     setSeriesText("library-staff-count", "0");
@@ -790,6 +829,7 @@
     setSeriesText("library-series-overview", series.overview, "Metadata has not been resolved yet.");
     var isMovie=series.library_type === "movie";
     setSeriesText("library-series-local-id", "Prime " + (isMovie ? "movie" : "series") + " · " + series.local_id);
+    renderProviderTile(series);
     renderPeople(series);
     var seasonsSection=document.getElementById("library-series-seasons-section");
     if (seasonsSection) seasonsSection.hidden=isMovie;
