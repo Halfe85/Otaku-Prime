@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 import unittest
 
 
@@ -10,7 +11,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from resources.lib.service_lifecycle import stop_service_components
+from resources.lib.service_lifecycle import ServiceInstanceLock, stop_service_components
 
 
 class _Server:
@@ -41,6 +42,17 @@ class _Watchdog:
 
 
 class ServiceLifecycleTests(unittest.TestCase):
+    def test_service_instance_lock_rejects_overlap_and_can_be_reacquired(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "service.lock")
+            first = ServiceInstanceLock(path)
+            second = ServiceInstanceLock(path)
+            self.assertTrue(first.acquire())
+            self.assertFalse(second.acquire())
+            first.release()
+            self.assertTrue(second.acquire())
+            second.release()
+
     def test_web_socket_is_released_before_worker_wait(self):
         events = []
 

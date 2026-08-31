@@ -310,6 +310,8 @@ class WatchlistWatchdogService:
         self._retry_after = {}
         self._subscribers = []
         self._subscriber_lock = threading.Lock()
+        self._connected_account_signature = None
+        self._last_account_check_monotonic = 0.0
 
     # Public manager API -------------------------------------------------
     def list_items(self):
@@ -359,6 +361,8 @@ class WatchlistWatchdogService:
 
     def request_remote_sync(self, *args, **kwargs):
         """Wake immediately after provider connect/disconnect or explicit refresh."""
+        reason = args[0] if args else kwargs.get("provider") or kwargs.get("reason") or "explicit"
+        LOGGER.info("Watchlist remote sync requested: reason=%s", reason)
         self._remote_requested.set()
         self._wake.set()
         return {"scheduled": True}
@@ -456,20 +460,60 @@ class WatchlistWatchdogService:
             )
 
     # Worker -------------------------------------------------------------
+    def _account_signature(self):
+        """Non-secret account revision used to notice connects made by another service."""
+        signature = []
+        seen = set()
+        for importer in self.importers:
+            provider = getattr(importer, "provider", "anilist")
+            if provider in seen:
+                continue
+            seen.add(provider)
+            accounts = getattr(importer, "accounts", None)
+            getter = getattr(accounts, "get", None)
+            user_id = getattr(importer, "user_id", 1)
+            account = getter(user_id, provider) if getter else None
+            signature.append((provider, (account or {}).get("updated_at")))
+        return tuple(sorted(signature))
+
+    def _detect_account_change(self):
+        now = time.monotonic()
+        if now - self._last_account_check_monotonic < 5.0:
+            return False
+        self._last_account_check_monotonic = now
+        signature = self._account_signature()
+        if self._connected_account_signature is None:
+            self._connected_account_signature = signature
+            return False
+        if signature == self._connected_account_signature:
+            return False
+        self._connected_account_signature = signature
+        LOGGER.info("Watchlist provider account connection changed; scheduling remote sync")
+        self._remote_requested.set()
+        return True
+
     def _run(self):
-        self._refresh_remote(boot=True)
+        boot = True
         while not self._stop.is_set():
-            now = time.monotonic()
-            remote_due = (
-                self._remote_requested.is_set()
-                or now - self._last_remote_monotonic >= self.remote_interval_seconds
-            )
-            if remote_due:
-                self._remote_requested.clear()
-                self._refresh_remote(boot=False)
-            self._process_local_changes()
-            self._wake.wait(self.local_poll_seconds)
-            self._wake.clear()
+            try:
+                self._detect_account_change()
+                now = time.monotonic()
+                remote_due = boot or (
+                    self._remote_requested.is_set()
+                    or now - self._last_remote_monotonic >= self.remote_interval_seconds
+                )
+                if remote_due:
+                    self._remote_requested.clear()
+                    self._refresh_remote(boot=boot)
+                    boot = False
+                self._process_local_changes()
+                self._wake.wait(self.local_poll_seconds)
+                self._wake.clear()
+            except Exception as exc:
+                LOGGER.exception("Watchlist watchdog cycle failed; retrying without stopping the service")
+                self.error_handler(exc)
+                self._wake.wait(min(5.0, max(1.0, self.local_poll_seconds)))
+                self._wake.clear()
 
     def _refresh_remote(self, boot=False):
         if not self._run_lock.acquire(blocking=False):
@@ -489,9 +533,20 @@ class WatchlistWatchdogService:
                         "Watchdog refreshing remote provider %s",
                         getattr(importer, "provider", importer.__class__.__name__),
                     )
-                    results.append(importer.sync())
+                    result = importer.sync()
+                    results.append(result)
+                    LOGGER.info(
+                        "Watchdog provider refresh complete: provider=%s connected=%s imported=%s mode=%s",
+                        getattr(importer, "provider", importer.__class__.__name__),
+                        result.get("connected"),
+                        result.get("imported", result.get("watchlist_rows", 0)),
+                        result.get("mode") or "full",
+                    )
                 except Exception as exc:
-                    LOGGER.exception("Watchdog remote provider refresh failed")
+                    LOGGER.exception(
+                        "Watchdog remote provider refresh failed: provider=%s",
+                        getattr(importer, "provider", importer.__class__.__name__),
+                    )
                     self.error_handler(exc)
                     results.append({"error": str(exc)})
             merge = self.store.finalize_merge()

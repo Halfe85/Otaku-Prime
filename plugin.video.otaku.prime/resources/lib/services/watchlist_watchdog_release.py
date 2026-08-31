@@ -118,20 +118,28 @@ class ReleaseAwareWatchlistWatchdogService(WatchlistWatchdogService):
         return len(events)
 
     def _run(self):
-        self._refresh_remote(boot=True)
-        self._process_release_schedules(force=True)
+        boot = True
         while not self._stop.is_set():
-            now = time.monotonic()
-            remote_due = (
-                self._remote_requested.is_set()
-                or now - self._last_remote_monotonic >= self.remote_interval_seconds
-            )
-            if remote_due:
-                self._remote_requested.clear()
-                self._refresh_remote(boot=False)
-            self._process_local_changes()
-            if now - self._last_release_monotonic >= self.release_poll_seconds:
-                self._process_release_schedules()
-            wait_seconds = min(self.local_poll_seconds, self.release_poll_seconds)
-            self._wake.wait(wait_seconds)
-            self._wake.clear()
+            try:
+                self._detect_account_change()
+                now = time.monotonic()
+                remote_due = boot or (
+                    self._remote_requested.is_set()
+                    or now - self._last_remote_monotonic >= self.remote_interval_seconds
+                )
+                if remote_due:
+                    self._remote_requested.clear()
+                    self._refresh_remote(boot=boot)
+                    self._process_release_schedules(force=boot)
+                    boot = False
+                self._process_local_changes()
+                if now - self._last_release_monotonic >= self.release_poll_seconds:
+                    self._process_release_schedules()
+                wait_seconds = min(self.local_poll_seconds, self.release_poll_seconds)
+                self._wake.wait(wait_seconds)
+                self._wake.clear()
+            except Exception as exc:
+                LOGGER.exception("Watchlist watchdog cycle failed; retrying without stopping the service")
+                self.error_handler(exc)
+                self._wake.wait(min(5.0, max(1.0, self.local_poll_seconds)))
+                self._wake.clear()

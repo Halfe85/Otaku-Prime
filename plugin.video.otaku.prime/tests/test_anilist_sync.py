@@ -103,5 +103,16 @@ class AniListSyncTests(unittest.TestCase):
         self.assertIn("synonyms",query)
         self.assertIn("userPreferred",query)
 
+    def test_http_client_logs_endpoint_without_access_token(self):
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self,*_): return False
+            def read(self): return b'{"data":{"MediaListCollection":{"lists":[]}}}'
+        with self.assertLogs("otaku_prime.watchlist-anilist_sync", level="INFO") as captured:
+            AniListWatchlistClient(opener=lambda request,timeout: Response()).fetch(7,"secret-token")
+        output="\n".join(captured.output)
+        self.assertIn("POST https://graphql.anilist.co",output)
+        self.assertNotIn("secret-token",output)
+
 
 if __name__=="__main__": unittest.main()

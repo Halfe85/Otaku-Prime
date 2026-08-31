@@ -32,7 +32,7 @@ from resources.lib.watchlist.provider_importers import (
 )
 from resources.lib.web import create_server
 from resources.lib.logging_config import configure_logging,get_logger
-from resources.lib.service_lifecycle import stop_service_components
+from resources.lib.service_lifecycle import ServiceInstanceLock, stop_service_components
 
 
 # Bind every IPv4 interface so the authenticated web UI is reachable from the LAN.
@@ -87,8 +87,7 @@ def _network_web_urls(port: int) -> list[str]:
     return sorted(set(usable))
 
 
-def main() -> None:
-    profile = _profile_path()
+def _run_service(profile: str) -> None:
     users_db = os.path.join(profile, USERS_DB_NAME)
 
     user_store = UserStore(users_db)
@@ -149,11 +148,17 @@ def main() -> None:
             on_episode_watch_state_changed=watch_state_projector.update_episode,
         )
     except OSError as exc:
-        xbmc.log(
-            f"OTAKU PRIME: failed to bind web server on {WEB_HOST}:{WEB_PORT}: {exc}",
-            xbmc.LOGERROR,
+        log(
+            "WARNING",
+            "service",
+            "Web server could not bind {}:{} ({}); watchlist service remains active".format(
+                WEB_HOST, WEB_PORT, exc
+            ),
         )
-        PrimeMonitor().waitForAbort()
+        watchlist_watchdog.start()
+        monitor = PrimeMonitor()
+        monitor.waitForAbort()
+        watchlist_watchdog.stop(timeout=35)
         return
 
     server_thread = threading.Thread(
@@ -202,6 +207,22 @@ def main() -> None:
     )
 
     xbmc.log("OTAKU PRIME: service stopped", xbmc.LOGINFO)
+
+
+def main() -> None:
+    profile = _profile_path()
+    lock_path = xbmcvfs.translatePath("special://temp/otaku-prime-service.lock")
+    instance_lock = ServiceInstanceLock(lock_path)
+    if not instance_lock.acquire():
+        xbmc.log(
+            "OTAKU PRIME: another background service instance is already active",
+            xbmc.LOGWARNING,
+        )
+        return
+    try:
+        _run_service(profile)
+    finally:
+        instance_lock.release()
 
 
 if __name__ == "__main__":

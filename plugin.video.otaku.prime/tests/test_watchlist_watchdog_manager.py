@@ -114,6 +114,31 @@ class WatchlistWatchdogManagerTests(unittest.TestCase):
         self.assertEqual(by_type[WATCHLIST_ADDED]["source"], "anilist")
         self.assertEqual(by_type[WATCHLIST_REMOVED]["local_id"], "b")
 
+    def test_account_change_schedules_remote_fetch_without_web_callback(self):
+        class Accounts:
+            def __init__(self):
+                self.updated_at = None
+
+            def get(self, user_id, provider):
+                if self.updated_at is None:
+                    return None
+                return {"updated_at": self.updated_at}
+
+        class Importer:
+            provider = "anilist"
+            user_id = 1
+
+            def __init__(self):
+                self.accounts = Accounts()
+
+        importer = Importer()
+        manager = WatchlistWatchdogService([importer], self.store, self.writer)
+        self.assertFalse(manager._detect_account_change())
+        importer.accounts.updated_at = "2030-01-01 00:00:00"
+        manager._last_account_check_monotonic = 0.0
+        self.assertTrue(manager._detect_account_change())
+        self.assertTrue(manager._remote_requested.is_set())
+
 
 if __name__ == "__main__":
     unittest.main()

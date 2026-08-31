@@ -11,6 +11,39 @@ from resources.lib.logging_config import configure_logging,get_logger
 
 
 class AppLogStoreTests(unittest.TestCase):
+    def test_central_logger_flushes_entries_buffered_while_database_is_missing(self):
+        class Store:
+            def __init__(self):
+                self.available = False
+                self.rows = []
+
+            def write(self, level, source, message):
+                if not self.available:
+                    raise OSError("database path unavailable")
+                self.rows.append((level, source, message))
+
+        store = Store()
+        kodi_rows = []
+        configure_logging(app_log_store=store, kodi_writer=lambda *row: kodi_rows.append(row))
+        logger = get_logger("buffer-test")
+        logger.error("first failure")
+        store.available = True
+        logger.info("recovered")
+        self.assertEqual(
+            [("ERROR", "buffer-test", "first failure"),
+             ("INFO", "buffer-test", "recovered")],
+            store.rows,
+        )
+        self.assertIn(
+            ("WARNING", "logging", "App log database is unavailable; buffering up to 200 entries"),
+            kodi_rows,
+        )
+        self.assertIn(
+            ("INFO", "logging", "App log database recovered; buffered entries were restored"),
+            kodi_rows,
+        )
+        configure_logging()
+
     def test_log_stream_is_bounded_and_supports_incremental_reads(self):
         with tempfile.TemporaryDirectory() as directory:
             store = AppLogStore(os.path.join(directory, "db.sqlite"), max_entries=100)

@@ -5,8 +5,9 @@ from __future__ import annotations
 import json
 import re
 import threading
+import time
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlencode, urlparse, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
 from resources.lib.logging_config import get_logger
@@ -15,6 +16,7 @@ from resources.lib.watchlist.simkl import PACKAGED_CLIENT_ID, SIMKL_API_URL
 
 LOGGER=get_logger(__name__)
 PROVIDERS=("anilist","mal","kitsu","simkl")
+KITSU_API_URL="https://kitsu.io/api/edge"
 SPECIAL_FORMATS={
     "MOVIE","OVA","OAV","OAD","ONA","SPECIAL","TV_SPECIAL","TV_SHORT","MUSIC","MUSIC_VIDEO"}
 
@@ -25,6 +27,107 @@ class IdentityMappingConflict(ValueError):
 
 class _StopRedirect(HTTPRedirectHandler):
     def redirect_request(self,req,fp,code,msg,headers,newurl): return None
+
+
+class KitsuIdentityClient:
+    """Resolve hidden and mature Kitsu records through exact provider mappings."""
+
+    EXTERNAL_SITES={"anilist":"anilist/anime","mal":"myanimelist/anime"}
+
+    def __init__(self,timeout=30,opener=None):
+        self.timeout=int(timeout); self._open=opener or urlopen
+
+    @staticmethod
+    def _headers():
+        return {"Accept":"application/vnd.api+json",
+                "User-Agent":"Otaku-Prime/0.1.2 identity-watchdog"}
+
+    def _json(self,url):
+        endpoint=urlsplit(url)
+        safe="{}://{}{}".format(endpoint.scheme,endpoint.netloc,endpoint.path)
+        started=time.monotonic()
+        LOGGER.info("Kitsu identity API request started: GET %s",safe)
+        try:
+            with self._open(Request(url,headers=self._headers()),timeout=self.timeout) as response:
+                payload=json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            log=LOGGER.warning if exc.code in (401,403,404,429) else LOGGER.error
+            log("Kitsu identity API request failed: GET %s returned HTTP %s",safe,exc.code)
+            raise RuntimeError("Kitsu identity request failed with HTTP {}".format(exc.code)) from exc
+        except (URLError,TimeoutError,OSError,ValueError,json.JSONDecodeError) as exc:
+            LOGGER.error("Kitsu identity API request failed: GET %s: %s",safe,exc)
+            raise RuntimeError("Kitsu identity request failed: {}".format(exc)) from exc
+        LOGGER.info("Kitsu identity API request complete: GET %s duration=%.2fs",
+                    safe,time.monotonic()-started)
+        return payload
+
+    def _mapped_ids(self,provider,value):
+        site=self.EXTERNAL_SITES[provider]
+        url=KITSU_API_URL+"/mappings?"+urlencode({
+            "filter[externalSite]":site,
+            "filter[externalId]":str(value),
+            "include":"item",
+            "page[limit]":20,
+        })
+        payload=self._json(url)
+        results=set()
+        for row in (payload or {}).get("data") or []:
+            attrs=row.get("attributes") or {}
+            item=(((row.get("relationships") or {}).get("item") or {}).get("data") or {})
+            if (str(attrs.get("externalSite") or "").lower()!=site or
+                    str(attrs.get("externalId") or "")!=str(value) or
+                    item.get("type")!="anime" or item.get("id") in (None,"")):
+                continue
+            results.add(str(item["id"]))
+        return results
+
+    def resolve(self,item):
+        known={provider:item.get(provider+"_id") for provider in ("anilist","mal")}
+        mappings=[]
+        for provider,value in known.items():
+            if value not in (None,""):
+                ids=self._mapped_ids(provider,value)
+                if len(ids)>1:
+                    raise IdentityMappingConflict(
+                        "Kitsu returned multiple exact {} mappings for {}".format(provider,value))
+                if ids: mappings.append((provider,next(iter(ids))))
+        if not mappings: return {}
+        unique={value for _,value in mappings}
+        if len(unique)>1:
+            details=", ".join("{} {}".format(provider,value) for provider,value in mappings)
+            raise IdentityMappingConflict("Kitsu exact provider mappings disagree: "+details)
+        return {"kitsu":mappings[0][1]}
+
+
+class ProviderIdentityClient:
+    """Combine Simkl cross IDs with Kitsu's exact mapping fallback."""
+
+    def __init__(self,simkl=None,kitsu=None):
+        self.simkl=simkl or SimklIdentityClient()
+        self.kitsu=kitsu or KitsuIdentityClient()
+
+    def resolve(self,item):
+        simkl_error=None
+        try:
+            resolved=self.simkl.resolve(item) or {}
+        except IdentityMappingConflict:
+            raise
+        except Exception as exc:
+            simkl_error=exc; resolved={}
+            LOGGER.warning("Simkl identity lookup failed; trying exact Kitsu mappings: %s",exc)
+        combined=dict(item)
+        for provider,value in resolved.items():
+            if provider in PROVIDERS: combined[provider+"_id"]=value
+        if combined.get("kitsu_id") in (None,""):
+            try:
+                resolved.update(self.kitsu.resolve(combined))
+            except IdentityMappingConflict:
+                raise
+            except Exception as exc:
+                if not resolved and simkl_error: raise simkl_error
+                LOGGER.warning("Exact Kitsu identity lookup unavailable: %s",exc)
+        if not resolved and simkl_error: raise simkl_error
+        return resolved
 
 
 class SimklIdentityClient:
@@ -169,7 +272,7 @@ class SimklIdentityClient:
 class WatchlistIdentityEnrichmentService:
     """Process Watchlist # -> Z and release mediator work every ten percent."""
     def __init__(self,store,client=None,request_delay=0.25,on_complete=None,on_progress=None):
-        self.store=store; self.client=client or SimklIdentityClient(); self.request_delay=max(0,float(request_delay))
+        self.store=store; self.client=client or ProviderIdentityClient(); self.request_delay=max(0,float(request_delay))
         self._stop=threading.Event(); self.on_complete=on_complete; self.on_progress=on_progress
         self._lock=threading.Lock(); self._thread=None
 

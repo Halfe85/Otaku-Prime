@@ -151,11 +151,17 @@ def create_server(host: str, port: int, user_store, app_log_store=None,
 
         def _watchlist_changed(self, provider):
             if on_watchlist_changed:
+                LOGGER.info("Watchlist refresh requested by admin API action: %s", provider)
                 threading.Thread(
                     target=on_watchlist_changed,
+                    args=(provider,),
                     name="OtakuPrime{}Changed".format(provider.title()),
                     daemon=True,
                 ).start()
+            else:
+                LOGGER.warning(
+                    "Watchlist refresh could not be requested by admin API action: manager unavailable"
+                )
 
         def _anilist_page(self, user: dict, message: str = "") -> None:
             account = watchlist_accounts.get(user["id"], "anilist")

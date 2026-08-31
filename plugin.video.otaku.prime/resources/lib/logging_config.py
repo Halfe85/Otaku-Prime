@@ -21,6 +21,8 @@ class PrimeLogHandler(logging.Handler):
         super().__init__(logging.INFO)
         self.app_log_store=app_log_store
         self.kodi_writer=kodi_writer
+        self._pending=[]
+        self._store_unavailable_reported=False
 
     @staticmethod
     def _level(record):
@@ -33,8 +35,32 @@ class PrimeLogHandler(logging.Handler):
             level=self._level(record)
             source=record.name.split(".",1)[-1][:64]
             message=self.format(record)
-            if self.kodi_writer: self.kodi_writer(level,source,message)
-            if self.app_log_store: self.app_log_store.write(level,source,message)
+            if self.kodi_writer:
+                self.kodi_writer(level,source,message)
+            if not self.app_log_store:
+                return
+            entries=self._pending+[(level,source,message)]
+            self._pending=[]
+            for index,entry in enumerate(entries):
+                try:
+                    self.app_log_store.write(*entry)
+                except Exception:
+                    self._pending=entries[index:][-200:]
+                    if self.kodi_writer and not self._store_unavailable_reported:
+                        self.kodi_writer(
+                            "WARNING",
+                            "logging",
+                            "App log database is unavailable; buffering up to 200 entries",
+                        )
+                    self._store_unavailable_reported=True
+                    return
+            if self.kodi_writer and self._store_unavailable_reported:
+                self.kodi_writer(
+                    "INFO",
+                    "logging",
+                    "App log database recovered; buffered entries were restored",
+                )
+            self._store_unavailable_reported=False
         except Exception:
             self.handleError(record)
 

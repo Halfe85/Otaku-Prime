@@ -7,14 +7,16 @@ import sqlite3
 import time
 from contextlib import contextmanager
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 from resources.lib.services.remote_identity import clean_remote_text
+from resources.lib.logging_config import get_logger
 from resources.lib.watchlist.mal import MAL_API_URL, MALAuthenticator
 from resources.lib.watchlist.kitsu import KitsuAuthenticator
 from resources.lib.watchlist.simkl import PACKAGED_CLIENT_ID, SIMKL_API_URL
 
+LOGGER = get_logger(__name__)
 
 STATUS_MAP = {
     "watching": "CURRENT",
@@ -59,16 +61,31 @@ class _JsonClient:
 
     def _request(self, url, headers):
         request = Request(url, headers=headers)
+        parsed = urlsplit(url)
+        endpoint = "{}://{}{}".format(parsed.scheme, parsed.netloc, parsed.path)
+        service = self.__class__.__name__.replace("WatchlistClient", "") or "Watchlist"
+        started = time.monotonic()
+        LOGGER.info("%s API request started: GET %s", service, endpoint)
         try:
             with self._open(request, timeout=self.timeout) as response:
-                return self._json(response)
+                payload = self._json(response)
+            LOGGER.info(
+                "%s API request complete: GET %s duration=%.2fs",
+                service,
+                endpoint,
+                time.monotonic() - started,
+            )
+            return payload
         except HTTPError as exc:
+            log = LOGGER.warning if exc.code in (401, 403, 429) else LOGGER.error
+            log("%s API request failed: GET %s returned HTTP %s", service, endpoint, exc.code)
             if exc.code == 401:
                 raise RuntimeError("watchlist provider rejected the access token") from exc
             raise RuntimeError(
                 "watchlist provider request failed with HTTP {}".format(exc.code)
             ) from exc
         except (URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
+            LOGGER.error("%s API request failed: GET %s: %s", service, endpoint, exc)
             raise RuntimeError("watchlist provider request failed: {}".format(exc)) from exc
 
 
@@ -87,10 +104,13 @@ class MALWatchlistClient(_JsonClient):
             "User-Agent": "Otaku-Prime/0.1.2",
         }
         rows = []
+        page = 0
         while url:
+            page += 1
             payload = self._request(url, headers)
             rows.extend(payload.get("data") or [])
             url = ((payload.get("paging") or {}).get("next") or "").strip() or None
+        LOGGER.info("MAL watchlist pages complete: pages=%s raw_rows=%s", page, len(rows))
         return rows
 
 
@@ -109,7 +129,9 @@ class MALWatchlistImportService:
         account = self.accounts.get_credentials(self.user_id, self.provider)
         if not account:
             self.store.replace_provider_snapshot(self.provider, [])
+            LOGGER.info("MAL watchlist fetch skipped: account is not connected")
             return {"provider": self.provider, "connected": False, "imported": 0}
+        LOGGER.info("MAL watchlist fetch started")
         if account.get("token_expires_at") and int(account["token_expires_at"])<=int(time.time())+60:
             access,refresh,expires=self.authenticator.refresh(account.get("refresh_token") or "")
             self.accounts.save(user_id=self.user_id,provider=self.provider,
@@ -142,6 +164,10 @@ class MALWatchlistImportService:
                 "raw": row,
             })
         self.store.replace_provider_snapshot(self.provider, normalized)
+        if not normalized:
+            LOGGER.warning("MAL watchlist fetch completed with no usable anime rows")
+        else:
+            LOGGER.info("MAL watchlist fetch complete: imported=%s", len(normalized))
         return {
             "provider": self.provider,
             "connected": True,
@@ -168,7 +194,9 @@ class KitsuWatchlistClient(_JsonClient):
         entries = []
         anime = {}
         mappings = {}
+        page = 0
         while url:
+            page += 1
             payload = self._request(url, headers)
             entries.extend(payload.get("data") or [])
             for included in payload.get("included") or []:
@@ -177,6 +205,7 @@ class KitsuWatchlistClient(_JsonClient):
                 elif included.get("type") == "mappings" and included.get("id") is not None:
                     mappings[str(included["id"])] = included
             url = ((payload.get("links") or {}).get("next") or "").strip() or None
+        LOGGER.info("Kitsu watchlist pages complete: pages=%s raw_rows=%s", page, len(entries))
         return entries, anime, mappings
 
 
@@ -195,7 +224,9 @@ class KitsuWatchlistImportService:
         account = self.accounts.get_credentials(self.user_id, self.provider)
         if not account:
             self.store.replace_provider_snapshot(self.provider, [])
+            LOGGER.info("Kitsu watchlist fetch skipped: account is not connected")
             return {"provider": self.provider, "connected": False, "imported": 0}
+        LOGGER.info("Kitsu watchlist fetch started")
         if account.get("token_expires_at") and int(account["token_expires_at"])<=int(time.time())+60:
             access,refresh,expires=self.authenticator.refresh(account.get("refresh_token") or "")
             self.accounts.save(user_id=self.user_id,provider=self.provider,
@@ -247,6 +278,10 @@ class KitsuWatchlistImportService:
                 "raw": {"library_entry": entry, "anime": anime},
             })
         self.store.replace_provider_snapshot(self.provider, normalized)
+        if not normalized:
+            LOGGER.warning("Kitsu watchlist fetch completed with no usable anime rows")
+        else:
+            LOGGER.info("Kitsu watchlist fetch complete: imported=%s", len(normalized))
         return {
             "provider": self.provider,
             "connected": True,
@@ -422,8 +457,10 @@ class SimklWatchlistImportService:
         if not account:
             self.store.replace_provider_snapshot(self.provider, [])
             self._clear_state()
+            LOGGER.info("Simkl watchlist fetch skipped: account is not connected")
             return {"provider": self.provider, "connected": False, "imported": 0}
 
+        LOGGER.info("Simkl watchlist fetch started")
         token = account["access_token"]
         activities = self.client.activities(token)
         anime_activity = activities.get("anime") or {}
@@ -441,6 +478,10 @@ class SimklWatchlistImportService:
             self.store.replace_provider_snapshot(self.provider, normalized)
             self._save_state("anime_all", current or "")
             self._save_state("anime_removed", removed or "")
+            if not normalized:
+                LOGGER.warning("Simkl initial watchlist fetch completed with no usable anime rows")
+            else:
+                LOGGER.info("Simkl initial watchlist fetch complete: imported=%s", len(normalized))
             return {
                 "provider": self.provider,
                 "connected": True,
@@ -449,6 +490,7 @@ class SimklWatchlistImportService:
             }
 
         if current and current == previous:
+            LOGGER.info("Simkl watchlist fetch complete: remote activity is unchanged")
             return {
                 "provider": self.provider,
                 "connected": True,
@@ -465,6 +507,7 @@ class SimklWatchlistImportService:
 
         self._save_state("anime_all", current or previous)
         self._save_state("anime_removed", removed or previous_removed or "")
+        LOGGER.info("Simkl delta watchlist fetch complete: imported=%s", count)
         return {
             "provider": self.provider,
             "connected": True,

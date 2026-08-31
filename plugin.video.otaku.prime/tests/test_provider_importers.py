@@ -8,7 +8,8 @@ from resources.lib.users import UserStore
 from resources.lib.database.watchlist_accounts import WatchlistAccountStore
 from resources.lib.database.watchlist_items import WatchlistItemStore
 from resources.lib.watchlist.provider_importers import (
-  MALWatchlistImportService,KitsuWatchlistImportService,SimklWatchlistImportService)
+  MALWatchlistClient,MALWatchlistImportService,KitsuWatchlistImportService,
+  SimklWatchlistImportService)
 
 
 class ProviderImporterTests(unittest.TestCase):
@@ -20,6 +21,19 @@ class ProviderImporterTests(unittest.TestCase):
     def connect(self,provider):
         self.accounts.save(user_id=1,provider=provider,external_user_id="7",
           external_username="user",access_token="token",refresh_token="refresh",token_expires_at=9999999999)
+
+    def test_http_client_logs_sanitized_endpoint_without_query_or_token(self):
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self,*_): return False
+            def read(self): return b'{"data":[],"paging":{}}'
+        client=MALWatchlistClient(opener=lambda request,timeout: Response())
+        with self.assertLogs("otaku_prime.watchlist-provider_importers",level="INFO") as captured:
+            client.fetch("secret-token")
+        output="\n".join(captured.output)
+        self.assertIn("GET https://api.myanimelist.net/v2/users/@me/animelist",output)
+        self.assertNotIn("fields=",output)
+        self.assertNotIn("secret-token",output)
 
     def test_mal_fetch_normalizes_status_progress_and_native_id(self):
         self.connect("mal")

@@ -6,7 +6,8 @@ import unittest
 ROOT=os.path.dirname(os.path.dirname(__file__)); sys.path.insert(0,ROOT)
 from resources.lib.database.watchlist_items import WatchlistItemStore
 from resources.lib.services.watchlist_identity import WatchlistIdentityEnrichmentService
-from resources.lib.services.watchlist_identity import IdentityMappingConflict,SimklIdentityClient
+from resources.lib.services.watchlist_identity import (
+  IdentityMappingConflict,KitsuIdentityClient,ProviderIdentityClient,SimklIdentityClient)
 
 
 class WatchlistIdentityTests(unittest.TestCase):
@@ -164,6 +165,43 @@ class WatchlistIdentityTests(unittest.TestCase):
             def _detail(self,simkl_id): return {"ids":{"simkl":"40634","anilist":"8861","mal":"8861"}}
         result=Client().resolve({"anilist_id":"8861","mal_id":"8861"})
         self.assertEqual({"simkl":"40634","anilist":"8861","mal":"8861"},result)
+
+    def test_exact_kitsu_mapping_finds_mature_title_hidden_from_anime_search(self):
+        seen=[]
+        class Response:
+            def __init__(self,payload): self.payload=payload
+            def __enter__(self): return self
+            def __exit__(self,*_): return False
+            def read(self): return self.payload.encode("utf-8")
+        def opener(request,timeout):
+            seen.append(request.full_url)
+            external_id="113425" if "113425" in request.full_url else "40750"
+            mapping_id="257421" if external_id=="113425" else "253078"
+            site="anilist/anime" if external_id=="113425" else "myanimelist/anime"
+            return Response(
+              '{"data":[{"id":"'+mapping_id+'","attributes":{"externalSite":"'+site+
+              '","externalId":"'+external_id+'"},"relationships":{"item":{"data":'
+              '{"type":"anime","id":"42732"}}}}]}')
+        class Simkl:
+            def resolve(self,item):
+                return {"anilist":"113425","mal":"40750","simkl":"1211761"}
+        client=ProviderIdentityClient(
+          simkl=Simkl(),kitsu=KitsuIdentityClient(opener=opener))
+        result=client.resolve({"anilist_id":"113425","mal_id":"40750",
+                               "simkl_id":"1211761","english_name":"Redo of Healer"})
+        self.assertEqual("42732",result["kitsu"])
+        self.assertEqual(2,len(seen))
+        self.assertTrue(all("/mappings?" in url for url in seen))
+
+    def test_exact_kitsu_mapping_rejects_provider_disagreement(self):
+        class Kitsu:
+            def resolve(self,item):
+                raise IdentityMappingConflict("Kitsu exact provider mappings disagree")
+        class Simkl:
+            def resolve(self,item): return {"anilist":"1","mal":"11","simkl":"31"}
+        with self.assertRaises(IdentityMappingConflict):
+            ProviderIdentityClient(simkl=Simkl(),kitsu=Kitsu()).resolve(
+              {"anilist_id":"1","mal_id":"11"})
 
     def test_identity_progress_callback_fires_in_ten_percent_buckets(self):
         entries=[]
