@@ -4,7 +4,10 @@ import unittest
 
 from resources.lib.database.catalog import CatalogStore
 from resources.lib.database.watchlist_items import WatchlistItemStore
-from resources.lib.services.mediator_tvshow import TVShowMediatorService
+from resources.lib.services.mediator_tvshow import (
+    TVShowMediatorService,
+    watchlist_display_title,
+)
 from resources.lib.services.mediator_endpoint_simkl import SimklMediatorEndpoint
 from resources.lib.services.mediator_helper_simkl import (
     MediatorMetadataPending,
@@ -145,9 +148,10 @@ class WatchlistTVShowMediatorTests(unittest.TestCase):
         placement["episodes"]=[
             {"source_episode_number":1,"episode_number":5,
              "season_number":0,"simkl_id":"remote-episode-1","mal_id":None,
-             "release_date":"2008-12-13"},
+             "title":None,"release_date":"2008-12-13"},
             {"source_episode_number":2,"episode_number":6,
              "season_number":0,"simkl_id":"remote-episode-2","mal_id":None,
+             "title":"A genuine provider episode title",
              "release_date":"2009-01-10"}]
         service=TVShowMediatorService(
             self.watchlist,self.catalog,client=object(),
@@ -159,9 +163,24 @@ class WatchlistTVShowMediatorTests(unittest.TestCase):
         episodes=self.catalog.list_episodes(season["local_id"])
         self.assertEqual(1,result["placed"])
         self.assertEqual(2,len(episodes))
+        self.assertEqual([
+            "BLEACH: Thousand-Year Blood War - The Calamity",
+            "A genuine provider episode title",
+        ],[episode["title"] for episode in episodes])
         for episode in episodes:
             self.assertEqual(("185874","62401","50001","2671730"),tuple(
                 episode[name+"_id"] for name in ("anilist","mal","kitsu","simkl")))
+
+    def test_special_title_fallback_uses_watchlist_title_priority(self):
+        self.assertEqual("English",watchlist_display_title({
+            "english_name":"English","preferred_name":"Preferred",
+            "romaji_name":"Romaji","native_name":"Native",
+            "alternative_titles_json":"[\"Alternative\"]"}))
+        self.assertEqual("Preferred",watchlist_display_title({
+            "preferred_name":"Preferred","romaji_name":"Romaji"}))
+        self.assertEqual("Alternative",watchlist_display_title({
+            "alternative_titles_json":"[\"Alternative\"]"}))
+        self.assertEqual("Untitled",watchlist_display_title({}))
 
     def test_mediator_persists_series_artwork(self):
         placement=self.placement("simkl")

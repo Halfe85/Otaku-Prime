@@ -183,6 +183,48 @@ class LibraryCatalogTests(unittest.TestCase):
         self.assertEqual(["Action","Fantasy","Drama"],detail["genres"])
         self.assertEqual(["Isekai","Magic","Coming of Age"],detail["themes"])
 
+    def test_watchlist_progress_projects_sequential_source_episode_state(self):
+        first=self.catalog.project_watchlist_progress(self.item["local_id"],1)
+        detail=self.catalog.library_series_detail(self.series["local_id"])
+        episodes=detail["seasons"][0]["episodes"]
+
+        self.assertEqual((2,1),(first["episode_count"],first["watched_count"]))
+        self.assertEqual([1,0],[row["watch_status"] for row in episodes])
+
+        second=self.catalog.project_watchlist_progress(self.item["local_id"],2)
+        detail=self.catalog.library_series_detail(self.series["local_id"])
+        self.assertEqual(2,second["watched_count"])
+        self.assertEqual([1,1],[
+            row["watch_status"] for row in detail["seasons"][0]["episodes"]])
+
+        # A later metadata refresh must not reset a projected watch state.
+        refreshed=self.catalog.add_episode(
+            self.season["local_id"],2,source_episode_number=2,title="Return refreshed")
+        self.assertEqual(1,refreshed["watch_status"])
+
+        context=self.catalog.episode_watch_context(self.ep2["local_id"])
+        self.assertEqual(self.item["local_id"],context["watchlist_local_id"])
+        self.assertEqual(2,context["source_episode_number"])
+
+    def test_existing_season_zero_titles_are_backfilled_without_overwriting_metadata(self):
+        db=sqlite3.connect(self.path)
+        try:
+            db.execute("UPDATE seasons SET season_number=0 WHERE local_id=?",
+                       (self.season["local_id"],))
+            db.execute("UPDATE episodes SET title=NULL WHERE local_id=?",
+                       (self.ep1["local_id"],))
+            db.execute("UPDATE episodes SET title='Provider title' WHERE local_id=?",
+                       (self.ep2["local_id"],))
+            db.commit()
+        finally:
+            db.close()
+
+        CatalogStore(self.path,SegmentFactory()).initialize()
+        rows=self.catalog.list_episodes(self.season["local_id"])
+
+        self.assertEqual(["Example Season","Provider title"],
+                         [row["title"] for row in rows])
+
     def test_old_special_franchise_projection_is_removed_and_requeued(self):
         db=sqlite3.connect(self.path)
         try:

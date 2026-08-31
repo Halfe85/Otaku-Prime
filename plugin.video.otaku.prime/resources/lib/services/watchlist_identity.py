@@ -16,7 +16,7 @@ from resources.lib.watchlist.simkl import PACKAGED_CLIENT_ID, SIMKL_API_URL
 LOGGER=get_logger(__name__)
 PROVIDERS=("anilist","mal","kitsu","simkl")
 SPECIAL_FORMATS={
-    "MOVIE","OVA","OAV","ONA","SPECIAL","TV_SPECIAL","TV_SHORT","MUSIC","MUSIC_VIDEO"}
+    "MOVIE","OVA","OAV","OAD","ONA","SPECIAL","TV_SPECIAL","TV_SHORT","MUSIC","MUSIC_VIDEO"}
 
 
 class IdentityMappingConflict(ValueError):

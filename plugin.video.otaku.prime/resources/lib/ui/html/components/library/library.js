@@ -17,6 +17,8 @@
     query: "",
     openSeriesId: null,
     openType: null,
+    openEpisodeId: null,
+    episodeWatchBusy: false,
     detail: null,
     busyTiles: false,
     busyDetail: false,
@@ -195,6 +197,31 @@
     }
   }
 
+  async function postJson(url, body) {
+    var controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    var timeout = window.setTimeout(function () { if (controller) controller.abort(); }, 8000);
+    try {
+      var response = await fetch(url, {
+        method: "POST",
+        headers: { "Accept": "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify(body || {}),
+        cache: "no-store",
+        signal: controller ? controller.signal : undefined
+      });
+      var payload = null;
+      try { payload = await response.json(); } catch (_) { payload = {}; }
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.message || "Prime library update failed.");
+      }
+      return payload;
+    } catch (error) {
+      if (error && error.name === "AbortError") throw new Error("Prime library update timed out.");
+      throw error;
+    } finally {
+      window.clearTimeout(timeout);
+    }
+  }
+
   function filteredSeries() {
     var query = state.query.trim().toLocaleLowerCase();
     var source = state.kind === "movies" ? state.movies : state.series;
@@ -326,14 +353,23 @@
   }
 
   function resetEpisodeModal() {
+    state.openEpisodeId = null;
+    state.episodeWatchBusy = false;
     setSeriesText("library-episode-series", "Series");
     setSeriesText("library-episode-title", "Episode");
     setSeriesText("library-episode-number", "—");
     setSeriesText("library-episode-release", "—");
     setSeriesText("library-episode-runtime", "—");
+    setSeriesText("library-episode-watch-status", "Unwatched");
+    setSeriesText("library-episode-watch-action", "Mark watched");
     setSeriesText("library-episode-overview", "Metadata has not been resolved yet.");
     setSeriesText("library-episode-local-id", "");
     clearRoot("library-episode-cast", "library-muted", "No cast metadata resolved for this episode.");
+    var watchToggle = document.getElementById("library-episode-watch-toggle");
+    if (watchToggle) {
+      watchToggle.disabled = false;
+      watchToggle.setAttribute("aria-pressed", "false");
+    }
     var body = episodeModal && episodeModal.querySelector(".library-episode-body");
     if (body) body.scrollTop = 0;
   }
@@ -739,6 +775,11 @@
   function episodeButton(series, season, episode) {
     var button = element("button", "library-episode-row");
     button.type = "button";
+    var watched = Number(episode.watch_status) === 1;
+    var indicator = element("span", "library-episode-watch-indicator " +
+      (watched ? "watched" : "unwatched"), watched ? "✓" : "○");
+    indicator.setAttribute("aria-label", watched ? "Watched" : "Unwatched");
+    button.appendChild(indicator);
     button.appendChild(element("span", "library-episode-index", "E" + String(episode.episode_number).padStart(2, "0")));
     button.appendChild(element("span", "library-episode-name", text(episode.title, "Episode " + episode.episode_number)));
     button.appendChild(element("span", "library-episode-date", formatDate(episode.release_date)));
@@ -781,8 +822,12 @@
       toggle.appendChild(label);
 
       var episodes = Array.isArray(season.episodes) ? season.episodes : [];
+      var watchedCount = episodes.filter(function (episode) {
+        return Number(episode.watch_status) === 1;
+      }).length;
       var seasonMeta = element("span", "library-season-meta");
       seasonMeta.textContent = episodes.length + (episodes.length === 1 ? " episode" : " episodes");
+      seasonMeta.textContent += " · " + watchedCount + " watched";
       if (season.next_episode_release_date) {
         seasonMeta.textContent += " · Next E" + text(season.next_episode_number, "?") + " " + formatDate(season.next_episode_release_date);
       }
@@ -913,6 +958,7 @@
 
   function openEpisode(series, season, episode) {
     if (!episodeModal) return;
+    state.openEpisodeId = episode.local_id;
     var seriesTitle = text(series.english_name || series.title || series.romaji_name, "Series");
     var seriesHeading = seriesTitle + (series.publish_year ? " (" + series.publish_year + ")" : "");
     setSeriesText("library-episode-series", seriesHeading);
@@ -920,10 +966,57 @@
     setSeriesText("library-episode-number", "Episode " + String(episode.episode_number).padStart(2, "0"));
     setSeriesText("library-episode-release", formatDate(episode.release_date));
     setSeriesText("library-episode-runtime", runtime(episode.runtime_minutes));
+    renderEpisodeWatchStatus(episode);
     setSeriesText("library-episode-overview", episode.overview, "Metadata has not been resolved yet.");
     setSeriesText("library-episode-local-id", "Prime episode · " + episode.local_id + " · Season " + text(season.season_number, "?"));
     renderEpisodeCast(series, season, episode);
     episodeModal.hidden = false;
+  }
+
+  function renderEpisodeWatchStatus(episode) {
+    var watched = Number(episode && episode.watch_status) === 1;
+    var toggle = document.getElementById("library-episode-watch-toggle");
+    setSeriesText("library-episode-watch-status", watched ? "Watched" : "Unwatched");
+    setSeriesText("library-episode-watch-action", watched ? "Mark unwatched" : "Mark watched");
+    if (toggle) {
+      toggle.disabled = state.episodeWatchBusy;
+      toggle.setAttribute("aria-pressed", watched ? "true" : "false");
+    }
+  }
+
+  function findOpenEpisode() {
+    var found = null;
+    mergeSeasonParts(state.detail || {}).some(function (season) {
+      return (season.episodes || []).some(function (episode) {
+        if (episode.local_id !== state.openEpisodeId) return false;
+        found = { season: episode._primeSeasonPart || season, episode: episode };
+        return true;
+      });
+    });
+    return found;
+  }
+
+  async function toggleEpisodeWatchStatus() {
+    if (!state.openEpisodeId || state.episodeWatchBusy) return;
+    var current = findOpenEpisode();
+    if (!current) return;
+    var desired = Number(current.episode.watch_status) !== 1;
+    state.episodeWatchBusy = true;
+    renderEpisodeWatchStatus(current.episode);
+    try {
+      await postJson("/api/library/episodes/" + encodeURIComponent(state.openEpisodeId) +
+        "/watch-status", { watched: desired });
+      state.detailSignature = "";
+      await loadSeriesDetail(state.openSeriesId, false);
+      var refreshed = findOpenEpisode();
+      if (refreshed) openEpisode(state.detail, refreshed.season, refreshed.episode);
+    } catch (error) {
+      setSeriesText("library-episode-watch-action", error.message || "Could not update watch status.");
+    } finally {
+      state.episodeWatchBusy = false;
+      var latest = findOpenEpisode();
+      if (latest) renderEpisodeWatchStatus(latest.episode);
+    }
   }
 
   function closeEpisode() {
@@ -937,6 +1030,8 @@
   document.querySelectorAll("[data-library-episode-close]").forEach(function (node) {
     node.addEventListener("click", closeEpisode);
   });
+  var episodeWatchToggle = document.getElementById("library-episode-watch-toggle");
+  if (episodeWatchToggle) episodeWatchToggle.addEventListener("click", toggleEpisodeWatchStatus);
   document.querySelectorAll("[data-library-people-tab]").forEach(function (node) {
     node.addEventListener("click", function () {
       selectPeopleTab(node.dataset.libraryPeopleTab);

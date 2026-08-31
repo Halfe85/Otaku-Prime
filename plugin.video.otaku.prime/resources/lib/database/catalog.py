@@ -8,12 +8,16 @@ import json
 from contextlib import contextmanager
 
 from resources.lib.logging_config import get_logger
-from resources.lib.services.remote_identity import best_title_similarity,clean_remote_text
+from resources.lib.services.remote_identity import (
+    best_title_similarity,
+    clean_remote_text,
+    item_titles,
+)
 
 
 HEX_SEGMENT_LENGTH=6
 CATALOG_PROJECTION_REVISION="alpha11-split-movie-library-1"
-SPECIAL_SOURCE_FORMATS=("MOVIE","OVA","OAV","ONA","SPECIAL","TV_SPECIAL","MUSIC","MUSIC_VIDEO")
+SPECIAL_SOURCE_FORMATS=("MOVIE","OVA","OAV","OAD","ONA","SPECIAL","TV_SPECIAL","MUSIC","MUSIC_VIDEO")
 LOGGER=get_logger(__name__)
 
 
@@ -326,6 +330,11 @@ class CatalogStore:
                 LOGGER.info(
                     "Copied provider identities onto %s existing special episode rows",
                     special_episode_ids_updated)
+            special_titles_updated=self._backfill_special_episode_titles(db)
+            if special_titles_updated:
+                LOGGER.info(
+                    "Filled watchlist titles onto %s existing Season 00 episode rows",
+                    special_titles_updated)
             self._add_columns(db,"staff",(
                 ("mal_id","TEXT"),("kitsu_id","TEXT"),("simkl_id","TEXT")))
             self._add_columns(db,"characters",(
@@ -515,6 +524,37 @@ class CatalogStore:
                         column),(row["provider_id"],row["local_id"]))
                 updated.add(row["local_id"])
         return len(updated)
+
+    @staticmethod
+    def _backfill_special_episode_titles(db):
+        """Repair empty S00 titles from their originating watchlist records."""
+        if not db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='watchlist_items'"
+        ).fetchone():
+            return 0
+        columns={row[1] for row in db.execute("PRAGMA table_info(watchlist_items)")}
+        title_columns=("english_name","preferred_name","romaji_name","native_name")
+        selected=[name for name in title_columns if name in columns]
+        if not selected:
+            return 0
+        if "alternative_titles_json" in columns:
+            selected.append("alternative_titles_json")
+        rows=db.execute("""SELECT episodes.local_id,{}
+          FROM episodes JOIN seasons ON seasons.local_id=episodes.related_season_id
+          JOIN watchlist_items ON watchlist_items.local_id=seasons.watchlist_local_id
+          WHERE seasons.season_number=0
+            AND (episodes.title IS NULL OR TRIM(episodes.title)='')""".format(
+                ",".join("watchlist_items."+name for name in selected))).fetchall()
+        updated=0
+        for row in rows:
+            titles=item_titles(dict(row))
+            title=next((str(clean_remote_text(value) or "").strip()
+                        for value in titles
+                        if str(clean_remote_text(value) or "").strip()),"Untitled")
+            db.execute("""UPDATE episodes SET title=?,updated_at=CURRENT_TIMESTAMP
+              WHERE local_id=?""",(title,row["local_id"]))
+            updated+=1
+        return updated
 
     def _new_local_id(self,db,table,prefix=""):
         for _ in range(256):
@@ -1206,7 +1246,7 @@ class CatalogStore:
             return dict(db.execute("SELECT * FROM seasons WHERE local_id=?",(local_id,)).fetchone())
 
     def add_episode(self,season_id,episode_number,source_episode_number=None,mal_id=None,simkl_id=None,
-                    anilist_id=None,kitsu_id=None,watch_status=False,release_date=None,title=None,
+                    anilist_id=None,kitsu_id=None,watch_status=None,release_date=None,title=None,
                     overview=None,runtime_minutes=None):
         number=int(episode_number)
         title=clean_remote_text(title)
@@ -1215,6 +1255,7 @@ class CatalogStore:
         incoming_mal=str(mal_id) if mal_id not in (None,"") else None
         incoming_kitsu=str(kitsu_id) if kitsu_id not in (None,"") else None
         incoming_simkl=str(simkl_id) if simkl_id not in (None,"") else None
+        incoming_watch=(int(bool(watch_status)) if watch_status is not None else None)
         runtime=int(runtime_minutes) if runtime_minutes not in (None,"") else None
         with self._connection() as db:
             row=db.execute("SELECT * FROM episodes WHERE related_season_id=? AND episode_number=?",
@@ -1225,9 +1266,11 @@ class CatalogStore:
                   kitsu_id=COALESCE(?,kitsu_id),simkl_id=COALESCE(?,simkl_id),
                   title=COALESCE(?,title),overview=COALESCE(?,overview),
                   runtime_minutes=COALESCE(?,runtime_minutes),release_date=COALESCE(?,release_date),
-                  updated_at=CURRENT_TIMESTAMP WHERE local_id=?""",
+                  watch_status=COALESCE(?,watch_status),updated_at=CURRENT_TIMESTAMP
+                  WHERE local_id=?""",
                   (int(source_episode_number or number),incoming_anilist,incoming_mal,
-                   incoming_kitsu,incoming_simkl,title,overview,runtime,release_date,row["local_id"]))
+                   incoming_kitsu,incoming_simkl,title,overview,runtime,release_date,
+                   incoming_watch,row["local_id"]))
                 return dict(db.execute("SELECT * FROM episodes WHERE local_id=?",(row["local_id"],)).fetchone())
             if not db.execute("SELECT 1 FROM seasons WHERE local_id=?",(season_id,)).fetchone():
                 raise KeyError("season not found")
@@ -1240,6 +1283,50 @@ class CatalogStore:
                incoming_simkl,title,overview,runtime,int(bool(watch_status)),release_date,
                int(source_episode_number or number)))
             return dict(db.execute("SELECT * FROM episodes WHERE local_id=?",(local_id,)).fetchone())
+
+    def project_watchlist_progress(self,watchlist_local_id,progress):
+        """Project one sequential tracker progress counter onto catalogue episodes."""
+        watchlist_id=str(watchlist_local_id)
+        consumed=max(0,int(progress or 0))
+        with self._connection() as db:
+            season_count=int(db.execute(
+                "SELECT COUNT(*) FROM seasons WHERE watchlist_local_id=?",
+                (watchlist_id,)).fetchone()[0])
+            if not season_count:
+                return {"watchlist_local_id":watchlist_id,"progress":consumed,
+                        "season_count":0,"episode_count":0,"watched_count":0}
+            db.execute("""UPDATE episodes SET watch_status=CASE
+              WHEN COALESCE(source_episode_number,episode_number)<=? THEN 1 ELSE 0 END,
+              updated_at=CURRENT_TIMESTAMP WHERE related_season_id IN
+              (SELECT local_id FROM seasons WHERE watchlist_local_id=?)""",
+              (consumed,watchlist_id))
+            counts=db.execute("""SELECT COUNT(*) AS episode_count,
+              COALESCE(SUM(watch_status),0) AS watched_count FROM episodes
+              WHERE related_season_id IN
+              (SELECT local_id FROM seasons WHERE watchlist_local_id=?)""",
+              (watchlist_id,)).fetchone()
+            return {"watchlist_local_id":watchlist_id,"progress":consumed,
+                    "season_count":season_count,
+                    "episode_count":int(counts["episode_count"] or 0),
+                    "watched_count":int(counts["watched_count"] or 0)}
+
+    def episode_watch_context(self,episode_id):
+        """Resolve a Prime episode to its owning watchlist item and source number."""
+        with self._connection() as db:
+            row=db.execute("""SELECT episodes.local_id AS episode_local_id,
+              episodes.watch_status,episodes.episode_number,
+              COALESCE(episodes.source_episode_number,episodes.episode_number)
+                AS source_episode_number,
+              seasons.local_id AS season_local_id,seasons.watchlist_local_id,
+              watchlist_items.status AS watchlist_status,
+              watchlist_items.progress AS watchlist_progress,
+              watchlist_items.episode_count AS watchlist_episode_count
+              FROM episodes JOIN seasons
+                ON seasons.local_id=episodes.related_season_id
+              LEFT JOIN watchlist_items
+                ON watchlist_items.local_id=seasons.watchlist_local_id
+              WHERE episodes.local_id=?""",(str(episode_id),)).fetchone()
+            return dict(row) if row else None
 
     @staticmethod
     def _watchlist_release_fields(db):

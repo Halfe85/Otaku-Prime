@@ -11,10 +11,28 @@ from resources.lib.services.mediator_helper_simkl import (
 )
 from resources.lib.services.mediator_processor import MediatorProcessor
 from resources.lib.services.mediator_fanarttv import FanartTVMediator
+from resources.lib.services.remote_identity import clean_remote_text,item_titles
 
 LOGGER=get_logger(__name__)
 SPECIAL_EPISODE_FORMATS={
-    "MOVIE","OVA","OAV","ONA","SPECIAL","TV_SPECIAL","MUSIC","MUSIC_VIDEO"}
+    "MOVIE","OVA","OAV","OAD","ONA","SPECIAL","TV_SPECIAL","MUSIC","MUSIC_VIDEO"}
+
+
+def watchlist_display_title(item):
+    """Return the same stable title fallback used by Watchlist Management."""
+    for value in item_titles(item or {}):
+        title=str(clean_remote_text(value) or "").strip()
+        if title:
+            return title
+    return "Untitled"
+
+
+def catalogue_episode_title(item,episode,is_special):
+    """Preserve provider episode metadata, filling only empty S00 titles."""
+    provider_title=str(clean_remote_text((episode or {}).get("title")) or "").strip()
+    if provider_title:
+        return provider_title
+    return watchlist_display_title(item) if is_special else None
 
 
 class MediatorRunCancelled(RuntimeError):
@@ -263,7 +281,8 @@ class TVShowMediatorService:
         media_format=str(
             season_data.get("media_type") or item.get("media_format") or ""
         ).upper().replace(" ","_").replace("-","_")
-        special_episode=media_format in SPECIAL_EPISODE_FORMATS
+        special_episode=(int(season_data.get("number") or 0)==0 or
+                         media_format in SPECIAL_EPISODE_FORMATS)
         for episode in placement_episodes:
             self._ensure_current(item["local_id"])
             provider_ids={
@@ -276,7 +295,10 @@ class TVShowMediatorService:
                 mal_id=provider_ids["mal"] or episode.get("mal_id"),
                 kitsu_id=provider_ids["kitsu"] or episode.get("kitsu_id"),
                 simkl_id=provider_ids["simkl"] or episode.get("simkl_id"),
-                release_date=episode.get("release_date"),title=episode.get("title"),
+                watch_status=(int(episode["source_episode_number"])<=
+                              max(0,int(item.get("progress") or 0))),
+                release_date=episode.get("release_date"),
+                title=catalogue_episode_title(item,episode,special_episode),
                 overview=episode.get("overview"),runtime_minutes=episode.get("runtime_minutes"))
             self.catalog_store.replace_media_credits(
                 episode.get("cast"),episode_id=stored_episode["local_id"],

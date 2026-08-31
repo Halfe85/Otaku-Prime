@@ -134,9 +134,11 @@
 @keyframes library-season-slide { from { opacity:0; transform:translateY(-8px) scaleY(.96); } to { opacity:1; transform:translateY(0) scaleY(1); } }
 .library-season-cast { padding:13px 14px 15px; border-bottom:1px solid rgba(43,51,72,.58); background:rgba(17,22,35,.62); }
 .library-season-cast .library-cast { margin-top:9px; }
-.library-episode-row { width:100%; min-height:48px; padding:9px 14px; border:0; border-bottom:1px solid rgba(43,51,72,.58); background:transparent; color:var(--text); display:grid; grid-template-columns:58px minmax(0,1fr) 120px; gap:12px; align-items:center; text-align:left; cursor:pointer; }
+.library-episode-row { width:100%; min-height:48px; padding:9px 14px; border:0; border-bottom:1px solid rgba(43,51,72,.58); background:transparent; color:var(--text); display:grid; grid-template-columns:24px 58px minmax(0,1fr) 120px; gap:12px; align-items:center; text-align:left; cursor:pointer; }
 .library-episode-row:last-child { border-bottom:0; }
 .library-episode-row:hover,.library-episode-row:focus-visible { background:rgba(139,124,255,.08); outline:none; }
+.library-episode-watch-indicator { width:22px; height:22px; display:grid; place-items:center; border:1px solid #515a77; border-radius:50%; color:#8490aa; font-size:13px; font-weight:800; line-height:1; }
+.library-episode-watch-indicator.watched { border-color:#4ad49d; background:rgba(74,212,157,.14); color:#65e1ae; }
 .library-episode-index { color:#9f95ff; font-weight:700; }
 .library-episode-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .library-episode-date { color:var(--muted); font-size:12px; text-align:right; }
@@ -145,7 +147,15 @@
 .library-episode-backdrop { background:rgba(4,6,12,.52); }
 .library-episode-card { position:relative; z-index:1; width:min(760px,94vw); max-height:86dvh; display:grid; grid-template-rows:auto minmax(0,1fr) auto; border:1px solid #484f70; border-radius:18px; background:linear-gradient(160deg,#1b2133,#0e121d); box-shadow:0 28px 85px rgba(0,0,0,.62); overflow:hidden; }
 .library-episode-body { min-height:0; overflow:auto; padding:20px 22px 28px; }
-.episode-facts { grid-template-columns:repeat(2,minmax(0,1fr)); }
+.episode-facts { grid-template-columns:repeat(3,minmax(0,1fr)); }
+.library-episode-watch-toggle { min-width:0; padding:0; border:0; background:transparent; color:inherit; display:flex; flex-direction:column; align-items:flex-start; text-align:left; cursor:pointer; }
+.library-episode-watch-toggle > span { color:var(--muted); font-size:12px; }
+.library-episode-watch-toggle > strong { color:#65e1ae; }
+.library-episode-watch-toggle[aria-pressed="false"] > strong { color:var(--text); }
+.library-episode-watch-toggle > small { margin-top:4px; color:#9f95ff; }
+.library-episode-watch-toggle:hover > small,.library-episode-watch-toggle:focus-visible > small { text-decoration:underline; }
+.library-episode-watch-toggle:focus-visible { outline:2px solid #8b7cff; outline-offset:5px; border-radius:2px; }
+.library-episode-watch-toggle:disabled { cursor:wait; opacity:.58; }
 .episode-trivia { padding-bottom:20px; }
 .library-episode-cast-section { padding-bottom:0; }
 
@@ -167,8 +177,9 @@
   .library-classification { grid-template-columns:1fr; }
   .library-season-toggle { grid-template-columns:minmax(0,1fr) auto; }
   .library-season-meta { display:none; }
-  .library-episode-row { grid-template-columns:48px minmax(0,1fr); }
-  .library-episode-date { grid-column:2; text-align:left; }
+  .episode-facts { grid-template-columns:1fr; }
+  .library-episode-row { grid-template-columns:24px 48px minmax(0,1fr); }
+  .library-episode-date { grid-column:3; text-align:left; }
   .library-cast,.library-cast.compact { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .library-people-grid { grid-template-columns:1fr; }
   .library-people-tabs { display:flex; }

@@ -49,7 +49,12 @@ def _now_iso():
 
 
 class WatchlistProviderWriter:
-    """Push one canonical Prime status/progress state to tracker services."""
+    """Push Prime state using each tracker's native representation.
+
+    AniList, MAL and Kitsu receive a sequential progress counter.  Simkl is
+    different: its history API receives explicit episode additions/removals for
+    the range changed by Prime's canonical progress boundary.
+    """
 
     def __init__(self, accounts, user_id=1, timeout=20, opener=None,
                  mal_authenticator=None, kitsu_authenticator=None,
@@ -262,6 +267,8 @@ class WatchlistProviderWriter:
             return {"provider": "simkl", "skipped": True, "reason": "missing_provider_id"}
         old_progress = int((provider_entry or {}).get("progress") or 0)
         new_progress = max(0, int(item.get("progress") or 0))
+        # Unlike the other trackers, Simkl stores episode history.  Translate
+        # the changed Prime boundary to concrete episode numbers here.
         if new_progress > old_progress:
             self._simkl_post(account, "/sync/history", {
                 "shows": [{

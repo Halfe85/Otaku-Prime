@@ -34,7 +34,8 @@ MAX_FORM_BYTES = 16 * 1024
 
 
 def create_server(host: str, port: int, user_store, app_log_store=None,
-                  on_watchlist_changed=None,on_watchlist_state_changed=None) -> ThreadingHTTPServer:
+                  on_watchlist_changed=None,on_watchlist_state_changed=None,
+                  on_episode_watch_state_changed=None) -> ThreadingHTTPServer:
     auth = AuthService(user_store)
     authenticator_api = AuthenticatorAPI()
     watchlist_accounts = WatchlistAccountStore(user_store.db_path)
@@ -461,6 +462,31 @@ def create_server(host: str, port: int, user_store, app_log_store=None,
 
         def do_POST(self):
             path = self.path.split("?", 1)[0]
+
+            if path.startswith("/api/library/episodes/") and path.endswith("/watch-status"):
+                if not self._current_user():
+                    self._send_json(401,{"ok":False,"message":"Sign in again."}); return
+                episode_id=path[len("/api/library/episodes/"):-len("/watch-status")].strip("/").lower()
+                if len(episode_id)!=18 or any(char not in "0123456789abcdef" for char in episode_id):
+                    self._send_json(400,{"ok":False,"message":"Invalid Prime episode ID."}); return
+                payload=self._read_api_payload()
+                watched=payload.get("watched")
+                if not isinstance(watched,bool):
+                    self._send_json(400,{"ok":False,"message":"watched must be true or false."}); return
+                if not on_episode_watch_state_changed:
+                    self._send_json(503,{"ok":False,"message":"Episode watch-state manager is unavailable."}); return
+                try:
+                    result=on_episode_watch_state_changed(
+                        episode_id,watched=watched,source="web-ui")
+                except KeyError as exc:
+                    self._send_json(404,{"ok":False,"message":str(exc)}); return
+                except ValueError as exc:
+                    self._send_json(400,{"ok":False,"message":str(exc)}); return
+                except Exception:
+                    LOGGER.exception("Episode watch-state update failed for %s",episode_id)
+                    self._send_json(500,{"ok":False,"message":"Could not update watch status."}); return
+                self._send_json(200,dict({"ok":True},**result))
+                return
 
             if path == "/api/preferences/mature":
                 if not self._current_user():

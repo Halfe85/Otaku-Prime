@@ -291,5 +291,51 @@ class Alpha11WatchlistUITests(unittest.TestCase):
             finally:
                 connection.close(); server.shutdown(); server.server_close(); thread.join(timeout=3)
 
+    def test_library_episode_watch_state_ui_and_api(self):
+        page=render_home(
+            {"username":"admin","role":"admin"},active_tab="library",
+            watchlist_accounts={})
+        script=read_static_asset("components/library/library.js")[1].decode("utf-8")
+        styles=read_static_asset("components/library/library.css")[1].decode("utf-8")
+
+        self.assertIn('id="library-episode-watch-toggle"',page)
+        self.assertIn("episode.watch_status",script)
+        self.assertIn('watchedCount + " watched"',script)
+        self.assertIn('"/watch-status", { watched: desired }',script)
+        self.assertIn("library-episode-watch-indicator",styles)
+
+        with tempfile.TemporaryDirectory() as directory:
+            database=os.path.join(directory,"users.sqlite")
+            users=UserStore(database); users.initialize()
+            calls=[]
+            def update(episode_id,watched=None,source=None):
+                calls.append((episode_id,watched,source))
+                return {"episode_id":episode_id,"watch_status":watched,"progress":3}
+            try:
+                server=create_server(
+                    "127.0.0.1",0,users,on_episode_watch_state_changed=update)
+            except PermissionError:
+                self.skipTest("sandbox does not permit local listener sockets")
+            thread=threading.Thread(target=server.serve_forever,daemon=True); thread.start()
+            connection=None
+            try:
+                connection=http.client.HTTPConnection("127.0.0.1",server.server_port,timeout=3)
+                body=urlencode({"username":"admin","password":"admin"})
+                connection.request("POST","/login",body,{"Content-Type":"application/x-www-form-urlencoded"})
+                response=connection.getresponse(); cookie=response.getheader("Set-Cookie").split(";",1)[0]
+                response.read(); connection.close()
+                connection=http.client.HTTPConnection("127.0.0.1",server.server_port,timeout=3)
+                payload=json.dumps({"watched":True})
+                episode_id="abcdef123456789abc"
+                connection.request("POST","/api/library/episodes/{}/watch-status".format(episode_id),
+                                   payload,{"Content-Type":"application/json","Cookie":cookie})
+                response=connection.getresponse(); result=json.loads(response.read().decode("utf-8"))
+                self.assertEqual(200,response.status)
+                self.assertTrue(result["watch_status"])
+                self.assertEqual([(episode_id,True,"web-ui")],calls)
+            finally:
+                if connection: connection.close()
+                server.shutdown(); server.server_close(); thread.join(timeout=3)
+
 
 if __name__=="__main__": unittest.main()

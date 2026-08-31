@@ -15,7 +15,7 @@ from resources.lib.services.mediator_helper_simkl import (
 )
 from resources.lib.watchlist.mal import MAL_API_URL,MAL_CLIENT_ID
 
-SPECIAL_FORMATS={"movie","ova","ona","special","tv_special","music"}
+SPECIAL_FORMATS={"movie","ova","oav","oad","ona","special","tv_special","music","music_video"}
 SEASON_FORMATS={"tv"}
 MAX_PREQUEL_DEPTH=64
 JIKAN_API_URL="https://api.jikan.moe/v4"

@@ -23,6 +23,7 @@ from resources.lib.services.watchlist_watchdog_release import (
 )
 from resources.lib.services.watchlist_provider_writer import WatchlistProviderWriter
 from resources.lib.services.mediator_tvshow import TVShowMediatorService
+from resources.lib.services.watch_state_projector import CatalogWatchStateProjector
 from resources.lib.watchlist.anilist_sync import AniListWatchlistImportService
 from resources.lib.watchlist.provider_importers import (
     MALWatchlistImportService,
@@ -133,6 +134,9 @@ def main() -> None:
     )
     identity_enricher.on_progress = watchlist_watchdog.identity_progress
     identity_enricher.on_complete = watchlist_watchdog.identity_complete
+    watch_state_projector=CatalogWatchStateProjector(catalog,watchlist_watchdog)
+    watchlist_watchdog.subscribe(watch_state_projector.handle_watchlist_event)
+    watch_state_projector.project_all(watchlist_items.list_all())
 
     try:
         server = create_server(
@@ -142,6 +146,7 @@ def main() -> None:
             app_logs,
             on_watchlist_changed=watchlist_watchdog.request_remote_sync,
             on_watchlist_state_changed=watchlist_watchdog.update_item,
+            on_episode_watch_state_changed=watch_state_projector.update_episode,
         )
     except OSError as exc:
         xbmc.log(

@@ -13,7 +13,7 @@ from resources.lib.services.mediator_helper_simkl import (
 )
 
 KITSU_API_URL="https://kitsu.io/api/edge"
-SPECIAL_FORMATS={"movie","ova","ona","special","music"}
+SPECIAL_FORMATS={"movie","ova","oav","oad","ona","special","tv_special","music","music_video"}
 SEASON_FORMATS={"tv","tv_special"}
 MAX_PREQUEL_DEPTH=64
 
