@@ -325,6 +325,50 @@ class WatchlistTVShowMediatorTests(unittest.TestCase):
             placement["season"]["last_episode"]))
         self.assertEqual([8,9],[row["episode_number"] for row in placement["episodes"]])
 
+    def test_simkl_long_running_item_spans_every_mapped_tvdb_season(self):
+        class Client:
+            def anime(self,_simkl_id):
+                return {"ids":{"simkl":"2671730","tvdb":"74796"},
+                        "title":"Long Runner","anime_type":"tv","relations":[],
+                        "mapped_tvdb_seasons":[1,2]}
+            def tv_franchise(self,_target,root_detail=None):
+                return {"name":"Long Runner","simkl_id":"2671730",
+                        "tvdb_id":"74796","source":"simkl_tvdb_anime_group"}
+            def episodes(self,_simkl_id):
+                return [
+                    {"type":"episode","episode":1,"ids":{"simkl_id":"1"},
+                     "tvdb":{"season":1,"episode":1}},
+                    {"type":"episode","episode":2,"ids":{"simkl_id":"2"},
+                     "tvdb":{"season":1,"episode":2}},
+                    {"type":"episode","episode":3,"ids":{"simkl_id":"3"},
+                     "tvdb":{"season":2,"episode":1}},
+                    {"type":"episode","episode":4,"ids":{"simkl_id":"4"},
+                     "tvdb":{"season":2,"episode":2}},
+                ]
+
+        placement=SimklMediatorEndpoint(Client()).resolve({"simkl_id":"2671730"})
+
+        self.assertEqual([1,2],[row["season"]["number"]
+                                for row in placement["seasons"]])
+        self.assertEqual([[1,2],[1,2]],[[episode["episode_number"]
+                                        for episode in row["episodes"]]
+                                       for row in placement["seasons"]])
+
+        service=TVShowMediatorService(
+            self.watchlist,self.catalog,client=object(),
+            processor=HelperProcessor(placement),fanart=NoFanart())
+        result=service.run_once()
+        series=self.catalog.list_series()[0]
+        seasons=self.catalog.list_seasons(series["local_id"])
+
+        self.assertEqual(1,result["placed"])
+        self.assertEqual([1,2],[row["season_number"] for row in seasons])
+        self.assertEqual([2,2],[len(self.catalog.list_episodes(row["local_id"]))
+                                for row in seasons])
+        self.assertTrue(all(
+            episode["watchlist_local_id"]==self.prime_id
+            for season in seasons for episode in self.catalog.list_episodes(season["local_id"])))
+
     def test_simkl_mediator_uses_only_the_canonical_simkl_id(self):
         class Client:
             def exact_simkl_id(self,*args): raise AssertionError("mediator must not search Simkl with a foreign ID")

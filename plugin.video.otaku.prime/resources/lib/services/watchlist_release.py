@@ -114,18 +114,35 @@ class WatchlistReleaseManager:
     def _catalog_rows(db, local_id):
         if not WatchlistReleaseManager._table_exists(db, "seasons"):
             return None, []
-        season = db.execute(
-            "SELECT * FROM seasons WHERE watchlist_local_id=?",
-            (str(local_id),),
-        ).fetchone()
-        if not season:
+        if WatchlistReleaseManager._table_exists(db,"season_watchlist_links"):
+            seasons=db.execute("""SELECT seasons.* FROM seasons
+              JOIN season_watchlist_links link ON link.season_local_id=seasons.local_id
+              WHERE link.watchlist_local_id=? ORDER BY seasons.season_number,seasons.local_id""",
+              (str(local_id),)).fetchall()
+        else:
+            seasons=db.execute(
+                "SELECT * FROM seasons WHERE watchlist_local_id=? ORDER BY season_number,local_id",
+                (str(local_id),)).fetchall()
+        if not seasons:
             return None, []
+        season=dict(seasons[0])
+        season["local_id"]=",".join(str(row["local_id"]) for row in seasons)
+        dates=[row["release_date"] for row in seasons if row["release_date"]]
+        season["release_date"]=min(dates) if dates else None
+        season["updated_at"]=max(str(row["updated_at"]) for row in seasons)
         if not WatchlistReleaseManager._table_exists(db, "episodes"):
             return season, []
-        episodes = db.execute(
-            "SELECT * FROM episodes WHERE related_season_id=? ORDER BY episode_number,local_id",
-            (season["local_id"],),
-        ).fetchall()
+        episode_columns={row[1] for row in db.execute("PRAGMA table_info(episodes)")}
+        if "watchlist_local_id" in episode_columns:
+            episodes=db.execute("""SELECT * FROM episodes WHERE watchlist_local_id=?
+              ORDER BY source_episode_number,related_season_id,episode_number,local_id""",
+              (str(local_id),)).fetchall()
+        else:
+            ids=[row["local_id"] for row in seasons]
+            placeholders=",".join("?" for _ in ids)
+            episodes=db.execute("""SELECT * FROM episodes WHERE related_season_id IN ({})
+              ORDER BY source_episode_number,related_season_id,episode_number,local_id""".format(
+                  placeholders),ids).fetchall()
         return season, episodes
 
     @staticmethod

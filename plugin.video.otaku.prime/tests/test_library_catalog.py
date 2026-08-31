@@ -225,6 +225,45 @@ class LibraryCatalogTests(unittest.TestCase):
         self.assertEqual(["Example Season","Provider title"],
                          [row["title"] for row in rows])
 
+    def test_season_zero_is_shared_by_distinct_watchlist_items(self):
+        self.watchlist.replace_provider_snapshot("mal",[{
+            "provider_item_id":"998","ids":{"mal":"998"},
+            "english_name":"First Special","list_status":"PLANNING",
+            "progress":0,"episode_count":1,"media_format":"OAD","raw":{},
+        }])
+        self.watchlist.replace_provider_snapshot("kitsu",[{
+            "provider_item_id":"999","ids":{"kitsu":"999"},
+            "english_name":"Second Special","list_status":"PLANNING",
+            "progress":0,"episode_count":1,"media_format":"OAD","raw":{},
+        }])
+        self.watchlist.finalize_merge()
+        first_item=next(row for row in self.watchlist.list_all()
+                        if row["mal_id"]=="998")
+        second=next(row for row in self.watchlist.list_all()
+                    if row["kitsu_id"]=="999")
+        series=self.catalog.get_or_create_series(
+            english_name="Shared Specials",root_anilist_id="shared-special-root")
+        first_season=self.catalog.add_watchlist_season(
+            series["local_id"],first_item,season_number=0,
+            provider_path="anilist",placement_source="special")
+        second_season=self.catalog.add_watchlist_season(
+            series["local_id"],second,season_number=0,
+            provider_path="mal",placement_source="special")
+
+        first=self.catalog.add_episode(
+            first_season["local_id"],1,source_episode_number=1,
+            watchlist_local_id=first_item["local_id"],title="First Special")
+        second_episode=self.catalog.add_episode(
+            second_season["local_id"],1,source_episode_number=1,
+            watchlist_local_id=second["local_id"],title="Second Special")
+
+        self.assertEqual(first_season["local_id"],second_season["local_id"])
+        self.assertEqual((1,2),(first["episode_number"],second_episode["episode_number"]))
+        self.assertEqual(1,len(self.catalog.list_seasons(series["local_id"])))
+        self.assertEqual({first_item["local_id"],second["local_id"]},
+                         {row["watchlist_local_id"] for row in
+                          self.catalog.list_episodes(first_season["local_id"])})
+
     def test_old_special_franchise_projection_is_removed_and_requeued(self):
         db=sqlite3.connect(self.path)
         try:

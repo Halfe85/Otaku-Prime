@@ -428,7 +428,6 @@ class SimklMediatorHelper:
                          root.get("status") or root.get("release_status"),
             "cast":_cast_entries(target) if _cast_entries(target) is not None else _cast_entries(root),
         })
-        season_number,number_source=_season_number(target,path)
         target_type=str(target.get("anime_type") or "").lower()
         episodes=_episodes(client.episodes(simkl_id),target_type in SPECIAL_MEDIA_TYPES)
         if not episodes:
@@ -436,8 +435,37 @@ class SimklMediatorHelper:
                 "Simkl returned no episodes for the requested watchlist item")
         unmapped=[row["source_episode_number"] for row in episodes
                   if row["season_number"] is None or row["episode_number"] is None]
-        seasons={row["season_number"] for row in episodes if row["season_number"] is not None}
         if unmapped: raise MediatorPlacementError("Episodes lack franchise coordinates: {}".format(unmapped))
+        mapped=sorted({int(value) for value in target.get("mapped_tvdb_seasons") or []})
+        coordinate_seasons=sorted({int(row["season_number"]) for row in episodes
+                                   if row.get("season_number") is not None})
+        if len(mapped)<=1 and len(coordinate_seasons)>1:
+            mapped=coordinate_seasons
+        if len(mapped)>1:
+            components=[]
+            for mapped_number in mapped:
+                rows=sorted((row for row in episodes
+                             if row["season_number"]==mapped_number),
+                            key=lambda row:row["episode_number"])
+                if not rows:
+                    raise MediatorMetadataPending(
+                        "Simkl returned no episodes for mapped season {}".format(mapped_number))
+                numbers=[row["episode_number"] for row in rows]
+                if numbers!=list(range(numbers[0],numbers[-1]+1)):
+                    raise MediatorPlacementError(
+                        "Simkl season {} coordinates contain gaps".format(mapped_number))
+                components.append({"season":{
+                    "number":mapped_number,"number_source":"mapped_tvdb_seasons",
+                    "name":"{} season {}".format(_remote_title(target),mapped_number),
+                    "media_type":target_type,"first_episode":numbers[0],
+                    "last_episode":numbers[-1]},"episodes":rows})
+            return {"provider_path":self.provider,"provider_id":simkl_id,
+                    "identity_repair":identity_repair,"identity_score":identity_score,
+                    "tv_show":franchise,"season":components[0]["season"],
+                    "episodes":components[0]["episodes"],"seasons":components,
+                    "relation_path":[str((node.get("ids") or {}).get("simkl")) for node in path]}
+        season_number,number_source=_season_number(target,path)
+        seasons={row["season_number"] for row in episodes if row["season_number"] is not None}
         if seasons!={season_number}:
             raise MediatorPlacementError("Episode coordinates {} disagree with season {}".format(
                 sorted(seasons),season_number))

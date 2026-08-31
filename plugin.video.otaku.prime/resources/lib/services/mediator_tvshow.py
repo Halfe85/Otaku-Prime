@@ -193,6 +193,18 @@ class TVShowMediatorService:
         self._ensure_current(item["local_id"])
         provider=placement["provider_path"]
         show=placement["tv_show"]
+        components=placement.get("seasons") or []
+        if components:
+            stored=[]; series=None
+            for component in components:
+                child=dict(placement)
+                child.pop("seasons",None)
+                child["season"]=component["season"]
+                child["episodes"]=component["episodes"]
+                series,season=self._persist_placement(
+                    item,child,placement_state=placement_state)
+                stored.append(season)
+            return series,stored
         season_data=placement["season"]
         if placement.get("library_type")=="movie":
             movie=self.catalog_store.add_watchlist_movie(
@@ -299,7 +311,8 @@ class TVShowMediatorService:
                               max(0,int(item.get("progress") or 0))),
                 release_date=episode.get("release_date"),
                 title=catalogue_episode_title(item,episode,special_episode),
-                overview=episode.get("overview"),runtime_minutes=episode.get("runtime_minutes"))
+                overview=episode.get("overview"),runtime_minutes=episode.get("runtime_minutes"),
+                watchlist_local_id=item["local_id"])
             self.catalog_store.replace_media_credits(
                 episode.get("cast"),episode_id=stored_episode["local_id"],
                 source_provider=episode.get("cast_source") or provider)
@@ -316,11 +329,23 @@ class TVShowMediatorService:
         self._ensure_current(item["local_id"])
         provider=placement["provider_path"]
         show=placement["tv_show"]; season_data=placement["season"]
+        if placement.get("seasons"):
+            removed=self.catalog_store.reset_multiseason_watchlist_projection(
+                item["local_id"])
+            if removed:
+                LOGGER.info(
+                    "Removed %s obsolete episodes before rebuilding Prime item %s "
+                    "across multiple seasons",removed,item["local_id"])
         self._persist_placement(item,placement,placement_state="COMPLETE")
         if placement.get("library_type")=="movie":
             LOGGER.info("Mediator placed Prime item %s through %s in Movies as %s",
                         item["local_id"],provider,
                         season_data.get("name") or show.get("name"))
+        elif placement.get("seasons"):
+            numbers=[component["season"]["number"] for component in placement["seasons"]]
+            LOGGER.info(
+                "Mediator placed Prime item %s through %s across seasons %s-%s",
+                item["local_id"],provider,min(numbers),max(numbers))
         else:
             LOGGER.info("Mediator placed Prime item %s through %s as %s S%02dE%02d-E%02d",
                         item["local_id"],provider,show.get("name"),season_data["number"],

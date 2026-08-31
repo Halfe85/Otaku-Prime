@@ -112,11 +112,11 @@ class CatalogStore:
               local_id TEXT PRIMARY KEY
                 CHECK(length(local_id)=12 AND local_id NOT GLOB '*[^0-9a-f]*'),
               related_series_id TEXT NOT NULL,
-              watchlist_local_id TEXT NOT NULL UNIQUE,
-              anilist_id TEXT UNIQUE,
-              mal_id TEXT UNIQUE,
-              kitsu_id TEXT UNIQUE,
-              simkl_id TEXT UNIQUE,
+              watchlist_local_id TEXT,
+              anilist_id TEXT,
+              mal_id TEXT,
+              kitsu_id TEXT,
+              simkl_id TEXT,
               season_number INTEGER CHECK(season_number IS NULL OR season_number>=0),
               provider_path TEXT,
               placement_source TEXT,
@@ -137,11 +137,22 @@ class CatalogStore:
             );
             CREATE INDEX IF NOT EXISTS ix_seasons_series
               ON seasons(related_series_id,season_number);
+            CREATE TABLE IF NOT EXISTS season_watchlist_links(
+              season_local_id TEXT NOT NULL,
+              watchlist_local_id TEXT NOT NULL,
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY(season_local_id,watchlist_local_id),
+              FOREIGN KEY(season_local_id) REFERENCES seasons(local_id) ON DELETE CASCADE,
+              FOREIGN KEY(watchlist_local_id) REFERENCES watchlist_items(local_id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS ix_season_watchlist_item
+              ON season_watchlist_links(watchlist_local_id,season_local_id);
 
             CREATE TABLE IF NOT EXISTS episodes(
               local_id TEXT PRIMARY KEY
                 CHECK(length(local_id)=18 AND local_id NOT GLOB '*[^0-9a-f]*'),
               related_season_id TEXT NOT NULL,
+              watchlist_local_id TEXT,
               episode_number INTEGER NOT NULL CHECK(episode_number>0),
               source_episode_number INTEGER NOT NULL DEFAULT 1 CHECK(source_episode_number>0),
               anilist_id TEXT,
@@ -157,7 +168,8 @@ class CatalogStore:
               updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
               CHECK(substr(local_id,1,12)=related_season_id),
               UNIQUE(related_season_id,episode_number),
-              FOREIGN KEY(related_season_id) REFERENCES seasons(local_id) ON DELETE CASCADE
+              FOREIGN KEY(related_season_id) REFERENCES seasons(local_id) ON DELETE CASCADE,
+              FOREIGN KEY(watchlist_local_id) REFERENCES watchlist_items(local_id) ON DELETE CASCADE
             );
             CREATE INDEX IF NOT EXISTS ix_episodes_season
               ON episodes(related_season_id,episode_number);
@@ -321,7 +333,47 @@ class CatalogStore:
             self._add_columns(db,"episodes",(
                 ("source_episode_number","INTEGER NOT NULL DEFAULT 1"),
                 ("anilist_id","TEXT"),("kitsu_id","TEXT"),
-                ("title","TEXT"),("overview","TEXT"),("runtime_minutes","INTEGER")))
+                ("title","TEXT"),("overview","TEXT"),("runtime_minutes","INTEGER"),
+                ("watchlist_local_id","TEXT REFERENCES watchlist_items(local_id) ON DELETE CASCADE")))
+            watchlist_table_exists=bool(db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='watchlist_items'"
+            ).fetchone())
+            if watchlist_table_exists:
+                db.execute("""UPDATE episodes SET watchlist_local_id=(
+                  SELECT seasons.watchlist_local_id FROM seasons
+                  WHERE seasons.local_id=episodes.related_season_id)
+                  WHERE watchlist_local_id IS NULL""")
+            shared_season_upgrade=self._upgrade_shared_season_schema(db)
+            if shared_season_upgrade:
+                LOGGER.info("Upgraded catalogue seasons for shared watchlist ownership")
+            db.execute("""CREATE TABLE IF NOT EXISTS season_watchlist_links(
+              season_local_id TEXT NOT NULL,watchlist_local_id TEXT NOT NULL,
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY(season_local_id,watchlist_local_id),
+              FOREIGN KEY(season_local_id) REFERENCES seasons(local_id) ON DELETE CASCADE,
+              FOREIGN KEY(watchlist_local_id) REFERENCES watchlist_items(local_id) ON DELETE CASCADE)""")
+            db.execute("""CREATE INDEX IF NOT EXISTS ix_season_watchlist_item
+              ON season_watchlist_links(watchlist_local_id,season_local_id)""")
+            if watchlist_table_exists:
+                db.execute("""INSERT OR IGNORE INTO season_watchlist_links(
+                  season_local_id,watchlist_local_id)
+                  SELECT local_id,watchlist_local_id FROM seasons
+                  WHERE watchlist_local_id IS NOT NULL""")
+            consolidated=self._consolidate_shared_seasons(db)
+            if consolidated:
+                LOGGER.info("Consolidated %s duplicate catalogue season rows",consolidated)
+            db.execute("""CREATE UNIQUE INDEX IF NOT EXISTS ux_seasons_series_number
+              ON seasons(related_series_id,season_number)
+              WHERE season_number IS NOT NULL""")
+            if shared_season_upgrade and watchlist_table_exists:
+                db.execute("""UPDATE watchlist_items SET added_to_library=0,
+                  mediator_ready=1,mediator_status='PARTIAL',
+                  mediator_error='Shared season structure refresh required',
+                  updated_at=CURRENT_TIMESTAMP
+                  WHERE local_id IN(
+                    SELECT watchlist_local_id FROM season_watchlist_links)""")
+                LOGGER.info(
+                    "Queued existing catalogue items for shared-season structure refresh")
             if self._remove_episode_simkl_uniqueness(db):
                 LOGGER.info(
                     "Removed the legacy unique Simkl episode constraint for multi-episode specials")
@@ -451,6 +503,137 @@ class CatalogStore:
                 db.execute("ALTER TABLE {} ADD COLUMN {} {}".format(table,name,declaration))
 
     @staticmethod
+    def _upgrade_shared_season_schema(db):
+        """Remove the legacy one-watchlist-item-per-season constraints."""
+        schema=db.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='seasons'"
+        ).fetchone()
+        sql=str(schema["sql"] or "") if schema else ""
+        if "watchlist_local_id TEXT NOT NULL UNIQUE" not in sql:
+            return False
+        columns=("local_id","related_series_id","watchlist_local_id","anilist_id",
+                 "mal_id","kitsu_id","simkl_id","season_number","provider_path",
+                 "placement_source","first_episode","last_episode","english_name",
+                 "romaji_name","media_format","release_date","release_status",
+                 "placement_state","created_at","updated_at")
+        db.commit(); db.execute("PRAGMA foreign_keys=OFF")
+        try:
+            db.executescript("""
+            CREATE TABLE seasons_shared_rebuild(
+              local_id TEXT PRIMARY KEY
+                CHECK(length(local_id)=12 AND local_id NOT GLOB '*[^0-9a-f]*'),
+              related_series_id TEXT NOT NULL,
+              watchlist_local_id TEXT,
+              anilist_id TEXT,mal_id TEXT,kitsu_id TEXT,simkl_id TEXT,
+              season_number INTEGER CHECK(season_number IS NULL OR season_number>=0),
+              provider_path TEXT,placement_source TEXT,
+              first_episode INTEGER,last_episode INTEGER,
+              english_name TEXT,romaji_name TEXT,media_format TEXT,
+              release_date TEXT,release_status TEXT,
+              placement_state TEXT NOT NULL DEFAULT 'COMPLETE'
+                CHECK(placement_state IN('STRUCTURE_ONLY','COMPLETE')),
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              CHECK(substr(local_id,1,6)=related_series_id),
+              FOREIGN KEY(related_series_id) REFERENCES tv_series(local_id) ON DELETE CASCADE,
+              FOREIGN KEY(watchlist_local_id) REFERENCES watchlist_items(local_id) ON DELETE CASCADE
+            );
+            """)
+            names=",".join(columns)
+            db.execute("INSERT INTO seasons_shared_rebuild({}) SELECT {} FROM seasons".format(
+                names,names))
+            db.execute("DROP TABLE seasons")
+            db.execute("ALTER TABLE seasons_shared_rebuild RENAME TO seasons")
+            db.execute("CREATE INDEX ix_seasons_series ON seasons(related_series_id,season_number)")
+            db.commit()
+        finally:
+            db.execute("PRAGMA foreign_keys=ON")
+        violations=db.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            raise sqlite3.IntegrityError(
+                "shared season schema upgrade created foreign-key violations")
+        return True
+
+    @staticmethod
+    def _consolidate_shared_seasons(db):
+        """Merge duplicate internal season rows into one canonical season number."""
+        groups=db.execute("""SELECT related_series_id,season_number,COUNT(*) AS total
+          FROM seasons WHERE season_number IS NOT NULL
+          GROUP BY related_series_id,season_number HAVING COUNT(*)>1""").fetchall()
+        if not groups:
+            return 0
+        db.commit(); db.execute("PRAGMA foreign_keys=OFF")
+        merged=0
+        try:
+            for group in groups:
+                rows=db.execute("""SELECT * FROM seasons
+                  WHERE related_series_id=? AND season_number=?
+                  ORDER BY CASE WHEN release_date IS NULL THEN 1 ELSE 0 END,
+                           release_date,created_at,local_id""",
+                  (group["related_series_id"],group["season_number"])).fetchall()
+                canonical=rows[0]
+                for season in rows:
+                    if season["watchlist_local_id"]:
+                        db.execute("""INSERT OR IGNORE INTO season_watchlist_links(
+                          season_local_id,watchlist_local_id) VALUES(?,?)""",
+                          (canonical["local_id"],season["watchlist_local_id"]))
+                for season in rows[1:]:
+                    db.execute("""INSERT OR IGNORE INTO season_watchlist_links(
+                      season_local_id,watchlist_local_id)
+                      SELECT ?,watchlist_local_id FROM season_watchlist_links
+                      WHERE season_local_id=?""",(canonical["local_id"],season["local_id"]))
+                    for table in ("staff_media_links","character_media_links"):
+                        db.execute("UPDATE OR IGNORE {} SET related_season_id=? "
+                                   "WHERE related_season_id=?".format(table),
+                                   (canonical["local_id"],season["local_id"]))
+                        db.execute("DELETE FROM {} WHERE related_season_id=?".format(table),
+                                   (season["local_id"],))
+                    episodes=db.execute("""SELECT * FROM episodes
+                      WHERE related_season_id=? ORDER BY source_episode_number,episode_number,local_id""",
+                      (season["local_id"],)).fetchall()
+                    for episode in episodes:
+                        destination=int(episode["episode_number"])
+                        occupied=db.execute("""SELECT * FROM episodes
+                          WHERE related_season_id=? AND episode_number=?""",
+                          (canonical["local_id"],destination)).fetchone()
+                        if occupied:
+                            destination=int(db.execute("""SELECT COALESCE(MAX(episode_number),0)+1
+                              FROM episodes WHERE related_season_id=?""",
+                              (canonical["local_id"],)).fetchone()[0])
+                        new_id=canonical["local_id"]+str(episode["local_id"])[-6:]
+                        while db.execute("SELECT 1 FROM episodes WHERE local_id=?",(new_id,)).fetchone():
+                            new_id=canonical["local_id"]+secrets.token_hex(3)
+                        for table in ("staff_media_links","character_media_links"):
+                            db.execute("UPDATE OR IGNORE {} SET related_episode_id=? "
+                                       "WHERE related_episode_id=?".format(table),
+                                       (new_id,episode["local_id"]))
+                            db.execute("DELETE FROM {} WHERE related_episode_id=?".format(table),
+                                       (episode["local_id"],))
+                        db.execute("""UPDATE episodes SET local_id=?,related_season_id=?,
+                          episode_number=?,updated_at=CURRENT_TIMESTAMP WHERE local_id=?""",
+                          (new_id,canonical["local_id"],destination,episode["local_id"]))
+                    db.execute("DELETE FROM season_watchlist_links WHERE season_local_id=?",
+                               (season["local_id"],))
+                    db.execute("DELETE FROM seasons WHERE local_id=?",(season["local_id"],))
+                    merged+=1
+                bounds=db.execute("""SELECT MIN(episode_number),MAX(episode_number)
+                  FROM episodes WHERE related_season_id=?""",(canonical["local_id"],)).fetchone()
+                season_zero=int(group["season_number"])==0
+                db.execute("""UPDATE seasons SET first_episode=?,last_episode=?,
+                  english_name=CASE WHEN ? THEN 'Specials' ELSE english_name END,
+                  media_format=CASE WHEN ? THEN 'SPECIAL' ELSE media_format END,
+                  updated_at=CURRENT_TIMESTAMP WHERE local_id=?""",
+                  (bounds[0],bounds[1],int(season_zero),int(season_zero),canonical["local_id"]))
+            db.commit()
+        finally:
+            db.execute("PRAGMA foreign_keys=ON")
+        violations=db.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            raise sqlite3.IntegrityError(
+                "season consolidation created foreign-key violations")
+        return merged
+
+    @staticmethod
     def _remove_episode_simkl_uniqueness(db):
         """Permit one special media identity to cover several S00 episodes."""
         schema=db.execute(
@@ -458,7 +641,7 @@ class CatalogStore:
         ).fetchone()
         if not schema or "simkl_id TEXT UNIQUE" not in str(schema["sql"] or ""):
             return False
-        columns=("local_id","related_season_id","episode_number","source_episode_number",
+        columns=("local_id","related_season_id","watchlist_local_id","episode_number","source_episode_number",
                  "anilist_id","mal_id","kitsu_id","simkl_id","title","overview",
                  "runtime_minutes","watch_status","release_date","created_at","updated_at")
         db.commit()
@@ -469,6 +652,7 @@ class CatalogStore:
               local_id TEXT PRIMARY KEY
                 CHECK(length(local_id)=18 AND local_id NOT GLOB '*[^0-9a-f]*'),
               related_season_id TEXT NOT NULL,
+              watchlist_local_id TEXT,
               episode_number INTEGER NOT NULL CHECK(episode_number>0),
               source_episode_number INTEGER NOT NULL DEFAULT 1 CHECK(source_episode_number>0),
               anilist_id TEXT,
@@ -484,7 +668,8 @@ class CatalogStore:
               updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
               CHECK(substr(local_id,1,12)=related_season_id),
               UNIQUE(related_season_id,episode_number),
-              FOREIGN KEY(related_season_id) REFERENCES seasons(local_id) ON DELETE CASCADE
+              FOREIGN KEY(related_season_id) REFERENCES seasons(local_id) ON DELETE CASCADE,
+              FOREIGN KEY(watchlist_local_id) REFERENCES watchlist_items(local_id) ON DELETE CASCADE
             );
             """)
             names=",".join(columns)
@@ -505,15 +690,19 @@ class CatalogStore:
     @staticmethod
     def _backfill_special_episode_provider_ids(db):
         """Copy each special watchlist identity directly onto all of its S00 episodes."""
+        if not db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='watchlist_items'"
+        ).fetchone():
+            return 0
         updated=set()
-        placeholders=",".join("?" for _ in SPECIAL_SOURCE_FORMATS)
         for provider in ("anilist","mal","kitsu","simkl"):
             column=provider+"_id"
-            rows=db.execute("""SELECT episodes.local_id,seasons.{} AS provider_id
+            rows=db.execute("""SELECT episodes.local_id,watchlist_items.{} AS provider_id
               FROM episodes JOIN seasons ON seasons.local_id=episodes.related_season_id
-              WHERE seasons.{} IS NOT NULL
-                AND REPLACE(UPPER(COALESCE(seasons.media_format,'')),' ','_') IN ({})""".format(
-                         column,column,placeholders),SPECIAL_SOURCE_FORMATS).fetchall()
+              JOIN watchlist_items ON watchlist_items.local_id=COALESCE(
+                episodes.watchlist_local_id,seasons.watchlist_local_id)
+              WHERE seasons.season_number=0 AND watchlist_items.{} IS NOT NULL""".format(
+                         column,column)).fetchall()
             for row in rows:
                 current=db.execute(
                     "SELECT {} FROM episodes WHERE local_id=?".format(column),
@@ -541,7 +730,8 @@ class CatalogStore:
             selected.append("alternative_titles_json")
         rows=db.execute("""SELECT episodes.local_id,{}
           FROM episodes JOIN seasons ON seasons.local_id=episodes.related_season_id
-          JOIN watchlist_items ON watchlist_items.local_id=seasons.watchlist_local_id
+          JOIN watchlist_items ON watchlist_items.local_id=COALESCE(
+            episodes.watchlist_local_id,seasons.watchlist_local_id)
           WHERE seasons.season_number=0
             AND (episodes.title IS NULL OR TRIM(episodes.title)='')""".format(
                 ",".join("watchlist_items."+name for name in selected))).fetchall()
@@ -1208,26 +1398,42 @@ class CatalogStore:
         if placement_state not in ("STRUCTURE_ONLY","COMPLETE"):
             raise ValueError("unsupported season placement state")
         with self._connection() as db:
-            row=db.execute("SELECT * FROM seasons WHERE watchlist_local_id=?",(watchlist_id,)).fetchone()
+            linked_series={str(value[0]) for value in db.execute("""SELECT DISTINCT
+              seasons.related_series_id FROM seasons JOIN season_watchlist_links link
+                ON link.season_local_id=seasons.local_id
+              WHERE link.watchlist_local_id=?""",(watchlist_id,)).fetchall()}
+            if linked_series and linked_series!={str(series_id)}:
+                raise ValueError(
+                    "existing Prime season cannot move from series {} to {}".format(
+                        ",".join(sorted(linked_series)),series_id))
+            row=db.execute("""SELECT * FROM seasons WHERE related_series_id=?
+              AND season_number IS ?""",(series_id,season_number)).fetchone()
             if row:
-                if str(row["related_series_id"])!=str(series_id):
-                    raise ValueError(
-                        "existing Prime season cannot move from series {} to {}".format(
-                            row["related_series_id"],series_id))
                 db.execute("""UPDATE seasons SET
                   anilist_id=COALESCE(?,anilist_id),mal_id=COALESCE(?,mal_id),
                   kitsu_id=COALESCE(?,kitsu_id),simkl_id=COALESCE(?,simkl_id),
-                  season_number=?,provider_path=?,placement_source=?,first_episode=?,last_episode=?,
-                  english_name=COALESCE(?,english_name),romaji_name=COALESCE(?,romaji_name),
+                  provider_path=COALESCE(provider_path,?),
+                  placement_source=COALESCE(placement_source,?),
+                  first_episode=CASE WHEN first_episode IS NULL THEN ?
+                    WHEN ? IS NULL THEN first_episode ELSE MIN(first_episode,?) END,
+                  last_episode=CASE WHEN last_episode IS NULL THEN ?
+                    WHEN ? IS NULL THEN last_episode ELSE MAX(last_episode,?) END,
+                  english_name=CASE WHEN season_number=0 THEN 'Specials'
+                    ELSE COALESCE(english_name,?) END,
+                  romaji_name=COALESCE(romaji_name,?),
                   media_format=COALESCE(?,media_format),release_date=COALESCE(?,release_date),
                   release_status=COALESCE(?,release_status),placement_state=?,
                   updated_at=CURRENT_TIMESTAMP WHERE local_id=?""",
                   (watchlist_item.get("anilist_id"),watchlist_item.get("mal_id"),
-                   watchlist_item.get("kitsu_id"),watchlist_item.get("simkl_id"),season_number,
-                   provider_path,placement_source,first_episode,last_episode,
-                   english_name,romaji_name,
+                   watchlist_item.get("kitsu_id"),watchlist_item.get("simkl_id"),
+                   provider_path,placement_source,
+                   first_episode,first_episode,first_episode,
+                   last_episode,last_episode,last_episode,english_name,romaji_name,
                    watchlist_item.get("media_format"),release_date,release_status,
                    placement_state,row["local_id"]))
+                db.execute("""INSERT OR IGNORE INTO season_watchlist_links(
+                  season_local_id,watchlist_local_id) VALUES(?,?)""",
+                  (row["local_id"],watchlist_id))
                 return dict(db.execute("SELECT * FROM seasons WHERE local_id=?",(row["local_id"],)).fetchone())
             if not db.execute("SELECT 1 FROM tv_series WHERE local_id=?",(series_id,)).fetchone():
                 raise KeyError("TV series not found")
@@ -1243,11 +1449,29 @@ class CatalogStore:
                romaji_name,watchlist_item.get("media_format"),
                release_date,release_status,placement_state,provider_path,placement_source,
                first_episode,last_episode))
+            db.execute("""INSERT OR IGNORE INTO season_watchlist_links(
+              season_local_id,watchlist_local_id) VALUES(?,?)""",(local_id,watchlist_id))
             return dict(db.execute("SELECT * FROM seasons WHERE local_id=?",(local_id,)).fetchone())
+
+    def reset_multiseason_watchlist_projection(self,watchlist_local_id):
+        """Remove an obsolete single-season projection before a multi-season rebuild."""
+        watchlist_id=str(watchlist_local_id)
+        with self._connection() as db:
+            removed=int(db.execute(
+                "SELECT COUNT(*) FROM episodes WHERE watchlist_local_id=?",
+                (watchlist_id,)).fetchone()[0])
+            db.execute("DELETE FROM episodes WHERE watchlist_local_id=?",(watchlist_id,))
+            db.execute("DELETE FROM season_watchlist_links WHERE watchlist_local_id=?",
+                       (watchlist_id,))
+            db.execute("""DELETE FROM seasons WHERE NOT EXISTS(
+              SELECT 1 FROM season_watchlist_links link
+              WHERE link.season_local_id=seasons.local_id) AND NOT EXISTS(
+              SELECT 1 FROM episodes WHERE episodes.related_season_id=seasons.local_id)""")
+            return removed
 
     def add_episode(self,season_id,episode_number,source_episode_number=None,mal_id=None,simkl_id=None,
                     anilist_id=None,kitsu_id=None,watch_status=None,release_date=None,title=None,
-                    overview=None,runtime_minutes=None):
+                    overview=None,runtime_minutes=None,watchlist_local_id=None):
         number=int(episode_number)
         title=clean_remote_text(title)
         overview=clean_remote_text(overview)
@@ -1255,33 +1479,65 @@ class CatalogStore:
         incoming_mal=str(mal_id) if mal_id not in (None,"") else None
         incoming_kitsu=str(kitsu_id) if kitsu_id not in (None,"") else None
         incoming_simkl=str(simkl_id) if simkl_id not in (None,"") else None
+        incoming_watchlist=(str(watchlist_local_id)
+                            if watchlist_local_id not in (None,"") else None)
         incoming_watch=(int(bool(watch_status)) if watch_status is not None else None)
         runtime=int(runtime_minutes) if runtime_minutes not in (None,"") else None
         with self._connection() as db:
-            row=db.execute("SELECT * FROM episodes WHERE related_season_id=? AND episode_number=?",
-                           (season_id,number)).fetchone()
+            season=db.execute("SELECT * FROM seasons WHERE local_id=?",(season_id,)).fetchone()
+            if not season:
+                raise KeyError("season not found")
+            if not incoming_watchlist:
+                links=db.execute("""SELECT watchlist_local_id FROM season_watchlist_links
+                  WHERE season_local_id=? ORDER BY watchlist_local_id""",(season_id,)).fetchall()
+                if len(links)==1:
+                    incoming_watchlist=str(links[0]["watchlist_local_id"])
+                elif not links and season["watchlist_local_id"]:
+                    incoming_watchlist=str(season["watchlist_local_id"])
+            row=None
+            if incoming_watchlist:
+                row=db.execute("""SELECT * FROM episodes WHERE related_season_id=?
+                  AND watchlist_local_id=? AND source_episode_number=?""",
+                  (season_id,incoming_watchlist,int(source_episode_number or number))).fetchone()
+            if not row:
+                candidate=db.execute("""SELECT * FROM episodes
+                  WHERE related_season_id=? AND episode_number=?""",
+                  (season_id,number)).fetchone()
+                if candidate and (not incoming_watchlist or
+                    candidate["watchlist_local_id"] in (None,incoming_watchlist)):
+                    row=candidate
+                elif candidate and int(season["season_number"] or 0)==0:
+                    number=int(db.execute("""SELECT COALESCE(MAX(episode_number),0)+1
+                      FROM episodes WHERE related_season_id=?""",(season_id,)).fetchone()[0])
+                elif candidate:
+                    raise ValueError(
+                        "episode coordinate is already owned by another watchlist item")
             if row:
                 db.execute("""UPDATE episodes SET source_episode_number=?,
                   anilist_id=COALESCE(?,anilist_id),mal_id=COALESCE(?,mal_id),
                   kitsu_id=COALESCE(?,kitsu_id),simkl_id=COALESCE(?,simkl_id),
                   title=COALESCE(?,title),overview=COALESCE(?,overview),
                   runtime_minutes=COALESCE(?,runtime_minutes),release_date=COALESCE(?,release_date),
-                  watch_status=COALESCE(?,watch_status),updated_at=CURRENT_TIMESTAMP
+                  watch_status=COALESCE(?,watch_status),
+                  watchlist_local_id=COALESCE(?,watchlist_local_id),
+                  updated_at=CURRENT_TIMESTAMP
                   WHERE local_id=?""",
                   (int(source_episode_number or number),incoming_anilist,incoming_mal,
                    incoming_kitsu,incoming_simkl,title,overview,runtime,release_date,
-                   incoming_watch,row["local_id"]))
+                   incoming_watch,incoming_watchlist,row["local_id"]))
                 return dict(db.execute("SELECT * FROM episodes WHERE local_id=?",(row["local_id"],)).fetchone())
-            if not db.execute("SELECT 1 FROM seasons WHERE local_id=?",(season_id,)).fetchone():
-                raise KeyError("season not found")
             local_id=self._new_local_id(db,"episodes",str(season_id))
-            db.execute("""INSERT INTO episodes(local_id,related_season_id,episode_number,
+            db.execute("""INSERT INTO episodes(local_id,related_season_id,watchlist_local_id,episode_number,
               anilist_id,mal_id,kitsu_id,simkl_id,title,overview,runtime_minutes,
               watch_status,release_date,source_episode_number)
-              VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-              (local_id,season_id,number,incoming_anilist,incoming_mal,incoming_kitsu,
+              VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+              (local_id,season_id,incoming_watchlist,number,incoming_anilist,incoming_mal,incoming_kitsu,
                incoming_simkl,title,overview,runtime,int(bool(watch_status)),release_date,
                int(source_episode_number or number)))
+            db.execute("""UPDATE seasons SET first_episode=(SELECT MIN(episode_number)
+              FROM episodes WHERE related_season_id=?),last_episode=(SELECT MAX(episode_number)
+              FROM episodes WHERE related_season_id=?),updated_at=CURRENT_TIMESTAMP
+              WHERE local_id=?""",(season_id,season_id,season_id))
             return dict(db.execute("SELECT * FROM episodes WHERE local_id=?",(local_id,)).fetchone())
 
     def project_watchlist_progress(self,watchlist_local_id,progress):
@@ -1290,20 +1546,19 @@ class CatalogStore:
         consumed=max(0,int(progress or 0))
         with self._connection() as db:
             season_count=int(db.execute(
-                "SELECT COUNT(*) FROM seasons WHERE watchlist_local_id=?",
+                """SELECT COUNT(DISTINCT related_season_id) FROM episodes
+                  WHERE watchlist_local_id=?""",
                 (watchlist_id,)).fetchone()[0])
             if not season_count:
                 return {"watchlist_local_id":watchlist_id,"progress":consumed,
                         "season_count":0,"episode_count":0,"watched_count":0}
             db.execute("""UPDATE episodes SET watch_status=CASE
               WHEN COALESCE(source_episode_number,episode_number)<=? THEN 1 ELSE 0 END,
-              updated_at=CURRENT_TIMESTAMP WHERE related_season_id IN
-              (SELECT local_id FROM seasons WHERE watchlist_local_id=?)""",
+              updated_at=CURRENT_TIMESTAMP WHERE watchlist_local_id=?""",
               (consumed,watchlist_id))
             counts=db.execute("""SELECT COUNT(*) AS episode_count,
               COALESCE(SUM(watch_status),0) AS watched_count FROM episodes
-              WHERE related_season_id IN
-              (SELECT local_id FROM seasons WHERE watchlist_local_id=?)""",
+              WHERE watchlist_local_id=?""",
               (watchlist_id,)).fetchone()
             return {"watchlist_local_id":watchlist_id,"progress":consumed,
                     "season_count":season_count,
@@ -1317,14 +1572,17 @@ class CatalogStore:
               episodes.watch_status,episodes.episode_number,
               COALESCE(episodes.source_episode_number,episodes.episode_number)
                 AS source_episode_number,
-              seasons.local_id AS season_local_id,seasons.watchlist_local_id,
+              seasons.local_id AS season_local_id,
+              COALESCE(episodes.watchlist_local_id,seasons.watchlist_local_id)
+                AS watchlist_local_id,
               watchlist_items.status AS watchlist_status,
               watchlist_items.progress AS watchlist_progress,
               watchlist_items.episode_count AS watchlist_episode_count
               FROM episodes JOIN seasons
                 ON seasons.local_id=episodes.related_season_id
               LEFT JOIN watchlist_items
-                ON watchlist_items.local_id=seasons.watchlist_local_id
+                ON watchlist_items.local_id=COALESCE(
+                  episodes.watchlist_local_id,seasons.watchlist_local_id)
               WHERE episodes.local_id=?""",(str(episode_id),)).fetchone()
             return dict(row) if row else None
 
@@ -1348,11 +1606,13 @@ class CatalogStore:
                 next_candidates=[]
                 if "next_episode_release_epoch" in release_fields:
                     for season in seasons:
-                        row=db.execute("""SELECT next_episode_number,next_episode_release_date,
-                          next_episode_release_epoch FROM watchlist_items WHERE local_id=?""",
-                          (season["watchlist_local_id"],)).fetchone()
-                        if row and int(row["next_episode_release_epoch"] or 0)>0:
-                            next_candidates.append(dict(row))
+                        rows=db.execute("""SELECT item.next_episode_number,
+                          item.next_episode_release_date,item.next_episode_release_epoch
+                          FROM watchlist_items item JOIN season_watchlist_links link
+                            ON link.watchlist_local_id=item.local_id
+                          WHERE link.season_local_id=?""",(season["local_id"],)).fetchall()
+                        next_candidates.extend(dict(row) for row in rows
+                          if int(row["next_episode_release_epoch"] or 0)>0)
                 next_item=min(next_candidates,key=lambda row:int(row["next_episode_release_epoch"])) if next_candidates else None
                 year=series.get("publish_year")
                 if year is None:
@@ -1392,8 +1652,13 @@ class CatalogStore:
                 season=dict(season_row)
                 if "next_episode_release_epoch" in release_fields:
                     release=db.execute("""SELECT season_release_date,next_episode_number,
-                      next_source_episode_number,next_episode_release_date FROM watchlist_items
-                      WHERE local_id=?""",(season["watchlist_local_id"],)).fetchone()
+                      next_source_episode_number,next_episode_release_date
+                      FROM watchlist_items item JOIN season_watchlist_links link
+                        ON link.watchlist_local_id=item.local_id
+                      WHERE link.season_local_id=? ORDER BY
+                        CASE WHEN next_episode_release_epoch>0 THEN 0 ELSE 1 END,
+                        next_episode_release_epoch,season_release_date LIMIT 1""",
+                      (season["local_id"],)).fetchone()
                     if release:
                         season.update(dict(release))
                 season["cast"]=self._credits_for_media(
@@ -1470,5 +1735,10 @@ class CatalogStore:
 
     def linked_watchlist_ids(self):
         with self._connection() as db:
-            return ({row[0] for row in db.execute("SELECT watchlist_local_id FROM seasons")} |
-                    {row[0] for row in db.execute("SELECT watchlist_local_id FROM movies")})
+            return ({row[0] for row in db.execute(
+                        "SELECT watchlist_local_id FROM season_watchlist_links")} |
+                    {row[0] for row in db.execute(
+                        "SELECT DISTINCT watchlist_local_id FROM episodes "
+                        "WHERE watchlist_local_id IS NOT NULL")} |
+                    {row[0] for row in db.execute(
+                        "SELECT watchlist_local_id FROM movies")})

@@ -135,11 +135,21 @@ class WatchlistItemStore:
                 placement_filter=(
                     " AND COALESCE(s.placement_state,'COMPLETE')='COMPLETE'"
                     if "placement_state" in season_columns else "")
-                db.execute("""UPDATE watchlist_items SET added_to_library=1,mediator_ready=0,
-                  library_added_at=COALESCE(library_added_at,CURRENT_TIMESTAMP)
-                    WHERE EXISTS(SELECT 1 FROM seasons s
-                    WHERE s.watchlist_local_id=watchlist_items.local_id{})""".format(
-                        placement_filter))
+                links=db.execute("""SELECT 1 FROM sqlite_master
+                  WHERE type='table' AND name='season_watchlist_links'""").fetchone()
+                if links:
+                    db.execute("""UPDATE watchlist_items SET added_to_library=1,mediator_ready=0,
+                      library_added_at=COALESCE(library_added_at,CURRENT_TIMESTAMP)
+                      WHERE EXISTS(SELECT 1 FROM season_watchlist_links link
+                        JOIN seasons s ON s.local_id=link.season_local_id
+                        WHERE link.watchlist_local_id=watchlist_items.local_id{})""".format(
+                            placement_filter))
+                else:
+                    db.execute("""UPDATE watchlist_items SET added_to_library=1,mediator_ready=0,
+                      library_added_at=COALESCE(library_added_at,CURRENT_TIMESTAMP)
+                        WHERE EXISTS(SELECT 1 FROM seasons s
+                        WHERE s.watchlist_local_id=watchlist_items.local_id{})""".format(
+                            placement_filter))
             movie_table=db.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='movies'"
             ).fetchone()

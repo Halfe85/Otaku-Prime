@@ -118,11 +118,50 @@ class SimklMediatorEndpoint:
             raise MediatorPlacementError("Simkl returned a different identity for {}".format(simkl_id))
         root,path=_find_root(client,target)
         franchise=self._franchise(client,target,root)
-        season_number,number_source=_season_number(target,path)
         target_type=str(target.get("anime_type") or "").lower()
         library_type=("movie" if target_type=="movie" and
                       not franchise.get("tvdb_id") else "series")
         candidates=_episodes(client.episodes(simkl_id),target_type in SPECIAL_MEDIA_TYPES)
+        mapped=sorted({int(value) for value in target.get("mapped_tvdb_seasons") or []})
+        coordinate_seasons=sorted({int(row["season_number"]) for row in candidates
+                                   if row.get("season_number") is not None})
+        if len(mapped)<=1 and len(coordinate_seasons)>1:
+            mapped=coordinate_seasons
+        if len(mapped)>1:
+            components=[]
+            for season_number in mapped:
+                episodes=sorted(
+                    (row for row in candidates if row.get("season_number")==season_number),
+                    key=lambda row:row.get("episode_number") or 0)
+                if not episodes:
+                    raise MediatorMetadataPending(
+                        "Simkl returned no episodes for mapped season {}".format(season_number))
+                unmapped=[row["source_episode_number"] for row in episodes
+                          if row.get("episode_number") is None]
+                if unmapped:
+                    raise MediatorPlacementError(
+                        "Simkl episodes lack TVDB coordinates: {}".format(unmapped))
+                numbers=[row["episode_number"] for row in episodes]
+                if len(numbers)>1 and numbers!=list(range(numbers[0],numbers[-1]+1)):
+                    raise MediatorPlacementError(
+                        "Simkl season {} coordinates contain gaps".format(season_number))
+                components.append({
+                    "season":{"number":season_number,
+                              "number_source":"mapped_tvdb_seasons",
+                              "name":"{} season {}".format(
+                                  _remote_title(target),season_number),
+                              "media_type":target_type,
+                              "first_episode":numbers[0],"last_episode":numbers[-1]},
+                    "episodes":episodes,
+                })
+            return {
+                "provider_path":"simkl","provider_id":simkl_id,
+                "provider_reference_id":None,"library_type":library_type,
+                "tv_show":franchise,"season":components[0]["season"],
+                "episodes":components[0]["episodes"],"seasons":components,
+                "relation_path":[str((node.get("ids") or {}).get("simkl")) for node in path],
+            }
+        season_number,number_source=_season_number(target,path)
         episodes=[row for row in candidates if row.get("season_number")==season_number]
         if not episodes:
             raise MediatorMetadataPending(
