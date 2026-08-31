@@ -15,7 +15,7 @@ import xbmcvfs
 from resources.lib.users import UserStore
 from resources.lib.database.watchlist_accounts import WatchlistAccountStore
 from resources.lib.database.app_logs import AppLogStore
-from resources.lib.database.catalog import CatalogStore
+from resources.lib.database.runtime_catalog import RuntimeCatalogStore as CatalogStore
 from resources.lib.services.watchlist_identity import WatchlistIdentityEnrichmentService
 from resources.lib.services.watchlist_watchdog import WatchlistWatchdogStore
 from resources.lib.services.watchlist_watchdog_release import (
