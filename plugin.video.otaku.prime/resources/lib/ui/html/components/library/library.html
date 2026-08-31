@@ -1,5 +1,7 @@
 <link rel="stylesheet" href="/ui/components/library/library-character-staff.css">
+<link rel="stylesheet" href="/ui/components/library/library-provider-links.css">
 <script src="/ui/components/library/library-character-staff.js" defer></script>
+<script src="/ui/components/library/library-provider-links.js" defer></script>
 
 <section class="library-shell" aria-labelledby="library-heading" data-mature="{{MATURE_VALUE}}">
   <header class="library-heading-row">
@@ -115,22 +117,30 @@
     <footer class="library-modal-footer">
       <span class="library-local-id" id="library-series-local-id"></span>
       <div class="library-provider-tile" id="library-series-providers"
-           role="list" aria-label="Provider ID availability">
-        <span class="library-provider-slot unavailable" data-library-provider="anilist"
-              role="listitem" title="AniList ID unavailable">
-          <img src="/ui/components/watchlist-management/assets/anilist.png" alt="AniList">
+           role="list" aria-label="Provider links">
+        <span class="library-provider-entry" role="listitem">
+          <a class="library-provider-slot unavailable" data-library-provider="anilist"
+             aria-disabled="true" tabindex="-1" title="AniList ID unavailable">
+            <img src="/ui/components/watchlist-management/assets/anilist.png" alt="AniList">
+          </a>
         </span>
-        <span class="library-provider-slot unavailable" data-library-provider="mal"
-              role="listitem" title="MyAnimeList ID unavailable">
-          <img src="/ui/components/watchlist-management/assets/mal.png" alt="MyAnimeList">
+        <span class="library-provider-entry" role="listitem">
+          <a class="library-provider-slot unavailable" data-library-provider="mal"
+             aria-disabled="true" tabindex="-1" title="MyAnimeList ID unavailable">
+            <img src="/ui/components/watchlist-management/assets/mal.png" alt="MyAnimeList">
+          </a>
         </span>
-        <span class="library-provider-slot unavailable" data-library-provider="kitsu"
-              role="listitem" title="Kitsu ID unavailable">
-          <img src="/ui/components/watchlist-management/assets/kitsu.png" alt="Kitsu">
+        <span class="library-provider-entry" role="listitem">
+          <a class="library-provider-slot unavailable" data-library-provider="kitsu"
+             aria-disabled="true" tabindex="-1" title="Kitsu ID unavailable">
+            <img src="/ui/components/watchlist-management/assets/kitsu.png" alt="Kitsu">
+          </a>
         </span>
-        <span class="library-provider-slot unavailable" data-library-provider="simkl"
-              role="listitem" title="Simkl ID unavailable">
-          <img src="/ui/components/watchlist-management/assets/simkl.png" alt="Simkl">
+        <span class="library-provider-entry" role="listitem">
+          <a class="library-provider-slot unavailable" data-library-provider="simkl"
+             aria-disabled="true" tabindex="-1" title="Simkl ID unavailable">
+            <img src="/ui/components/watchlist-management/assets/simkl.png" alt="Simkl">
+          </a>
         </span>
       </div>
       <button class="button secondary" type="button" data-library-series-close>Close</button>
