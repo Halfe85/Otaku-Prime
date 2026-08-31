@@ -1,0 +1,9 @@
+.library-provider-entry { display:contents; }
+.library-provider-slot { text-decoration:none; border-radius:8px; }
+.library-provider-slot.available[aria-disabled="false"] { cursor:pointer; }
+.library-provider-slot.available[aria-disabled="false"]:hover,
+.library-provider-slot.available[aria-disabled="false"]:focus-visible {
+  background:rgba(139,124,255,.14);
+  outline:1px solid rgba(159,149,255,.42);
+}
+.library-provider-slot[aria-disabled="true"] { pointer-events:none; }
