@@ -93,6 +93,40 @@ class WatchlistProviderWriterTests(unittest.TestCase):
 
         self.assertEqual({"status":"COMPLETED","progress":2},target)
 
+    def test_kitsu_missing_snapshot_finds_existing_entry_and_patches_it(self):
+        requests=[]
+        responses=[
+            {"data":[{"type":"libraryEntries","id":"108247910",
+                      "attributes":{"status":"current","progress":4}}],
+             "included":[{"type":"anime","id":"46210",
+                          "attributes":{"episodeCount":12}}]},
+            {"data":{"type":"libraryEntries","id":"108247910",
+                     "attributes":{"status":"current","progress":4}}},
+        ]
+        now=[10.0]
+
+        def open_request(request,timeout):
+            requests.append(request)
+            return Response(responses.pop(0))
+
+        def sleep(delay):
+            now[0]+=delay
+
+        writer=WatchlistProviderWriter(
+            Accounts(),opener=open_request,monotonic=lambda:now[0],sleeper=sleep)
+        result=writer.push("kitsu",{
+            "kitsu_id":"46210","status":"CURRENT","progress":4,
+        })
+
+        self.assertEqual(["GET","PATCH"],[request.get_method() for request in requests])
+        self.assertIn("filter%5BuserId%5D=1",requests[0].full_url)
+        self.assertIn("filter%5BanimeId%5D=46210",requests[0].full_url)
+        self.assertEqual(
+            "https://kitsu.io/api/edge/library-entries/108247910",
+            requests[1].full_url)
+        self.assertEqual("108247910",result["provider_entry_id"])
+        self.assertEqual(4,result["progress"])
+
     def test_simkl_progress_increase_is_written_as_explicit_episodes(self):
         writer=RecordingWriter()
         result=writer.push("simkl",{

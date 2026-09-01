@@ -9,11 +9,13 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from resources.lib.logging_config import get_logger
 from resources.lib.watchlist.mal import MAL_API_URL, MALAuthenticator
 from resources.lib.watchlist.kitsu import KitsuAuthenticator
 from resources.lib.watchlist.simkl import PACKAGED_CLIENT_ID, SIMKL_API_URL
 
 
+LOGGER = get_logger(__name__)
 ANILIST_API_URL = "https://graphql.anilist.co"
 KITSU_API_URL = "https://kitsu.io/api/edge"
 PROVIDER_WRITE_INTERVALS = {
@@ -253,12 +255,54 @@ class WatchlistProviderWriter:
         value = library_entry.get("id") if isinstance(library_entry, dict) else None
         return str(value) if value not in (None, "") else None
 
+    def _kitsu_existing_entry(self, account, anime_id):
+        url = KITSU_API_URL + "/library-entries?" + urlencode({
+            "filter[userId]": str(account["external_user_id"]),
+            "filter[animeId]": str(anime_id),
+            "include": "anime",
+            "page[limit]": 2,
+        })
+        request = Request(url, method="GET", headers={
+            "Authorization": "Bearer " + account["access_token"],
+            "Accept": "application/vnd.api+json",
+            "User-Agent": "Otaku-Prime/0.1.2 watchdog",
+        })
+        payload = self._request(request, "Kitsu", provider="kitsu")
+        rows = payload.get("data") or []
+        if not rows:
+            return None
+        if len(rows) > 1:
+            raise WatchlistProviderWriteError(
+                "Kitsu returned multiple library entries for one anime")
+        row = rows[0]
+        episode_count = None
+        for included in payload.get("included") or []:
+            if (included.get("type") == "anime" and
+                    str(included.get("id")) == str(anime_id)):
+                episode_count = (included.get("attributes") or {}).get("episodeCount")
+                break
+        LOGGER.info(
+            "Kitsu existing library entry discovered before update: anime=%s entry=%s",
+            anime_id, row.get("id"))
+        return {
+            "id": str(row["id"]),
+            "attributes": row.get("attributes") or {},
+            "episode_count": episode_count,
+        }
+
     def _push_kitsu(self, account, item, provider_entry):
         anime_id = item.get("kitsu_id")
         if anime_id in (None, ""):
             return {"provider": "kitsu", "skipped": True, "reason": "missing_provider_id"}
         entry_id = self._kitsu_entry_id(provider_entry)
-        target = self.target_state("kitsu", item, provider_entry)
+        target_entry = provider_entry
+        if not entry_id:
+            existing = self._kitsu_existing_entry(account, anime_id)
+            if existing:
+                entry_id = existing["id"]
+                target_entry = dict(provider_entry or {})
+                target_entry["episode_count"] = existing.get("episode_count")
+        target = self.target_state("kitsu", item, target_entry)
         attributes = {
             "status": KITSU_STATUS[target["status"]],
             "progress": target["progress"],
