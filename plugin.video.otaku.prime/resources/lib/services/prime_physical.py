@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import glob
 import os
 import re
+import sqlite3
 import tempfile
 import threading
 import time
@@ -19,7 +21,11 @@ LOGGER = get_logger(__name__)
 SPECIAL_ROOT = "special://profile/Library"
 SOURCES_SPECIAL_PATH = "special://profile/sources.xml"
 SOURCE_NAME = "Otaku Prime TV-Series"
+VIDEO_CONTENT = "tvshows"
+LOCAL_INFORMATION_SCRAPER = "metadata.local"
+DATABASE_SPECIAL_ROOT = "special://database/"
 INVALID_PATH_CHARACTERS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+MY_VIDEOS_DATABASE = re.compile(r"^MyVideos(?P<version>\d+)\.db$")
 
 
 def _default_root():
@@ -44,6 +50,23 @@ def _default_sources_path():
     except (ImportError, RuntimeError, AttributeError):
         pass
     return os.path.join(os.path.expanduser("~"), ".kodi", "userdata", "sources.xml")
+
+
+def _default_video_database_path():
+    try:
+        import xbmcvfs
+
+        database_root = xbmcvfs.translatePath(DATABASE_SPECIAL_ROOT)
+    except (ImportError, RuntimeError, AttributeError):
+        database_root = os.path.join(
+            os.path.expanduser("~"), ".kodi", "userdata", "Database"
+        )
+    candidates = []
+    for path in glob.glob(os.path.join(str(database_root), "MyVideos*.db")):
+        match = MY_VIDEOS_DATABASE.match(os.path.basename(path))
+        if match:
+            candidates.append((int(match.group("version")), path))
+    return max(candidates, default=(None, None))[1]
 
 
 def _kodi_runtime_video_sources():
@@ -97,7 +120,7 @@ class PrimePhysicalService:
 
     def __init__(self, catalog_store, root_path=None, now=None, halt_requested=None,
                  sources_path=None, source_url=None, runtime_video_sources=None,
-                 notify_source_restart=None):
+                 notify_source_restart=None, video_database_path=None):
         self.catalog_store = catalog_store
         kodi_default_root = root_path is None
         self.root_path = os.path.abspath(str(root_path or _default_root()))
@@ -122,8 +145,15 @@ class PrimePhysicalService:
         self._notify_source_restart = (
             notify_source_restart or _notify_source_restart_required
         )
+        self.video_database_path = (
+            os.path.abspath(str(video_database_path))
+            if video_database_path
+            else (_default_video_database_path() if kodi_default_root else None)
+        )
         self._source_lock = threading.Lock()
         self._source_result = None
+        self._content_lock = threading.Lock()
+        self._content_result = None
 
     def _check_halt(self):
         if self._halt_requested():
@@ -277,6 +307,117 @@ class PrimePhysicalService:
                 )
             return dict(self._source_result)
 
+    def ensure_local_tv_content(self):
+        """Set Prime's source to TV Shows using Kodi's local NFO scraper."""
+        with self._content_lock:
+            if self._content_result is not None:
+                return dict(self._content_result)
+            self._check_halt()
+            if not self.video_database_path or not os.path.isfile(
+                self.video_database_path
+            ):
+                self._content_result = {
+                    "configured": False,
+                    "changed": False,
+                    "content": VIDEO_CONTENT,
+                    "scraper": LOCAL_INFORMATION_SCRAPER,
+                    "path": self.source_url,
+                    "error": "kodi_video_database_unavailable",
+                }
+                LOGGER.warning(
+                    "Prime Physical could not set TV content because Kodi's local "
+                    "MyVideos database was not found"
+                )
+                return dict(self._content_result)
+
+            try:
+                with sqlite3.connect(self.video_database_path, timeout=3) as db:
+                    columns = {
+                        row[1] for row in db.execute("PRAGMA table_info(path)")
+                    }
+                    required = {
+                        "strPath", "strContent", "strScraper", "strHash",
+                        "scanRecursive", "useFolderNames", "strSettings",
+                        "noUpdate", "exclude", "allAudio",
+                    }
+                    missing = sorted(required - columns)
+                    if missing:
+                        raise RuntimeError(
+                            "unsupported Kodi path schema; missing {}".format(
+                                ", ".join(missing)
+                            )
+                        )
+
+                    current = db.execute(
+                        "SELECT strContent,strScraper,scanRecursive,useFolderNames,"
+                        "noUpdate,exclude FROM path WHERE strPath=?",
+                        (self.source_url,),
+                    ).fetchone()
+                    wanted = (VIDEO_CONTENT, LOCAL_INFORMATION_SCRAPER, 0, 0, 0, 0)
+                    changed = current != wanted
+                    if current is None:
+                        db.execute(
+                            "INSERT INTO path (strPath,strContent,strScraper,strHash,"
+                            "scanRecursive,useFolderNames,strSettings,noUpdate,exclude,"
+                            "allAudio) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                            (
+                                self.source_url, VIDEO_CONTENT,
+                                LOCAL_INFORMATION_SCRAPER, "", 0, 0, "", 0, 0, 0,
+                            ),
+                        )
+                    elif changed:
+                        db.execute(
+                            "UPDATE path SET strContent=?,strScraper=?,strHash='',"
+                            "scanRecursive=0,useFolderNames=0,strSettings='',"
+                            "noUpdate=0,exclude=0,allAudio=0 WHERE strPath=?",
+                            (
+                                VIDEO_CONTENT, LOCAL_INFORMATION_SCRAPER,
+                                self.source_url,
+                            ),
+                        )
+
+                self._content_result = {
+                    "configured": True,
+                    "changed": changed,
+                    "content": VIDEO_CONTENT,
+                    "scraper": LOCAL_INFORMATION_SCRAPER,
+                    "path": self.source_url,
+                    "database": self.video_database_path,
+                }
+                LOGGER.info(
+                    "Kodi source content configured: path=%s content=%s scraper=%s "
+                    "changed=%s",
+                    self.source_url,
+                    VIDEO_CONTENT,
+                    LOCAL_INFORMATION_SCRAPER,
+                    changed,
+                )
+            except ServiceWorkHalted:
+                raise
+            except (OSError, sqlite3.Error, RuntimeError) as exc:
+                self._content_result = {
+                    "configured": False,
+                    "changed": False,
+                    "content": VIDEO_CONTENT,
+                    "scraper": LOCAL_INFORMATION_SCRAPER,
+                    "path": self.source_url,
+                    "database": self.video_database_path,
+                    "error": str(exc),
+                }
+                LOGGER.exception(
+                    "Prime Physical could not set TV Shows / local information "
+                    "content on %s",
+                    self.source_url,
+                )
+            return dict(self._content_result)
+
+    def ensure_kodi_library_configuration(self):
+        """Configure both Kodi's visible source and its scanner content rule."""
+        return {
+            "source": self.ensure_video_source(),
+            "content": self.ensure_local_tv_content(),
+        }
+
     @staticmethod
     def _series_year(series, seasons):
         year = series.get("publish_year")
@@ -308,7 +449,7 @@ class PrimePhysicalService:
     def project_series(self, series_id, _log_result=True):
         """Create missing released episode placeholders for one Prime series ID."""
         self._check_halt()
-        self.ensure_video_source()
+        self.ensure_kodi_library_configuration()
         series = self._series_row(series_id)
         if not series:
             LOGGER.warning("Prime Physical handoff ignored unknown series ID %s", series_id)
@@ -400,7 +541,7 @@ class PrimePhysicalService:
 
     def project_all(self):
         """Backfill existing catalogue series after installing this service."""
-        self.ensure_video_source()
+        self.ensure_kodi_library_configuration()
         total = {"series": 0, "created": 0, "existing": 0, "future": 0,
                  "unknown_release": 0, "failed": 0}
         for series in self.catalog_store.list_series():

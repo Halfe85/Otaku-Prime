@@ -1,4 +1,5 @@
 import os
+import sqlite3
 import tempfile
 import unittest
 import xml.etree.ElementTree as ElementTree
@@ -200,6 +201,81 @@ class PrimePhysicalTests(unittest.TestCase):
         self.assertTrue(result["active"])
         self.assertFalse(result["restart_required"])
         self.assertEqual([], notifications)
+
+    def test_kodi_source_content_is_tvshows_with_local_information(self):
+        database_path = os.path.join(self.temporary.name, "MyVideos131.db")
+        with sqlite3.connect(database_path) as db:
+            db.execute(
+                "CREATE TABLE path (idPath INTEGER PRIMARY KEY,strPath TEXT,"
+                "strContent TEXT,strScraper TEXT,strHash TEXT,scanRecursive INTEGER,"
+                "useFolderNames BOOL,strSettings TEXT,noUpdate BOOL,exclude BOOL,"
+                "allAudio BOOL,dateAdded TEXT,idParentPath INTEGER)"
+            )
+            db.execute(
+                "INSERT INTO path (strPath,strContent,strScraper) VALUES (?,?,?)",
+                ("/media/local/", "movies", "metadata.themoviedb.org.python"),
+            )
+        source_url = "/prime/Library/TV-Series/"
+        physical = PrimePhysicalService(
+            self.catalog,
+            root_path=self.temporary.name,
+            source_url=source_url,
+            video_database_path=database_path,
+        )
+
+        first = physical.ensure_local_tv_content()
+        second = physical.ensure_local_tv_content()
+
+        self.assertTrue(first["configured"])
+        self.assertTrue(first["changed"])
+        self.assertEqual(first, second)
+        with sqlite3.connect(database_path) as db:
+            prime = db.execute(
+                "SELECT strContent,strScraper,scanRecursive,useFolderNames,"
+                "noUpdate,exclude FROM path WHERE strPath=?",
+                (source_url,),
+            ).fetchone()
+            local = db.execute(
+                "SELECT strContent,strScraper FROM path WHERE strPath=?",
+                ("/media/local/",),
+            ).fetchone()
+        self.assertEqual(("tvshows", "metadata.local", 0, 0, 0, 0), prime)
+        self.assertEqual(("movies", "metadata.themoviedb.org.python"), local)
+
+    def test_existing_kodi_content_rule_is_updated_in_place(self):
+        database_path = os.path.join(self.temporary.name, "MyVideos131.db")
+        source_url = "/prime/Library/TV-Series/"
+        with sqlite3.connect(database_path) as db:
+            db.execute(
+                "CREATE TABLE path (idPath INTEGER PRIMARY KEY,strPath TEXT,"
+                "strContent TEXT,strScraper TEXT,strHash TEXT,scanRecursive INTEGER,"
+                "useFolderNames BOOL,strSettings TEXT,noUpdate BOOL,exclude BOOL,"
+                "allAudio BOOL)"
+            )
+            db.execute(
+                "INSERT INTO path (strPath,strContent,strScraper,strHash,"
+                "scanRecursive,useFolderNames,strSettings,noUpdate,exclude,allAudio) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (source_url, "movies", "remote.scraper", "old", 9, 1, "x", 1, 1, 1),
+            )
+        physical = PrimePhysicalService(
+            self.catalog,
+            root_path=self.temporary.name,
+            source_url=source_url,
+            video_database_path=database_path,
+        )
+
+        result = physical.ensure_local_tv_content()
+
+        self.assertTrue(result["changed"])
+        with sqlite3.connect(database_path) as db:
+            row = db.execute(
+                "SELECT idPath,strContent,strScraper,strHash,scanRecursive,"
+                "useFolderNames,strSettings,noUpdate,exclude,allAudio FROM path"
+            ).fetchone()
+        self.assertEqual(
+            (1, "tvshows", "metadata.local", "", 0, 0, "", 0, 0, 0), row
+        )
 
     def test_malformed_sources_file_is_preserved(self):
         sources_path = os.path.join(self.temporary.name, "kodi-sources.xml")
