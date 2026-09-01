@@ -155,6 +155,52 @@ class PrimePhysicalTests(unittest.TestCase):
         document = ElementTree.parse(sources_path)
         self.assertEqual(1, len(document.getroot().find("video").findall("source")))
 
+    def test_new_source_reports_restart_until_kodi_loads_it(self):
+        sources_path = os.path.join(self.temporary.name, "kodi-sources.xml")
+        notifications = []
+        physical = PrimePhysicalService(
+            self.catalog,
+            root_path=self.temporary.name,
+            sources_path=sources_path,
+            source_url="/prime/Library/TV-Series/",
+            runtime_video_sources=lambda: [],
+            notify_source_restart=lambda: notifications.append(True),
+        )
+
+        result = physical.ensure_video_source()
+
+        self.assertTrue(result["configured"])
+        self.assertFalse(result["active"])
+        self.assertTrue(result["restart_required"])
+        self.assertEqual([True], notifications)
+
+    def test_existing_source_is_confirmed_against_kodi_runtime(self):
+        sources_path = os.path.join(self.temporary.name, "kodi-sources.xml")
+        first = PrimePhysicalService(
+            self.catalog,
+            root_path=self.temporary.name,
+            sources_path=sources_path,
+            source_url="/prime/Library/TV-Series/",
+            runtime_video_sources=lambda: [],
+            notify_source_restart=lambda: None,
+        )
+        first.ensure_video_source()
+        notifications = []
+        running = PrimePhysicalService(
+            self.catalog,
+            root_path=self.temporary.name,
+            sources_path=sources_path,
+            source_url="/prime/Library/TV-Series/",
+            runtime_video_sources=lambda: ["/prime/Library/TV-Series/"],
+            notify_source_restart=lambda: notifications.append(True),
+        )
+
+        result = running.ensure_video_source()
+
+        self.assertTrue(result["active"])
+        self.assertFalse(result["restart_required"])
+        self.assertEqual([], notifications)
+
     def test_malformed_sources_file_is_preserved(self):
         sources_path = os.path.join(self.temporary.name, "kodi-sources.xml")
         payload = b"<sources><video>"

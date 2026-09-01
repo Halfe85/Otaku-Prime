@@ -2,6 +2,7 @@
 """Project released Prime catalogue episodes into Kodi's physical library."""
 from __future__ import annotations
 
+import json
 import os
 import re
 import tempfile
@@ -15,9 +16,8 @@ from resources.lib.services.watchlist_release import release_epoch
 
 
 LOGGER = get_logger(__name__)
-SPECIAL_ROOT = "special://masterprofile/Library"
-SPECIAL_TV_ROOT = SPECIAL_ROOT + "/TV-Series/"
-SOURCES_SPECIAL_PATH = "special://masterprofile/sources.xml"
+SPECIAL_ROOT = "special://profile/Library"
+SOURCES_SPECIAL_PATH = "special://profile/sources.xml"
 SOURCE_NAME = "Otaku Prime TV-Series"
 INVALID_PATH_CHARACTERS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
@@ -46,6 +46,40 @@ def _default_sources_path():
     return os.path.join(os.path.expanduser("~"), ".kodi", "userdata", "sources.xml")
 
 
+def _kodi_runtime_video_sources():
+    """Return Kodi's currently loaded video source paths when available."""
+    try:
+        import xbmc
+
+        request = json.dumps({
+            "jsonrpc": "2.0",
+            "method": "Files.GetSources",
+            "params": {"media": "video"},
+            "id": 1,
+        })
+        response = json.loads(xbmc.executeJSONRPC(request))
+        return [
+            row.get("file")
+            for row in response.get("result", {}).get("sources", [])
+            if row.get("file")
+        ]
+    except (ImportError, RuntimeError, AttributeError, TypeError, ValueError):
+        return None
+
+
+def _notify_source_restart_required():
+    try:
+        import xbmcgui
+
+        xbmcgui.Dialog().notification(
+            "Otaku Prime",
+            "Restart Kodi once to activate the Otaku Prime TV source",
+            time=10000,
+        )
+    except (ImportError, RuntimeError, AttributeError, TypeError):
+        pass
+
+
 def safe_library_name(value, fallback="Untitled"):
     """Return one portable path component without changing readable titles."""
     text = INVALID_PATH_CHARACTERS.sub(" - ", str(value or "").strip())
@@ -62,7 +96,8 @@ class PrimePhysicalService:
     """
 
     def __init__(self, catalog_store, root_path=None, now=None, halt_requested=None,
-                 sources_path=None, source_url=None):
+                 sources_path=None, source_url=None, runtime_video_sources=None,
+                 notify_source_restart=None):
         self.catalog_store = catalog_store
         kodi_default_root = root_path is None
         self.root_path = os.path.abspath(str(root_path or _default_root()))
@@ -72,12 +107,21 @@ class PrimePhysicalService:
                 else os.path.join(self.root_path, "sources.xml")
             )
         ))
-        self.source_url = str(source_url or (
-            SPECIAL_TV_ROOT if kodi_default_root
-            else os.path.join(self.root_path, "TV-Series") + os.sep
-        )).replace("\\", "/")
+        # Store Kodi's translated local path rather than a special:// alias.
+        # This is portable across Kodi platforms because each installation
+        # writes its own resolved profile location, and it is also what Kodi's
+        # scanner and Files.GetSources expose at runtime.
+        self.source_url = str(
+            source_url or os.path.join(self.root_path, "TV-Series") + os.sep
+        ).replace("\\", "/")
         self._now = now or time.time
         self._halt_requested = halt_requested or (lambda: False)
+        self._runtime_video_sources = (
+            runtime_video_sources or _kodi_runtime_video_sources
+        )
+        self._notify_source_restart = (
+            notify_source_restart or _notify_source_restart_required
+        )
         self._source_lock = threading.Lock()
         self._source_result = None
 
@@ -97,6 +141,49 @@ class PrimePhysicalService:
             default = ElementTree.SubElement(section, "default")
             default.set("pathversion", "1")
         return ElementTree.ElementTree(root)
+
+    def _runtime_source_active(self):
+        try:
+            sources = self._runtime_video_sources()
+        except Exception:
+            LOGGER.exception("Could not inspect Kodi's active video sources")
+            return None
+        if sources is None:
+            return None
+        wanted = self._normalized_source_path(self.source_url)
+        return any(
+            self._normalized_source_path(value) == wanted
+            for value in sources
+        )
+
+    def _source_result_for(self, changed, source):
+        active = self._runtime_source_active()
+        # A Kodi service always runs after Kodi loaded sources.xml. Therefore a
+        # newly written source needs one restart before it can be active. When
+        # JSON-RPC is unavailable (unit tests/non-Kodi tools), changed remains
+        # enough evidence for the restart requirement.
+        restart_required = active is False or (active is None and changed)
+        result = {
+            "configured": True,
+            "changed": bool(changed),
+            "active": active,
+            "restart_required": restart_required,
+            "source": source or SOURCE_NAME,
+            "path": self.source_url,
+        }
+        if restart_required:
+            LOGGER.warning(
+                "Kodi restart required to load video source %s: %s",
+                SOURCE_NAME,
+                self.source_url,
+            )
+            self._notify_source_restart()
+        elif active:
+            LOGGER.info(
+                "Kodi video source is active in the running profile: %s",
+                self.source_url,
+            )
+        return result
 
     @staticmethod
     def _write_sources_document(document, target):
@@ -149,10 +236,9 @@ class PrimePhysicalService:
                     paths = [self._normalized_source_path(node.text)
                              for node in source.findall("path")]
                     if wanted in paths:
-                        self._source_result = {
-                            "configured": True, "changed": False,
-                            "source": name or SOURCE_NAME, "path": self.source_url,
-                        }
+                        self._source_result = self._source_result_for(
+                            False, name or SOURCE_NAME
+                        )
                         LOGGER.info(
                             "Kodi video source already contains Prime TV library: %s",
                             self.source_url,
@@ -172,10 +258,7 @@ class PrimePhysicalService:
                 sharing = ElementTree.SubElement(source, "allowsharing")
                 sharing.text = "true"
                 self._write_sources_document(document, self.sources_path)
-                self._source_result = {
-                    "configured": True, "changed": True,
-                    "source": SOURCE_NAME, "path": self.source_url,
-                }
+                self._source_result = self._source_result_for(True, SOURCE_NAME)
                 LOGGER.info(
                     "Added Kodi video source %s: %s", SOURCE_NAME, self.source_url
                 )
@@ -184,6 +267,7 @@ class PrimePhysicalService:
             except (OSError, ValueError, ElementTree.ParseError) as exc:
                 self._source_result = {
                     "configured": False, "changed": False,
+                    "active": False, "restart_required": False,
                     "source": SOURCE_NAME, "path": self.source_url,
                     "error": str(exc),
                 }
