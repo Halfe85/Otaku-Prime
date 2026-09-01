@@ -8,6 +8,7 @@ import threading
 import time
 
 from resources.lib.logging_config import get_logger
+from resources.lib.services.prime_movie_physical import PrimeMoviePhysicalSupport
 from resources.lib.services.prime_nfo import PrimeNfoWriter
 from resources.lib.services.prime_strm import PrimeStrmWriter
 from resources.lib.services.prime_physical import PrimePhysicalService, safe_library_name
@@ -21,6 +22,15 @@ def _normalized_directory(value):
     if path and not path.endswith("/"):
         path += "/"
     return path
+
+
+def _parent_directory(value):
+    path = str(value or "").strip().replace("\\", "/").rstrip("/")
+    if not path:
+        return ""
+    if "/" not in path:
+        return ""
+    return _normalized_directory(path.rsplit("/", 1)[0])
 
 
 def _kodi_video_scan(directory):
@@ -94,6 +104,54 @@ def _kodi_refresh_tvshow(directory):
     }
 
 
+def _kodi_refresh_movie(directory):
+    """Refresh one already-known Kodi movie from Prime's adjacent local NFO."""
+    import xbmc
+
+    wanted = _normalized_directory(directory)
+    lookup = json.dumps({
+        "jsonrpc": "2.0",
+        "method": "VideoLibrary.GetMovies",
+        "params": {"properties": ["file"]},
+        "id": 1,
+    })
+    response = json.loads(xbmc.executeJSONRPC(lookup))
+    if response.get("error"):
+        raise RuntimeError(
+            "Kodi VideoLibrary.GetMovies failed: {}".format(response["error"])
+        )
+    movie = next(
+        (
+            row for row in response.get("result", {}).get("movies", [])
+            if _parent_directory(row.get("file")) == wanted
+        ),
+        None,
+    )
+    if not movie:
+        return {"refreshed": False, "reason": "movie_not_in_library", "path": wanted}
+
+    request = json.dumps({
+        "jsonrpc": "2.0",
+        "method": "VideoLibrary.RefreshMovie",
+        "params": {
+            "movieid": int(movie["movieid"]),
+            "ignorenfo": False,
+        },
+        "id": 1,
+    })
+    refreshed = json.loads(xbmc.executeJSONRPC(request))
+    if refreshed.get("error"):
+        raise RuntimeError(
+            "Kodi VideoLibrary.RefreshMovie failed: {}".format(refreshed["error"])
+        )
+    return {
+        "refreshed": True,
+        "movieid": int(movie["movieid"]),
+        "path": wanted,
+        "result": refreshed.get("result"),
+    }
+
+
 def _kodi_video_scan_active():
     """Return whether Kodi is currently scanning its video library."""
     try:
@@ -105,14 +163,15 @@ def _kodi_video_scan_active():
 
 
 class KodiVideoLibraryScanQueue:
-    """Serialize scoped scans and refresh existing Prime TV shows from NFOs."""
+    """Serialize scoped scans and refresh existing Prime local-NFO titles."""
 
     def __init__(self, halt_requested=None, execute_scan=None, scan_active=None,
-                 sleep=None, refresh_series=None):
+                 sleep=None, refresh_series=None, refresh_movie=None):
         self._halt_requested = halt_requested or (lambda: False)
         self._execute_scan = execute_scan or _kodi_video_scan
         self._scan_active = scan_active or _kodi_video_scan_active
         self._refresh_series = refresh_series or _kodi_refresh_tvshow
+        self._refresh_movie = refresh_movie or _kodi_refresh_movie
         self._sleep = sleep or time.sleep
         self._lock = threading.Lock()
         self._pending = []
@@ -149,9 +208,6 @@ class KodiVideoLibraryScanQueue:
         return False
 
     def _wait_for_requested_scan(self):
-        # Kodi may return from executeJSONRPC just before the GUI condition flips
-        # to Library.IsScanningVideo. Give the requested operation a short start
-        # window, then wait until it has completed before dispatching another.
         started = False
         for _ in range(10):
             if self._halt_requested():
@@ -164,10 +220,8 @@ class KodiVideoLibraryScanQueue:
                 LOGGER.exception("Could not inspect Kodi video-library scan state")
                 return True
             self._sleep(0.05)
-
         if not started:
             return True
-
         while not self._halt_requested():
             try:
                 if not self._scan_active():
@@ -202,9 +256,6 @@ class KodiVideoLibraryScanQueue:
             if not self._wait_for_requested_scan():
                 return
 
-            # Scan discovers new files. A scan does not reload changed NFO data
-            # for an existing library title, so mediator updates also refresh
-            # the just-scanned TV show and all of its episodes from local NFOs.
             if reason == "mediator_series" and not self._halt_requested():
                 try:
                     refresh = self._refresh_series(directory)
@@ -220,12 +271,27 @@ class KodiVideoLibraryScanQueue:
                     )
                 if not self._wait_for_requested_scan():
                     return
+            elif reason == "mediator_movie" and not self._halt_requested():
+                try:
+                    refresh = self._refresh_movie(directory)
+                    LOGGER.info(
+                        "Kodi movie refresh requested after mediator scan: "
+                        "path=%s refreshed=%s result=%s",
+                        directory, refresh.get("refreshed"), refresh.get("result"),
+                    )
+                except Exception:
+                    LOGGER.exception(
+                        "Kodi movie refresh failed after mediator scan: path=%s",
+                        directory,
+                    )
+                if not self._wait_for_requested_scan():
+                    return
         with self._lock:
             self._active_directory = None
 
 
 class RuntimePrimePhysicalService(PrimePhysicalService):
-    """Prime Physical plus STRM/NFO projection and Kodi library scan requests."""
+    """Prime Physical plus TV-series and movie Kodi native-library projection."""
 
     def __init__(self, *args, scan_queue=None, artwork_store=None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -236,7 +302,18 @@ class RuntimePrimePhysicalService(PrimePhysicalService):
         self._nfo_writer = PrimeNfoWriter(
             self.catalog_store, artwork_store=artwork_store
         )
+        self._movies = PrimeMoviePhysicalSupport(self, artwork_store=artwork_store)
         self._bulk_projection = False
+
+    @property
+    def movie_source_url(self):
+        return self._movies.source_url
+
+    def ensure_kodi_library_configuration(self):
+        """Configure TV-Series and Movies as independent Local Information sources."""
+        result = super().ensure_kodi_library_configuration()
+        result["movies"] = self._movies.ensure_configuration()
+        return result
 
     def _series_directory(self, series_id):
         series = self._series_row(series_id)
@@ -266,9 +343,6 @@ class RuntimePrimePhysicalService(PrimePhysicalService):
 
         directory = self._series_directory(series_id)
         if directory and os.path.isdir(directory):
-            # The base physical service may have created empty placeholders.
-            # Repair/write the playable STRM body first, then NFO metadata, and
-            # only after both are durable ask Kodi to scan this show folder.
             result["strm"] = self._strm_writer.write_series(
                 series_id, directory, now_epoch=int(self._now())
             )
@@ -302,28 +376,47 @@ class RuntimePrimePhysicalService(PrimePhysicalService):
                 }
         return result
 
+    def project_movie(self, movie_id):
+        """Project one standalone Prime movie and softly scan only its folder."""
+        result = self._movies.project_movie(movie_id, now_epoch=int(self._now()))
+        directory = result.get("directory")
+        if (
+            not self._bulk_projection
+            and not result.get("missing")
+            and not result.get("future")
+            and directory
+            and os.path.isdir(directory)
+        ):
+            result["scan"] = self.request_kodi_scan(directory, reason="mediator_movie")
+        return result
+
     def project_all(self):
-        """Start Kodi's Prime library immediately, then backfill and rescan it."""
+        """Start both Prime libraries immediately, then backfill and reconcile them."""
         self.ensure_kodi_library_configuration()
         os.makedirs(self.source_url, exist_ok=True)
+        os.makedirs(self.movie_source_url, exist_ok=True)
 
-        # Start the library as soon as Prime's service starts. This scan is
-        # intentionally requested before the catalogue backfill finishes.
-        startup_scan = self.request_kodi_scan(
+        startup_tv_scan = self.request_kodi_scan(
             self.source_url, reason="prime_startup"
+        )
+        startup_movie_scan = self.request_kodi_scan(
+            self.movie_source_url, reason="prime_startup_movies"
         )
 
         self._bulk_projection = True
         try:
             result = super().project_all()
+            movie_result = self._movies.project_all(now_epoch=int(self._now()))
         finally:
             self._bulk_projection = False
 
-        # The startup scan may have walked a directory before its STRM/NFO files
-        # were projected. Queue one final root scan to reconcile the completed
-        # startup backfill. Mediator calls after this point use per-series scans.
-        result["startup_scan"] = startup_scan
+        result["movies"] = movie_result
+        result["startup_scan"] = startup_tv_scan
+        result["startup_movie_scan"] = startup_movie_scan
         result["final_scan"] = self.request_kodi_scan(
             self.source_url, reason="prime_startup_backfill"
+        )
+        result["final_movie_scan"] = self.request_kodi_scan(
+            self.movie_source_url, reason="prime_startup_movies_backfill"
         )
         return result
