@@ -103,9 +103,25 @@ class KodiVideoLibraryScanQueue:
         return False
 
     def _wait_for_requested_scan(self):
-        # executeJSONRPC normally returns while Kodi's scanner is active. Wait
-        # for that scan to finish before dispatching the next queued directory.
-        # If the scan is tiny and already finished, this returns immediately.
+        # Kodi may return from executeJSONRPC just before the GUI condition flips
+        # to Library.IsScanningVideo. Give the requested scan a short start
+        # window, then wait until it has completed before dispatching another.
+        started = False
+        for _ in range(10):
+            if self._halt_requested():
+                return False
+            try:
+                if self._scan_active():
+                    started = True
+                    break
+            except Exception:
+                LOGGER.exception("Could not inspect Kodi video-library scan state")
+                return True
+            self._sleep(0.05)
+
+        if not started:
+            return True
+
         while not self._halt_requested():
             try:
                 if not self._scan_active():
