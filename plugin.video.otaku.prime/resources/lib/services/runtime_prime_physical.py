@@ -8,6 +8,7 @@ import threading
 import time
 
 from resources.lib.logging_config import get_logger
+from resources.lib.services.prime_nfo import PrimeNfoWriter
 from resources.lib.services.prime_physical import PrimePhysicalService, safe_library_name
 
 
@@ -160,12 +161,15 @@ class KodiVideoLibraryScanQueue:
 
 
 class RuntimePrimePhysicalService(PrimePhysicalService):
-    """Prime Physical plus automatic Kodi native-library scan requests."""
+    """Prime Physical plus NFO projection and Kodi native-library scan requests."""
 
-    def __init__(self, *args, scan_queue=None, **kwargs):
+    def __init__(self, *args, scan_queue=None, artwork_store=None, **kwargs):
         super().__init__(*args, **kwargs)
         self._scan_queue = scan_queue or KodiVideoLibraryScanQueue(
             halt_requested=self._halt_requested
+        )
+        self._nfo_writer = PrimeNfoWriter(
+            self.catalog_store, artwork_store=artwork_store
         )
         self._bulk_projection = False
 
@@ -192,20 +196,34 @@ class RuntimePrimePhysicalService(PrimePhysicalService):
 
     def project_series(self, series_id, _log_result=True):
         result = super().project_series(series_id, _log_result=_log_result)
-        if result.get("missing") or self._bulk_projection:
+        if result.get("missing"):
             return result
 
         directory = self._series_directory(series_id)
         if directory and os.path.isdir(directory):
-            result["scan"] = self.request_kodi_scan(
-                directory, reason="mediator_series"
+            # NFOs must be present before Kodi receives the scoped scan request.
+            result["nfo"] = self._nfo_writer.write_series(
+                series_id, directory, now_epoch=int(self._now())
             )
+            if not self._bulk_projection:
+                result["scan"] = self.request_kodi_scan(
+                    directory, reason="mediator_series"
+                )
         else:
-            result["scan"] = {
-                "queued": False,
-                "path": _normalized_directory(directory),
+            result["nfo"] = {
+                "written": 0,
+                "unchanged": 0,
+                "episodes": 0,
+                "missing": False,
+                "artwork": {},
                 "reason": "series_directory_missing",
             }
+            if not self._bulk_projection:
+                result["scan"] = {
+                    "queued": False,
+                    "path": _normalized_directory(directory),
+                    "reason": "series_directory_missing",
+                }
         return result
 
     def project_all(self):
