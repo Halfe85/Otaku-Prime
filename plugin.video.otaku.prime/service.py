@@ -26,8 +26,8 @@ from resources.lib.services.runtime_mediator_tvshow import (
     RuntimeTVShowMediatorService as TVShowMediatorService,
 )
 from resources.lib.services.artwork_store import PersistentArtworkStore
-from resources.lib.services.runtime_prime_physical import (
-    RuntimePrimePhysicalService as PrimePhysicalService,
+from resources.lib.services.runtime_prime_physical_movies import (
+    RuntimePrimePhysicalMoviesService as PrimePhysicalService,
 )
 from resources.lib.services.watch_state_projector import CatalogWatchStateProjector
 from resources.lib.watchlist.anilist_sync import AniListWatchlistImportService
