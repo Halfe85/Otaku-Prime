@@ -24,7 +24,9 @@ from resources.lib.services.watchlist_watchdog_release import (
 from resources.lib.services.watchlist_provider_writer import WatchlistProviderWriter
 from resources.lib.services.mediator_tvshow import TVShowMediatorService
 from resources.lib.services.artwork_store import PersistentArtworkStore
-from resources.lib.services.prime_physical import PrimePhysicalService
+from resources.lib.services.runtime_prime_physical import (
+    RuntimePrimePhysicalService as PrimePhysicalService,
+)
 from resources.lib.services.watch_state_projector import CatalogWatchStateProjector
 from resources.lib.watchlist.anilist_sync import AniListWatchlistImportService
 from resources.lib.watchlist.anilist_sync import AniListWatchlistClient
