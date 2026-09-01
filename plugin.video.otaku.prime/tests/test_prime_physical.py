@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+import xml.etree.ElementTree as ElementTree
 
 from resources.lib.services.prime_physical import (
     PrimePhysicalService,
@@ -105,6 +106,70 @@ class PrimePhysicalTests(unittest.TestCase):
 
     def test_path_component_is_portable(self):
         self.assertEqual("A - B - C", safe_library_name(" A/B:C. "))
+
+    def test_video_source_is_added_without_removing_existing_sources(self):
+        sources_path = os.path.join(self.temporary.name, "kodi-sources.xml")
+        with open(sources_path, "w", encoding="utf-8") as handle:
+            handle.write(
+                "<sources><video><default pathversion='1'></default>"
+                "<source><name>Local videos</name><path pathversion='1'>"
+                "/media/videos/</path></source></video>"
+                "<music><source><name>Music</name><path>/media/music/</path>"
+                "</source></music></sources>"
+            )
+        physical = PrimePhysicalService(
+            self.catalog, root_path=self.temporary.name,
+            sources_path=sources_path, source_url="/prime/Library/TV-Series/",
+            now=lambda: 1767225600,
+        )
+
+        first = physical.ensure_video_source()
+        second = physical.ensure_video_source()
+        document = ElementTree.parse(sources_path)
+        video_sources = document.getroot().find("video").findall("source")
+
+        self.assertTrue(first["configured"])
+        self.assertTrue(first["changed"])
+        self.assertEqual(first, second)
+        self.assertEqual(["Local videos", "Otaku Prime TV-Series"], [
+            source.findtext("name") for source in video_sources
+        ])
+        self.assertEqual("/media/music/", document.findtext("music/source/path"))
+        self.assertEqual(
+            "/prime/Library/TV-Series/", video_sources[1].findtext("path")
+        )
+
+    def test_video_source_registration_is_idempotent_across_instances(self):
+        sources_path = os.path.join(self.temporary.name, "kodi-sources.xml")
+        first = PrimePhysicalService(
+            self.catalog, root_path=self.temporary.name,
+            sources_path=sources_path, source_url="/prime/Library/TV-Series/",
+        )
+        second = PrimePhysicalService(
+            self.catalog, root_path=self.temporary.name,
+            sources_path=sources_path, source_url="/prime/Library/TV-Series/",
+        )
+
+        self.assertTrue(first.ensure_video_source()["changed"])
+        self.assertFalse(second.ensure_video_source()["changed"])
+        document = ElementTree.parse(sources_path)
+        self.assertEqual(1, len(document.getroot().find("video").findall("source")))
+
+    def test_malformed_sources_file_is_preserved(self):
+        sources_path = os.path.join(self.temporary.name, "kodi-sources.xml")
+        payload = b"<sources><video>"
+        with open(sources_path, "wb") as handle:
+            handle.write(payload)
+        physical = PrimePhysicalService(
+            self.catalog, root_path=self.temporary.name,
+            sources_path=sources_path,
+        )
+
+        result = physical.ensure_video_source()
+
+        self.assertFalse(result["configured"])
+        with open(sources_path, "rb") as handle:
+            self.assertEqual(payload, handle.read())
 
 
 if __name__ == "__main__":

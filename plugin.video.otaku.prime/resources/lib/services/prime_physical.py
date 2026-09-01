@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import os
 import re
+import tempfile
+import threading
 import time
+import xml.etree.ElementTree as ElementTree
 
 from resources.lib.logging_config import get_logger
 from resources.lib.service_lifecycle import ServiceWorkHalted
@@ -13,6 +16,9 @@ from resources.lib.services.watchlist_release import release_epoch
 
 LOGGER = get_logger(__name__)
 SPECIAL_ROOT = "special://masterprofile/Library"
+SPECIAL_TV_ROOT = SPECIAL_ROOT + "/TV-Series/"
+SOURCES_SPECIAL_PATH = "special://masterprofile/sources.xml"
+SOURCE_NAME = "Otaku Prime TV-Series"
 INVALID_PATH_CHARACTERS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
 
@@ -26,6 +32,18 @@ def _default_root():
     except (ImportError, RuntimeError, AttributeError):
         pass
     return os.path.join(os.path.expanduser("~"), ".kodi", "userdata", "Library")
+
+
+def _default_sources_path():
+    try:
+        import xbmcvfs
+
+        translated = xbmcvfs.translatePath(SOURCES_SPECIAL_PATH)
+        if translated:
+            return translated
+    except (ImportError, RuntimeError, AttributeError):
+        pass
+    return os.path.join(os.path.expanduser("~"), ".kodi", "userdata", "sources.xml")
 
 
 def safe_library_name(value, fallback="Untitled"):
@@ -43,15 +61,137 @@ class PrimePhysicalService:
     the filesystem layer never depends on provider placement payloads.
     """
 
-    def __init__(self, catalog_store, root_path=None, now=None, halt_requested=None):
+    def __init__(self, catalog_store, root_path=None, now=None, halt_requested=None,
+                 sources_path=None, source_url=None):
         self.catalog_store = catalog_store
+        kodi_default_root = root_path is None
         self.root_path = os.path.abspath(str(root_path or _default_root()))
+        self.sources_path = os.path.abspath(str(
+            sources_path or (
+                _default_sources_path() if kodi_default_root
+                else os.path.join(self.root_path, "sources.xml")
+            )
+        ))
+        self.source_url = str(source_url or (
+            SPECIAL_TV_ROOT if kodi_default_root
+            else os.path.join(self.root_path, "TV-Series") + os.sep
+        )).replace("\\", "/")
         self._now = now or time.time
         self._halt_requested = halt_requested or (lambda: False)
+        self._source_lock = threading.Lock()
+        self._source_result = None
 
     def _check_halt(self):
         if self._halt_requested():
             raise ServiceWorkHalted("physical library projection halted for addon shutdown")
+
+    @staticmethod
+    def _normalized_source_path(value):
+        return str(value or "").strip().replace("\\", "/").rstrip("/")
+
+    @staticmethod
+    def _new_sources_document():
+        root = ElementTree.Element("sources")
+        for section_name in ("programs", "video", "music", "pictures", "files", "games"):
+            section = ElementTree.SubElement(root, section_name)
+            default = ElementTree.SubElement(section, "default")
+            default.set("pathversion", "1")
+        return ElementTree.ElementTree(root)
+
+    @staticmethod
+    def _write_sources_document(document, target):
+        directory = os.path.dirname(target)
+        os.makedirs(directory, exist_ok=True)
+        handle = tempfile.NamedTemporaryFile(
+            mode="wb", dir=directory, prefix=".sources-", suffix=".xml.tmp",
+            delete=False,
+        )
+        temporary = handle.name
+        try:
+            with handle:
+                ElementTree.indent(document, space="    ")
+                document.write(handle, encoding="utf-8", xml_declaration=False)
+                handle.write(b"\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, target)
+        except Exception:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+            raise
+
+    def ensure_video_source(self):
+        """Register Prime's TV-Series folder without replacing Kodi sources."""
+        with self._source_lock:
+            if self._source_result is not None:
+                return dict(self._source_result)
+            self._check_halt()
+            try:
+                if os.path.isfile(self.sources_path):
+                    document = ElementTree.parse(self.sources_path)
+                else:
+                    document = self._new_sources_document()
+                root = document.getroot()
+                if root.tag != "sources":
+                    raise ValueError("sources.xml root element is not <sources>")
+                video = root.find("video")
+                if video is None:
+                    video = ElementTree.SubElement(root, "video")
+                    default = ElementTree.SubElement(video, "default")
+                    default.set("pathversion", "1")
+
+                wanted = self._normalized_source_path(self.source_url)
+                named_source = None
+                for source in video.findall("source"):
+                    name = str(source.findtext("name") or "").strip()
+                    paths = [self._normalized_source_path(node.text)
+                             for node in source.findall("path")]
+                    if wanted in paths:
+                        self._source_result = {
+                            "configured": True, "changed": False,
+                            "source": name or SOURCE_NAME, "path": self.source_url,
+                        }
+                        LOGGER.info(
+                            "Kodi video source already contains Prime TV library: %s",
+                            self.source_url,
+                        )
+                        return dict(self._source_result)
+                    if name == SOURCE_NAME:
+                        named_source = source
+
+                source = named_source or ElementTree.SubElement(video, "source")
+                for child in list(source):
+                    source.remove(child)
+                name = ElementTree.SubElement(source, "name")
+                name.text = SOURCE_NAME
+                path = ElementTree.SubElement(source, "path")
+                path.set("pathversion", "1")
+                path.text = self.source_url
+                sharing = ElementTree.SubElement(source, "allowsharing")
+                sharing.text = "true"
+                self._write_sources_document(document, self.sources_path)
+                self._source_result = {
+                    "configured": True, "changed": True,
+                    "source": SOURCE_NAME, "path": self.source_url,
+                }
+                LOGGER.info(
+                    "Added Kodi video source %s: %s", SOURCE_NAME, self.source_url
+                )
+            except ServiceWorkHalted:
+                raise
+            except (OSError, ValueError, ElementTree.ParseError) as exc:
+                self._source_result = {
+                    "configured": False, "changed": False,
+                    "source": SOURCE_NAME, "path": self.source_url,
+                    "error": str(exc),
+                }
+                LOGGER.exception(
+                    "Prime Physical could not register Kodi video source %s",
+                    self.source_url,
+                )
+            return dict(self._source_result)
 
     @staticmethod
     def _series_year(series, seasons):
@@ -84,6 +224,7 @@ class PrimePhysicalService:
     def project_series(self, series_id, _log_result=True):
         """Create missing released episode placeholders for one Prime series ID."""
         self._check_halt()
+        self.ensure_video_source()
         series = self._series_row(series_id)
         if not series:
             LOGGER.warning("Prime Physical handoff ignored unknown series ID %s", series_id)
@@ -175,6 +316,7 @@ class PrimePhysicalService:
 
     def project_all(self):
         """Backfill existing catalogue series after installing this service."""
+        self.ensure_video_source()
         total = {"series": 0, "created": 0, "existing": 0, "future": 0,
                  "unknown_release": 0, "failed": 0}
         for series in self.catalog_store.list_series():
