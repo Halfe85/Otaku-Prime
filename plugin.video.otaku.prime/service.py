@@ -22,7 +22,9 @@ from resources.lib.services.watchlist_watchdog_release import (
     ReleaseAwareWatchlistWatchdogService,
 )
 from resources.lib.services.watchlist_provider_writer import WatchlistProviderWriter
-from resources.lib.services.mediator_tvshow import TVShowMediatorService
+from resources.lib.services.runtime_mediator_tvshow import (
+    RuntimeTVShowMediatorService as TVShowMediatorService,
+)
 from resources.lib.services.artwork_store import PersistentArtworkStore
 from resources.lib.services.runtime_prime_physical import (
     RuntimePrimePhysicalService as PrimePhysicalService,
@@ -231,7 +233,7 @@ def _run_service(profile: str) -> None:
         daemon=True,
     )
     server_thread.start()
-    # Bind the admin UI first, then backfill STRM placeholders for catalogue
+    # Bind the admin UI first, then backfill physical TV/movie files for catalogue
     # rows created before Prime Physical existed.
     prime_physical.project_all()
     watchlist_watchdog.start()
