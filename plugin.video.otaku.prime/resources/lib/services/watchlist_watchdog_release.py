@@ -26,6 +26,18 @@ class ReleaseAwareWatchlistWatchdogService(WatchlistWatchdogService):
         self._last_release_monotonic = 0.0
         self._release_refresh_retry = {}
 
+    def request_remote_sync(self, *args, **kwargs):
+        """Schedule one explicit refresh without a duplicate account-change pass."""
+        result = super().request_remote_sync(*args, **kwargs)
+        if result.get("scheduled"):
+            # Admin connect/disconnect writes the account before calling this
+            # method. Record that current revision as already represented by the
+            # explicit refresh request so _detect_account_change() does not queue
+            # a second full provider pass immediately afterwards.
+            self._connected_account_signature = self._account_signature()
+            self._last_account_check_monotonic = time.monotonic()
+        return result
+
     def identity_progress(self,progress=None):
         """Wake the mediator whenever another ten-percent Watchdog batch is ready."""
         if self._halt_requested():
