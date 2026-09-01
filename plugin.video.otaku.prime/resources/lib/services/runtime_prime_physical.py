@@ -44,6 +44,56 @@ def _kodi_video_scan(directory):
     return response.get("result")
 
 
+def _kodi_refresh_tvshow(directory):
+    """Refresh one already-known Kodi TV show from Prime's local NFO files."""
+    import xbmc
+
+    wanted = _normalized_directory(directory)
+    lookup = json.dumps({
+        "jsonrpc": "2.0",
+        "method": "VideoLibrary.GetTVShows",
+        "params": {"properties": ["file"]},
+        "id": 1,
+    })
+    response = json.loads(xbmc.executeJSONRPC(lookup))
+    if response.get("error"):
+        raise RuntimeError(
+            "Kodi VideoLibrary.GetTVShows failed: {}".format(response["error"])
+        )
+
+    tvshow = next(
+        (
+            row for row in response.get("result", {}).get("tvshows", [])
+            if _normalized_directory(row.get("file")) == wanted
+        ),
+        None,
+    )
+    if not tvshow:
+        return {"refreshed": False, "reason": "tvshow_not_in_library", "path": wanted}
+
+    request = json.dumps({
+        "jsonrpc": "2.0",
+        "method": "VideoLibrary.RefreshTVShow",
+        "params": {
+            "tvshowid": int(tvshow["tvshowid"]),
+            "ignorenfo": False,
+            "refreshepisodes": True,
+        },
+        "id": 1,
+    })
+    refreshed = json.loads(xbmc.executeJSONRPC(request))
+    if refreshed.get("error"):
+        raise RuntimeError(
+            "Kodi VideoLibrary.RefreshTVShow failed: {}".format(refreshed["error"])
+        )
+    return {
+        "refreshed": True,
+        "tvshowid": int(tvshow["tvshowid"]),
+        "path": wanted,
+        "result": refreshed.get("result"),
+    }
+
+
 def _kodi_video_scan_active():
     """Return whether Kodi is currently scanning its video library."""
     try:
@@ -55,20 +105,14 @@ def _kodi_video_scan_active():
 
 
 class KodiVideoLibraryScanQueue:
-    """Serialize scoped VideoLibrary.Scan requests without blocking Mediator.
-
-    Kodi only has one video-library scanner. Prime can receive several mediator
-    placements in a short burst, so requests are queued and executed one at a
-    time. Exact duplicate requests that are still pending are coalesced, while a
-    request for a directory that is already being scanned is allowed to queue
-    once more because new files may have appeared after that scan started.
-    """
+    """Serialize scoped scans and refresh existing Prime TV shows from NFOs."""
 
     def __init__(self, halt_requested=None, execute_scan=None, scan_active=None,
-                 sleep=None):
+                 sleep=None, refresh_series=None):
         self._halt_requested = halt_requested or (lambda: False)
         self._execute_scan = execute_scan or _kodi_video_scan
         self._scan_active = scan_active or _kodi_video_scan_active
+        self._refresh_series = refresh_series or _kodi_refresh_tvshow
         self._sleep = sleep or time.sleep
         self._lock = threading.Lock()
         self._pending = []
@@ -106,7 +150,7 @@ class KodiVideoLibraryScanQueue:
 
     def _wait_for_requested_scan(self):
         # Kodi may return from executeJSONRPC just before the GUI condition flips
-        # to Library.IsScanningVideo. Give the requested scan a short start
+        # to Library.IsScanningVideo. Give the requested operation a short start
         # window, then wait until it has completed before dispatching another.
         started = False
         for _ in range(10):
@@ -157,6 +201,25 @@ class KodiVideoLibraryScanQueue:
                 )
             if not self._wait_for_requested_scan():
                 return
+
+            # Scan discovers new files. A scan does not reload changed NFO data
+            # for an existing library title, so mediator updates also refresh
+            # the just-scanned TV show and all of its episodes from local NFOs.
+            if reason == "mediator_series" and not self._halt_requested():
+                try:
+                    refresh = self._refresh_series(directory)
+                    LOGGER.info(
+                        "Kodi TV show refresh requested after mediator scan: "
+                        "path=%s refreshed=%s result=%s",
+                        directory, refresh.get("refreshed"), refresh.get("result"),
+                    )
+                except Exception:
+                    LOGGER.exception(
+                        "Kodi TV show refresh failed after mediator scan: path=%s",
+                        directory,
+                    )
+                if not self._wait_for_requested_scan():
+                    return
         with self._lock:
             self._active_directory = None
 
