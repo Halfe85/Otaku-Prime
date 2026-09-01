@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -15,6 +16,12 @@ from resources.lib.watchlist.simkl import PACKAGED_CLIENT_ID, SIMKL_API_URL
 
 ANILIST_API_URL = "https://graphql.anilist.co"
 KITSU_API_URL = "https://kitsu.io/api/edge"
+PROVIDER_WRITE_INTERVALS = {
+    "anilist": 0.7,
+    "mal": 1.1,
+    "kitsu": 0.5,
+    "simkl": 0.4,
+}
 
 MAL_STATUS = {
     "CURRENT": "watching",
@@ -41,7 +48,12 @@ SIMKL_STATUS = {
 
 
 class WatchlistProviderWriteError(RuntimeError):
-    pass
+    def __init__(self, message, status_code=None, retry_after=None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.retry_after = retry_after
+        self.retryable = status_code is None or status_code in (307, 408, 425, 429) \
+            or (isinstance(status_code, int) and status_code >= 500)
 
 
 def _now_iso():
@@ -58,7 +70,7 @@ class WatchlistProviderWriter:
 
     def __init__(self, accounts, user_id=1, timeout=20, opener=None,
                  mal_authenticator=None, kitsu_authenticator=None,
-                 simkl_client_id=None):
+                 simkl_client_id=None, monotonic=None, sleeper=None):
         self.accounts = accounts
         self.user_id = int(user_id)
         self.timeout = int(timeout)
@@ -66,6 +78,22 @@ class WatchlistProviderWriter:
         self.mal_authenticator = mal_authenticator or MALAuthenticator()
         self.kitsu_authenticator = kitsu_authenticator or KitsuAuthenticator()
         self.simkl_client_id = str(simkl_client_id or PACKAGED_CLIENT_ID).strip()
+        self._monotonic = monotonic or time.monotonic
+        self._sleep = sleeper or time.sleep
+        self._last_request_at = {}
+        self._pace_lock = threading.Lock()
+
+    def _pace(self, provider):
+        interval = float(PROVIDER_WRITE_INTERVALS.get(provider, 0))
+        if interval <= 0:
+            return
+        with self._pace_lock:
+            now = self._monotonic()
+            delay = self._last_request_at.get(provider, now - interval) + interval - now
+            if delay > 0:
+                self._sleep(delay)
+                now = self._monotonic()
+            self._last_request_at[provider] = now
 
     def _credentials(self, provider):
         account = self.accounts.get_credentials(self.user_id, provider)
@@ -89,7 +117,8 @@ class WatchlistProviderWriter:
             account["token_expires_at"] = new_expires
         return account
 
-    def _request(self, request, service):
+    def _request(self, request, service, provider=None):
+        self._pace(provider or str(service).lower())
         try:
             with self._open(request, timeout=self.timeout) as response:
                 raw = response.read()
@@ -98,13 +127,20 @@ class WatchlistProviderWriter:
                 detail = exc.read().decode("utf-8", errors="replace")[:300]
             except Exception:
                 detail = ""
+            retry_after = None
+            try:
+                retry_after = int(exc.headers.get("Retry-After"))
+            except (AttributeError, TypeError, ValueError):
+                pass
             raise WatchlistProviderWriteError(
                 "{} rejected watchlist update (HTTP {}{})".format(
                     service, exc.code, ": " + detail if detail else ""
-                )
+                ), status_code=exc.code, retry_after=retry_after
             ) from exc
         except (URLError, TimeoutError, OSError) as exc:
-            raise WatchlistProviderWriteError("Unable to update {} watchlist".format(service)) from exc
+            raise WatchlistProviderWriteError(
+                "Unable to update {} watchlist".format(service), retry_after=60
+            ) from exc
         if not raw:
             return {}
         try:
@@ -128,6 +164,23 @@ class WatchlistProviderWriter:
             return self._push_simkl(account, item, provider_entry)
         raise WatchlistProviderWriteError("Unsupported watchlist provider: {}".format(provider))
 
+    @staticmethod
+    def target_state(provider, item, provider_entry=None):
+        """Translate Prime's canonical state to a provider-valid equivalent."""
+        status = item["status"]
+        progress = max(0, int(item.get("progress") or 0))
+        if provider == "kitsu" and provider_entry:
+            count = provider_entry.get("episode_count")
+            try:
+                count = int(count) if count is not None else None
+            except (TypeError, ValueError):
+                count = None
+            if count is not None and count >= 0:
+                progress = min(progress, count)
+                if status == "COMPLETED":
+                    progress = count
+        return {"status": status, "progress": progress}
+
     def _push_anilist(self, account, item):
         media_id = item.get("anilist_id")
         if media_id in (None, ""):
@@ -150,7 +203,7 @@ class WatchlistProviderWriter:
             "Accept": "application/json",
             "User-Agent": "Otaku-Prime/0.1.2 watchdog",
         })
-        payload = self._request(request, "AniList")
+        payload = self._request(request, "AniList", provider="anilist")
         if payload.get("errors"):
             raise WatchlistProviderWriteError("AniList returned GraphQL errors during watchlist update")
         row = (payload.get("data") or {}).get("SaveMediaListEntry") or {}
@@ -172,7 +225,7 @@ class WatchlistProviderWriter:
         request = Request(
             MAL_API_URL + "/anime/{}/my_list_status".format(media_id),
             data=data,
-            method="PATCH",
+            method="PUT",
             headers={
                 "Authorization": "Bearer " + account["access_token"],
                 "Content-Type": "application/x-www-form-urlencoded",
@@ -180,7 +233,7 @@ class WatchlistProviderWriter:
                 "User-Agent": "Otaku-Prime/0.1.2 watchdog",
             },
         )
-        row = self._request(request, "MyAnimeList")
+        row = self._request(request, "MyAnimeList", provider="mal")
         return {
             "provider": "mal", "updated": True,
             "status": item["status"],
@@ -205,9 +258,10 @@ class WatchlistProviderWriter:
         if anime_id in (None, ""):
             return {"provider": "kitsu", "skipped": True, "reason": "missing_provider_id"}
         entry_id = self._kitsu_entry_id(provider_entry)
+        target = self.target_state("kitsu", item, provider_entry)
         attributes = {
-            "status": KITSU_STATUS[item["status"]],
-            "progress": max(0, int(item.get("progress") or 0)),
+            "status": KITSU_STATUS[target["status"]],
+            "progress": target["progress"],
         }
         if entry_id:
             body = {"data": {"type": "libraryEntries", "id": entry_id, "attributes": attributes}}
@@ -235,14 +289,14 @@ class WatchlistProviderWriter:
                 "User-Agent": "Otaku-Prime/0.1.2 watchdog",
             },
         )
-        payload = self._request(request, "Kitsu")
+        payload = self._request(request, "Kitsu", provider="kitsu")
         data = payload.get("data") or {}
         attrs = data.get("attributes") or {}
         return {
             "provider": "kitsu", "updated": True,
             "provider_entry_id": data.get("id") or entry_id,
-            "status": item["status"],
-            "progress": int(attrs.get("progress") if attrs.get("progress") is not None else item.get("progress") or 0),
+            "status": target["status"],
+            "progress": int(attrs.get("progress") if attrs.get("progress") is not None else target["progress"]),
             "updated_at": attrs.get("updatedAt") or _now_iso(),
         }
 
@@ -259,7 +313,7 @@ class WatchlistProviderWriter:
                 "User-Agent": "Otaku-Prime/0.1.2 watchdog",
             },
         )
-        return self._request(request, "Simkl")
+        return self._request(request, "Simkl", provider="simkl")
 
     def _push_simkl(self, account, item, provider_entry):
         simkl_id = item.get("simkl_id")

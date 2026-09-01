@@ -268,8 +268,12 @@ class WatchlistWatchdogStore(WatchlistItemStore):
                 raw_json=CASE WHEN watchlist_provider_entries.raw_json='{}'
                               THEN excluded.raw_json ELSE watchlist_provider_entries.raw_json END,
                 fetched_at=CURRENT_TIMESTAMP""", (
-                provider, str(provider_id), item["local_id"], item["status"], item["status"],
-                int(item.get("progress") or 0), item.get("episode_count"), item.get("media_format"),
+                provider, str(provider_id), item["local_id"],
+                result.get("status") or item["status"],
+                result.get("status") or item["status"],
+                int(result.get("progress") if result.get("progress") is not None
+                    else item.get("progress") or 0),
+                item.get("episode_count"), item.get("media_format"),
                 item.get("release_date"), int(bool(item.get("is_adult"))), str(updated_at), epoch,
                 raw_json,
             ))
@@ -308,6 +312,7 @@ class WatchlistWatchdogService:
         self._thread = None
         self._last_remote_monotonic = 0.0
         self._retry_after = {}
+        self._provider_retry_after = {}
         self._subscribers = []
         self._subscriber_lock = threading.Lock()
         self._connected_account_signature = None
@@ -623,22 +628,35 @@ class WatchlistWatchdogService:
             if provider_id in (None, ""):
                 continue
             entry = self.store.provider_entry(item["local_id"], provider)
+            target_state = getattr(self.provider_writer, "target_state", None)
+            target = target_state(provider, item, entry) if target_state else {
+                "status": item["status"],
+                "progress": int(item.get("progress") or 0),
+            }
             if entry and (
-                entry["status"] == item["status"]
-                and int(entry["progress"]) == int(item.get("progress") or 0)
+                entry["status"] == target["status"]
+                and int(entry["progress"]) == int(target["progress"])
             ):
+                continue
+            provider_retry_at = self._provider_retry_after.get(provider, 0)
+            if provider_retry_at > time.time():
+                all_ok = False
                 continue
             try:
                 result = self.provider_writer.push(provider, item, entry)
                 if result.get("skipped"):
                     continue
                 self.store.mark_provider_synced(provider, item, result)
+                self._provider_retry_after.pop(provider, None)
                 LOGGER.info(
                     "Watchdog mirrored Prime item %s to %s",
                     item["local_id"], provider,
                 )
             except Exception as exc:
                 all_ok = False
+                if getattr(exc, "retryable", True):
+                    retry_seconds = max(60, int(getattr(exc, "retry_after", 0) or 0))
+                    self._provider_retry_after[provider] = time.time() + retry_seconds
                 LOGGER.exception(
                     "Watchdog failed to mirror Prime item %s to %s",
                     item["local_id"], provider,

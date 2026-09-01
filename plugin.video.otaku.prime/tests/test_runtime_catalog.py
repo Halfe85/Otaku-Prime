@@ -31,6 +31,7 @@ class RuntimeCatalogCollisionTests(unittest.TestCase):
             "progress": 0,
             "episode_count": 1,
             "media_format": "TV",
+            "release_date": "2020-01-01",
             "raw": {},
         }])
         self.watchlist.replace_provider_snapshot("mal", [{
@@ -41,6 +42,7 @@ class RuntimeCatalogCollisionTests(unittest.TestCase):
             "progress": 0,
             "episode_count": 2,
             "media_format": "TV",
+            "release_date": "2022-01-01",
             "raw": {},
         }])
         self.watchlist.finalize_merge()
@@ -117,6 +119,55 @@ class RuntimeCatalogCollisionTests(unittest.TestCase):
         self.assertEqual(2, refreshed["episode_number"])
         self.assertEqual("Refreshed", refreshed["title"])
         self.assertEqual(2, len(self.catalog.list_episodes(self.first_season["local_id"])))
+
+    def test_specials_are_resequenced_by_release_date_not_processing_order(self):
+        first_season = self.catalog.add_watchlist_season(
+            self.series["local_id"], self.first_item, season_number=0
+        )
+        second_season = self.catalog.add_watchlist_season(
+            self.series["local_id"], self.second_item, season_number=0
+        )
+        first = self.catalog.add_episode(
+            first_season["local_id"], 1, source_episode_number=1,
+            watchlist_local_id=self.first_item["local_id"], title="2020 special",
+        )
+        second = self.catalog.add_episode(
+            second_season["local_id"], 1, source_episode_number=1,
+            watchlist_local_id=self.second_item["local_id"], title="2022 special",
+        )
+
+        self.watchlist.replace_provider_snapshot("kitsu", [{
+            "provider_item_id": "300",
+            "ids": {"kitsu": "300"},
+            "english_name": "Middle Special",
+            "list_status": "PLANNING",
+            "progress": 0,
+            "episode_count": 1,
+            "media_format": "OVA",
+            "release_date": "2021-01-01",
+            "raw": {},
+        }])
+        self.watchlist.finalize_merge()
+        middle_item = next(
+            row for row in self.watchlist.list_all() if row["kitsu_id"] == "300"
+        )
+        middle_season = self.catalog.add_watchlist_season(
+            self.series["local_id"], middle_item, season_number=0
+        )
+        middle = self.catalog.add_episode(
+            middle_season["local_id"], 1, source_episode_number=1,
+            watchlist_local_id=middle_item["local_id"], title="2021 special",
+        )
+
+        rows = self.catalog.list_episodes(first_season["local_id"])
+        self.assertEqual(
+            [(1, "2020 special"), (2, "2021 special"), (3, "2022 special")],
+            [(row["episode_number"], row["title"]) for row in rows],
+        )
+        by_id = {row["local_id"]: row for row in rows}
+        self.assertEqual(1, by_id[first["local_id"]]["episode_number"])
+        self.assertEqual(3, by_id[second["local_id"]]["episode_number"])
+        self.assertEqual(2, by_id[middle["local_id"]]["episode_number"])
 
 
 if __name__ == "__main__":
