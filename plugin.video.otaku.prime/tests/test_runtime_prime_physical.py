@@ -9,6 +9,7 @@ import unittest
 
 from resources.lib.services.runtime_prime_physical import (
     RuntimePrimePhysicalService,
+    _kodi_refresh_tvshow,
     _kodi_video_scan,
 )
 
@@ -107,6 +108,19 @@ class RuntimePrimePhysicalTests(unittest.TestCase):
         )
         self.assertTrue(result["scan"]["queued"])
 
+        strm = os.path.join(
+            self.temporary.name,
+            "TV-Series",
+            "Example Show 2026",
+            "Season 01",
+            "Example Show - S01E01.strm",
+        )
+        with open(strm, "r", encoding="utf-8") as handle:
+            self.assertEqual(
+                "plugin://plugin.video.otaku.prime/play/library/abcdef000001000001\n",
+                handle.read(),
+            )
+
     def test_kodi_scan_uses_directory_scoped_hidden_video_library_scan(self):
         calls = []
         xbmc = types.SimpleNamespace()
@@ -133,6 +147,49 @@ class RuntimePrimePhysicalTests(unittest.TestCase):
             "directory": "/prime/library/TV-Series/Example Show 2026/",
             "showdialogs": False,
         }, calls[0]["params"])
+
+    def test_kodi_refresh_matches_show_folder_and_reloads_local_nfos(self):
+        calls = []
+        xbmc = types.SimpleNamespace()
+
+        def execute_jsonrpc(payload):
+            request = json.loads(payload)
+            calls.append(request)
+            if request["method"] == "VideoLibrary.GetTVShows":
+                return json.dumps({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "result": {
+                        "tvshows": [{
+                            "tvshowid": 42,
+                            "file": "/prime/library/TV-Series/Example Show 2026/",
+                        }]
+                    },
+                })
+            return json.dumps({"jsonrpc": "2.0", "id": 1, "result": "OK"})
+
+        xbmc.executeJSONRPC = execute_jsonrpc
+        previous = sys.modules.get("xbmc")
+        sys.modules["xbmc"] = xbmc
+        try:
+            result = _kodi_refresh_tvshow(
+                "/prime/library/TV-Series/Example Show 2026"
+            )
+        finally:
+            if previous is None:
+                sys.modules.pop("xbmc", None)
+            else:
+                sys.modules["xbmc"] = previous
+
+        self.assertTrue(result["refreshed"])
+        self.assertEqual(42, result["tvshowid"])
+        self.assertEqual("VideoLibrary.GetTVShows", calls[0]["method"])
+        self.assertEqual("VideoLibrary.RefreshTVShow", calls[1]["method"])
+        self.assertEqual({
+            "tvshowid": 42,
+            "ignorenfo": False,
+            "refreshepisodes": True,
+        }, calls[1]["params"])
 
 
 if __name__ == "__main__":
