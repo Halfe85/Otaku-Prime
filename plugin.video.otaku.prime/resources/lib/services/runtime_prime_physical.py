@@ -9,6 +9,7 @@ import time
 
 from resources.lib.logging_config import get_logger
 from resources.lib.services.prime_nfo import PrimeNfoWriter
+from resources.lib.services.prime_strm import PrimeStrmWriter
 from resources.lib.services.prime_physical import PrimePhysicalService, safe_library_name
 
 
@@ -161,13 +162,14 @@ class KodiVideoLibraryScanQueue:
 
 
 class RuntimePrimePhysicalService(PrimePhysicalService):
-    """Prime Physical plus NFO projection and Kodi native-library scan requests."""
+    """Prime Physical plus STRM/NFO projection and Kodi library scan requests."""
 
     def __init__(self, *args, scan_queue=None, artwork_store=None, **kwargs):
         super().__init__(*args, **kwargs)
         self._scan_queue = scan_queue or KodiVideoLibraryScanQueue(
             halt_requested=self._halt_requested
         )
+        self._strm_writer = PrimeStrmWriter(self.catalog_store)
         self._nfo_writer = PrimeNfoWriter(
             self.catalog_store, artwork_store=artwork_store
         )
@@ -201,7 +203,12 @@ class RuntimePrimePhysicalService(PrimePhysicalService):
 
         directory = self._series_directory(series_id)
         if directory and os.path.isdir(directory):
-            # NFOs must be present before Kodi receives the scoped scan request.
+            # The base physical service may have created empty placeholders.
+            # Repair/write the playable STRM body first, then NFO metadata, and
+            # only after both are durable ask Kodi to scan this show folder.
+            result["strm"] = self._strm_writer.write_series(
+                series_id, directory, now_epoch=int(self._now())
+            )
             result["nfo"] = self._nfo_writer.write_series(
                 series_id, directory, now_epoch=int(self._now())
             )
@@ -210,6 +217,12 @@ class RuntimePrimePhysicalService(PrimePhysicalService):
                     directory, reason="mediator_series"
                 )
         else:
+            result["strm"] = {
+                "written": 0,
+                "unchanged": 0,
+                "missing": False,
+                "reason": "series_directory_missing",
+            }
             result["nfo"] = {
                 "written": 0,
                 "unchanged": 0,
