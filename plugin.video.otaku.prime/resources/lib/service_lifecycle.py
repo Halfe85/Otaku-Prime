@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import sqlite3
+
 
 class ServiceInstanceLock:
     """Best-effort Linux lock preventing overlapping Kodi service generations."""
@@ -39,6 +41,41 @@ class ServiceInstanceLock:
                 pass
         finally:
             handle.close()
+
+
+def initialize_service_stores(stores, wait_for_abort, log, retry_seconds=1):
+    """Initialize SQLite stores after an older addon generation releases them.
+
+    Kodi can start the replacement service while a daemon worker from the
+    previous addon generation is completing its final transaction.  A locked
+    database is temporary in that situation and must not terminate the new
+    service.  Other SQLite failures remain fatal.
+    """
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            for store in stores:
+                store.initialize()
+            if attempt > 1:
+                log(
+                    "OTAKU PRIME: database became available; startup resumed "
+                    "after {} attempts".format(attempt)
+                )
+            return True
+        except sqlite3.OperationalError as exc:
+            message = str(exc).lower()
+            if "locked" not in message and "busy" not in message:
+                raise
+            if attempt == 1 or attempt % 10 == 0:
+                log(
+                    "OTAKU PRIME: database is busy during addon replacement; "
+                    "waiting for the previous service generation (attempt {})".format(
+                        attempt
+                    )
+                )
+            if wait_for_abort(float(retry_seconds)):
+                return False
 
 
 def stop_service_components(

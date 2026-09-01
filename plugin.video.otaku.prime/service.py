@@ -32,7 +32,11 @@ from resources.lib.watchlist.provider_importers import (
 )
 from resources.lib.web import create_server
 from resources.lib.logging_config import configure_logging,get_logger
-from resources.lib.service_lifecycle import ServiceInstanceLock, stop_service_components
+from resources.lib.service_lifecycle import (
+    ServiceInstanceLock,
+    initialize_service_stores,
+    stop_service_components,
+)
 
 
 # Bind every IPv4 interface so the authenticated web UI is reachable from the LAN.
@@ -89,17 +93,20 @@ def _network_web_urls(port: int) -> list[str]:
 
 def _run_service(profile: str) -> None:
     users_db = os.path.join(profile, USERS_DB_NAME)
+    monitor = PrimeMonitor()
 
     user_store = UserStore(users_db)
-    user_store.initialize()
     watchlist_items = WatchlistWatchdogStore(users_db)
-    watchlist_items.initialize()
     watchlist_accounts = WatchlistAccountStore(users_db)
-    watchlist_accounts.initialize()
     catalog = CatalogStore(users_db)
-    catalog.initialize()
     app_logs = AppLogStore(users_db)
-    app_logs.initialize()
+    if not initialize_service_stores(
+        (user_store, watchlist_items, watchlist_accounts, catalog, app_logs),
+        monitor.waitForAbort,
+        lambda message: xbmc.log(message, xbmc.LOGWARNING),
+    ):
+        xbmc.log("OTAKU PRIME: startup cancelled while waiting for database", xbmc.LOGINFO)
+        return
 
     def kodi_log(level,source,message):
         kodi_level={"ERROR":xbmc.LOGERROR,"WARNING":xbmc.LOGWARNING}.get(level,xbmc.LOGINFO)
@@ -156,7 +163,6 @@ def _run_service(profile: str) -> None:
             ),
         )
         watchlist_watchdog.start()
-        monitor = PrimeMonitor()
         monitor.waitForAbort()
         watchlist_watchdog.stop(timeout=35)
         return
@@ -191,7 +197,6 @@ def _run_service(profile: str) -> None:
         xbmc.LOGINFO,
     )
 
-    monitor = PrimeMonitor()
     monitor.waitForAbort()
 
     # Kodi gives addon services only a short shutdown window during repository
