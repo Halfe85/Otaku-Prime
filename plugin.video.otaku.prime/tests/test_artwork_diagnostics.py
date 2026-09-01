@@ -13,6 +13,10 @@ from resources.lib.services.artwork_diagnostics import (
 
 
 class ArtworkDiagnosticTests(unittest.TestCase):
+    def test_stopped_probe_rejects_new_diagnostics(self):
+        probe=ArtworkDiagnosticProbe(); probe.stop()
+        self.assertFalse(probe.schedule("https://assets.fanart.tv/fanart/a.jpg"))
+
     def test_safe_url_removes_query_and_fragment(self):
         safe,parsed=_safe_url("https://assets.fanart.tv/fanart/a.jpg?token=x#fragment")
         self.assertEqual("https://assets.fanart.tv/fanart/a.jpg",safe)

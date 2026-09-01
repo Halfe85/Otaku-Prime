@@ -11,7 +11,13 @@ from resources.lib.services.mediator_helper_simkl import (
 )
 from resources.lib.services.mediator_processor import MediatorProcessor
 from resources.lib.services.mediator_fanarttv import FanartTVMediator
+from resources.lib.services.artwork_store import (
+    ARTWORK_FIELDS,
+    WEB_ROOT,
+    ArtworkStoreError,
+)
 from resources.lib.services.remote_identity import clean_remote_text,item_titles
+from resources.lib.service_lifecycle import ServiceWorkHalted
 
 LOGGER=get_logger(__name__)
 SPECIAL_EPISODE_FORMATS={
@@ -42,10 +48,12 @@ class MediatorRunCancelled(RuntimeError):
 class TVShowMediatorService:
     """Consume Watchdog-ready rows # -> Z and write resolved catalogue records."""
     def __init__(self,watchlist_store,catalog_store,client=None,processor=None,helpers=None,
-                 fanart=None):
+                 fanart=None,artwork_store=None,physical=None):
         self.watchlist_store=watchlist_store; self.catalog_store=catalog_store
         self.client=client or SimklMediatorClient(); self._stop=threading.Event()
         self.fanart=fanart or FanartTVMediator()
+        self.artwork_store=artwork_store
+        self.physical=physical
         self._stopping=threading.Event()
         self._lock=threading.Lock(); self._thread=None
         # `helpers` remains accepted for older tests/callers; convert it into endpoint-like objects.
@@ -54,7 +62,9 @@ class TVShowMediatorService:
         elif helpers is not None:
             self.processor=_LegacyProcessor(helpers,self.client)
         else:
-            self.processor=MediatorProcessor(simkl_client=self.client)
+            self.processor=MediatorProcessor(
+                simkl_client=self.client,
+                halt_requested=lambda:self._stop.is_set() or self._stopping.is_set())
 
     @staticmethod
     def provider_for(item):
@@ -85,7 +95,11 @@ class TVShowMediatorService:
             getter=getattr(getattr(endpoint,"client",None),"cast",None)
         if not getter: return None
         try:
-            return getter(str(provider_id)) or None
+            value=getter(str(provider_id)) or None
+            self._ensure_current(item_id)
+            return value
+        except MediatorRunCancelled:
+            raise
         except Exception as exc:
             LOGGER.warning(
                 "%s staff/character enrichment unavailable for Prime item %s "
@@ -105,7 +119,10 @@ class TVShowMediatorService:
         if not getter: return None
         try:
             value=str(getter(str(provider_id)) or "").strip()
+            self._ensure_current(item_id)
             return value if value.startswith(("https://","http://")) else None
+        except MediatorRunCancelled:
+            raise
         except Exception as exc:
             LOGGER.warning(
                 "%s poster fallback unavailable for Prime item %s (%s ID %s): %s",
@@ -129,6 +146,65 @@ class TVShowMediatorService:
         return placement
 
     @staticmethod
+    def _artwork_ids(item,show):
+        return {provider:(show or {}).get(provider+"_id") or
+                (item or {}).get(provider+"_id")
+                for provider in ("tvdb","simkl","anilist","mal","kitsu")}
+
+    def _localize_artwork(self,item,placement):
+        """Replace remote artwork URLs with Prime-owned persistent web URLs."""
+        if self.artwork_store is None: return placement
+        show=(placement or {}).get("tv_show") or {}
+        media_type="movies" if placement.get("library_type")=="movie" else "tvshows"
+        ids=self._artwork_ids(item,show)
+        for field,art_type in ARTWORK_FIELDS.items():
+            source=str(show.get(field) or "").strip()
+            if not source or source.startswith(WEB_ROOT): continue
+            if not source.startswith(("https://","http://")): continue
+            try:
+                stored=self.artwork_store.persist(media_type,ids,art_type,source)
+            except ServiceWorkHalted:
+                raise
+            except (ArtworkStoreError,OSError) as exc:
+                # Do not send the browser back to a failing third-party host.
+                # Removing a failed poster also allows the provider fallback
+                # chain to offer a different source on the next pass.
+                show.pop(field,None)
+                LOGGER.warning(
+                    "Prime could not preserve %s artwork for item %s: %s",
+                    art_type,item.get("local_id"),exc)
+                continue
+            show[field]=stored["web_url"]
+            show.setdefault("artwork_local_paths",{})[art_type]=stored["kodi_path"]
+        return placement
+
+    def _restore_local_artwork(self,item,placement):
+        if self.artwork_store is None: return placement
+        show=(placement or {}).get("tv_show") or {}
+        media_type="movies" if placement.get("library_type")=="movie" else "tvshows"
+        getter=getattr(self.artwork_store,"existing",None)
+        if not getter: return placement
+        recovered=getter(media_type,self._artwork_ids(item,show))
+        for field in ARTWORK_FIELDS:
+            if not show.get(field) and recovered.get(field):
+                show[field]=recovered[field]
+        if recovered.get("kodi_paths"):
+            show.setdefault("artwork_local_paths",{}).update(recovered["kodi_paths"])
+        return placement
+
+    def _prepare_artwork(self,item,placement):
+        if placement.get("library_type")!="movie":
+            placement=self.fanart.enrich(placement)
+            self._ensure_current(item["local_id"])
+        placement=self._localize_artwork(item,placement)
+        self._ensure_current(item["local_id"])
+        placement=self._restore_local_artwork(item,placement)
+        self._ensure_current(item["local_id"])
+        placement=self._fallback_poster(item,placement)
+        self._ensure_current(item["local_id"])
+        return self._localize_artwork(item,placement)
+
+    @staticmethod
     def _merge_terms(existing,incoming):
         result=[]; seen=set()
         for value in list(existing or [])+list(incoming or []):
@@ -144,7 +220,10 @@ class TVShowMediatorService:
         if not getter: return None
         try:
             value=getter(str(provider_id)) or {}
+            self._ensure_current(item_id)
             return value if isinstance(value,dict) else None
+        except MediatorRunCancelled:
+            raise
         except Exception as exc:
             LOGGER.warning(
                 "%s classification enrichment unavailable for Prime item %s "
@@ -216,7 +295,8 @@ class TVShowMediatorService:
                 release_status=season_data.get("release_status"),
                 publish_year=show.get("publish_year"),overview=show.get("overview"),
                 runtime_minutes=show.get("runtime_minutes"),air_status=show.get("air_status"),
-                poster_url=show.get("poster_url"),clearlogo_url=show.get("clearlogo_url"),
+                poster_url=show.get("poster_url"),fanart_url=show.get("fanart_url"),
+                clearlogo_url=show.get("clearlogo_url"),
                 banner_url=show.get("banner_url"),genres=show.get("genres"),
                 themes=show.get("themes"),age_rating=show.get("age_rating"),
                 mature=show.get("mature") or item.get("is_adult"))
@@ -238,7 +318,8 @@ class TVShowMediatorService:
             source_media_format=show.get("source_format"),publish_year=show.get("publish_year"),
             overview=show.get("overview"),runtime_minutes=show.get("runtime_minutes"),
             air_status=show.get("air_status"),poster_url=show.get("poster_url"),
-            clearlogo_url=show.get("clearlogo_url"),banner_url=show.get("banner_url"),
+            fanart_url=show.get("fanart_url"),clearlogo_url=show.get("clearlogo_url"),
+            banner_url=show.get("banner_url"),
             genres=show.get("genres"),themes=show.get("themes"),
             age_rating=show.get("age_rating"),
             mature=show.get("mature") or item.get("is_adult"))
@@ -323,9 +404,7 @@ class TVShowMediatorService:
         self._ensure_current(item["local_id"])
         placement=self._enrich_classification(item,placement)
         self._ensure_current(item["local_id"])
-        if placement.get("library_type")!="movie":
-            placement=self.fanart.enrich(placement)
-        placement=self._fallback_poster(item,placement)
+        placement=self._prepare_artwork(item,placement)
         self._ensure_current(item["local_id"])
         provider=placement["provider_path"]
         show=placement["tv_show"]; season_data=placement["season"]
@@ -336,7 +415,12 @@ class TVShowMediatorService:
                 LOGGER.info(
                     "Removed %s obsolete episodes before rebuilding Prime item %s "
                     "across multiple seasons",removed,item["local_id"])
-        self._persist_placement(item,placement,placement_state="COMPLETE")
+        stored_series,_=self._persist_placement(
+            item,placement,placement_state="COMPLETE")
+        if self.physical is not None and placement.get("library_type")!="movie":
+            # The handoff contains only Prime's opaque series ID. Prime Physical
+            # owns every catalogue lookup and all filesystem decisions.
+            self.physical.project_series(stored_series["local_id"])
         if placement.get("library_type")=="movie":
             LOGGER.info("Mediator placed Prime item %s through %s in Movies as %s",
                         item["local_id"],provider,
@@ -397,9 +481,7 @@ class TVShowMediatorService:
         partial=getattr(exc,"placement",None)
         if partial:
             partial=self._enrich_classification(item,partial)
-            if partial.get("library_type")!="movie":
-                partial=self.fanart.enrich(partial)
-            partial=self._fallback_poster(item,partial)
+            partial=self._prepare_artwork(item,partial)
             self._ensure_current(item["local_id"])
             self._persist_placement(item,partial,placement_state="STRUCTURE_ONLY")
             show=partial.get("tv_show") or {}
@@ -450,7 +532,7 @@ class TVShowMediatorService:
                         continue
                     try:
                         self.process_item(item); placed+=1; progress=True
-                    except MediatorRunCancelled as exc:
+                    except (MediatorRunCancelled,ServiceWorkHalted) as exc:
                         progress=True
                         LOGGER.info(
                             "Mediator discarded stale Prime item %s: %s",

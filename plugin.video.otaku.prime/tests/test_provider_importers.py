@@ -1,6 +1,7 @@
 import os
 import sys
 import tempfile
+import threading
 import unittest
 
 ROOT=os.path.dirname(os.path.dirname(__file__)); sys.path.insert(0,ROOT)
@@ -10,6 +11,7 @@ from resources.lib.database.watchlist_items import WatchlistItemStore
 from resources.lib.watchlist.provider_importers import (
   MALWatchlistClient,MALWatchlistImportService,KitsuWatchlistImportService,
   SimklWatchlistImportService)
+from resources.lib.service_lifecycle import ServiceWorkHalted
 
 
 class ProviderImporterTests(unittest.TestCase):
@@ -43,6 +45,21 @@ class ProviderImporterTests(unittest.TestCase):
         MALWatchlistImportService(self.accounts,self.items,client=Client()).sync()
         row=self.items.list_provider("mal")[0]
         self.assertEqual(("PAUSED",4,"11"),(row["status"],row["progress"],row["mal_id"]))
+
+    def test_halt_after_provider_response_discards_snapshot(self):
+        self.connect("mal"); halted=threading.Event()
+        class Client:
+            def fetch(self,token):
+                halted.set()
+                return [{"node":{"id":11,"title":"Too Late"},
+                         "list_status":{"status":"watching"}}]
+        service=MALWatchlistImportService(self.accounts,self.items,client=Client())
+        service.set_halt_event(halted)
+
+        with self.assertRaises(ServiceWorkHalted):
+            service.sync()
+
+        self.assertEqual([],self.items.list_provider("mal"))
 
     def test_kitsu_fetch_uses_anilist_and_mal_mappings(self):
         self.connect("kitsu")

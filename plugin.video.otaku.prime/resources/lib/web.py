@@ -6,6 +6,7 @@ from __future__ import annotations
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 import threading
 import time
 from typing import Optional
@@ -19,6 +20,7 @@ from resources.lib.database.catalog import CatalogStore
 from resources.lib.endpoints.auth_service import AuthenticatorAPI, AuthenticatorAPIError
 from resources.lib.logging_config import get_logger
 from resources.lib.services.artwork_diagnostics import ArtworkDiagnosticProbe
+from resources.lib.services.artwork_store import PersistentArtworkStore,WEB_ROOT
 LOGGER=get_logger(__name__)
 from resources.lib.ui import (
     read_static_asset,
@@ -37,7 +39,7 @@ MAX_FORM_BYTES = 16 * 1024
 def create_server(host: str, port: int, user_store, app_log_store=None,
                   on_watchlist_changed=None,on_watchlist_state_changed=None,
                   on_episode_watch_state_changed=None,
-                  artwork_diagnostic_probe=None) -> ThreadingHTTPServer:
+                  artwork_diagnostic_probe=None,artwork_store=None) -> ThreadingHTTPServer:
     auth = AuthService(user_store)
     authenticator_api = AuthenticatorAPI()
     watchlist_accounts = WatchlistAccountStore(user_store.db_path)
@@ -51,6 +53,7 @@ def create_server(host: str, port: int, user_store, app_log_store=None,
     simkl_flows = {}
     simkl_flows_lock = threading.Lock()
     artwork_diagnostic_probe = artwork_diagnostic_probe or ArtworkDiagnosticProbe()
+    artwork_store = artwork_store or PersistentArtworkStore()
 
     class PrimeRequestHandler(BaseHTTPRequestHandler):
         server_version = "OtakuPrime/0.1"
@@ -97,6 +100,29 @@ def create_server(host: str, port: int, user_store, app_log_store=None,
         def _send_json(self, status: int, body: dict) -> None:
             payload = json.dumps(body, separators=(",", ":")).encode("utf-8")
             self._send_bytes(status, "application/json; charset=utf-8", payload)
+
+        def _send_artwork(self, physical_path: str, content_type: str) -> None:
+            try:
+                size=os.path.getsize(physical_path)
+                handle=open(physical_path,"rb")
+            except OSError as exc:
+                LOGGER.warning("Prime artwork could not be opened: %s",exc)
+                self._send_html(404,"<h1>404</h1>"); return
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type",content_type)
+                self.send_header("Content-Length",str(size))
+                self.send_header("Cache-Control","private, max-age=3600")
+                self.send_header("X-Content-Type-Options","nosniff")
+                self.end_headers()
+                while True:
+                    chunk=handle.read(64*1024)
+                    if not chunk: break
+                    self.wfile.write(chunk)
+            except (BrokenPipeError,ConnectionResetError):
+                pass
+            finally:
+                handle.close()
 
         def _redirect(self, location: str, cookie_header: Optional[str] = None) -> None:
             self.send_response(303)
@@ -252,6 +278,15 @@ def create_server(host: str, port: int, user_store, app_log_store=None,
                     return
                 content_type, payload = asset
                 self._send_bytes(200, content_type, payload)
+                return
+
+            if path.startswith(WEB_ROOT):
+                if not self._current_user():
+                    self._send_json(401,{"ok":False,"message":"Sign in again."}); return
+                resolved=artwork_store.resolve_web_path(path[len(WEB_ROOT):])
+                if not resolved:
+                    self._send_html(404,"<h1>404</h1>"); return
+                self._send_artwork(*resolved)
                 return
 
             if path == "/health":
@@ -477,7 +512,7 @@ def create_server(host: str, port: int, user_store, app_log_store=None,
                     self._send_json(401,{"ok":False,"message":"Sign in again."}); return
                 payload=self._read_api_payload()
                 kind=str(payload.get("kind") or "artwork").strip().lower()[:24]
-                if kind not in ("poster","clearlogo","banner"):
+                if kind not in ("poster","fanart","clearlogo","banner"):
                     kind="artwork"
                 title=" ".join(str(payload.get("title") or "unknown title").split())[:180]
                 raw_url=str(payload.get("url") or "").strip()[:2048]
@@ -769,4 +804,7 @@ def create_server(host: str, port: int, user_store, app_log_store=None,
 
             self._send_html(404, "<h1>404</h1>")
 
-    return ThreadingHTTPServer((host, port), PrimeRequestHandler)
+    server=ThreadingHTTPServer((host, port), PrimeRequestHandler)
+    server.artwork_diagnostic_probe=artwork_diagnostic_probe
+    server.artwork_store=artwork_store
+    return server

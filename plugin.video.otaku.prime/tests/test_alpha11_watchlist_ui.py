@@ -10,9 +10,55 @@ from resources.lib.database.watchlist_items import WatchlistItemStore
 from resources.lib.ui.renderer import read_static_asset,render_home
 from resources.lib.users import UserStore
 from resources.lib.web import create_server
+from resources.lib.services.artwork_store import PersistentArtworkStore
 
 
 class Alpha11WatchlistUITests(unittest.TestCase):
+    def test_authenticated_ui_can_read_prime_owned_artwork(self):
+        class ImageResponse:
+            headers={"Content-Type":"image/png"}
+            def __init__(self): self.sent=False
+            def __enter__(self): return self
+            def __exit__(self,*_args): return False
+            def read(self,_size=-1):
+                if self.sent: return b""
+                self.sent=True; return b"\x89PNG\r\n\x1a\nprime"
+
+        with tempfile.TemporaryDirectory() as directory:
+            database=os.path.join(directory,"users.sqlite")
+            users=UserStore(database); users.initialize()
+            artwork=PersistentArtworkStore(
+                root_path=os.path.join(directory,"artwork"),
+                opener=lambda *_args,**_kwargs:ImageResponse())
+            record=artwork.persist("tvshows",{"tvdb":"74796"},"poster",
+                                   "https://assets.example/poster.png")
+            try:
+                server=create_server("127.0.0.1",0,users,artwork_store=artwork)
+            except PermissionError:
+                self.skipTest("sandbox does not permit local listener sockets")
+            thread=threading.Thread(target=server.serve_forever,daemon=True); thread.start()
+            connection=None
+            try:
+                connection=http.client.HTTPConnection(
+                    "127.0.0.1",server.server_port,timeout=3)
+                body=urlencode({"username":"admin","password":"admin"})
+                connection.request("POST","/login",body,
+                                   {"Content-Type":"application/x-www-form-urlencoded"})
+                response=connection.getresponse()
+                cookie=response.getheader("Set-Cookie").split(";",1)[0]
+                response.read(); connection.close()
+                connection=http.client.HTTPConnection(
+                    "127.0.0.1",server.server_port,timeout=3)
+                connection.request("GET",record["web_url"],headers={"Cookie":cookie})
+                response=connection.getresponse(); payload=response.read()
+                self.assertEqual(200,response.status)
+                self.assertEqual("image/png",response.getheader("Content-Type"))
+                self.assertEqual(b"\x89PNG\r\n\x1a\nprime",payload)
+                self.assertIn("max-age=3600",response.getheader("Cache-Control"))
+            finally:
+                if connection: connection.close()
+                server.shutdown(); server.server_close(); thread.join(timeout=3)
+
     def test_watchlist_view_uses_topbar_search_without_redundant_heading(self):
         page=render_home(
             {"username":"admin","role":"admin"},active_tab="watchlist-management",
@@ -109,6 +155,7 @@ class Alpha11WatchlistUITests(unittest.TestCase):
         self.assertIn("item.clearlogo_url",script)
         self.assertIn("library-tile-logo-wrap",script)
         self.assertIn("series.banner_url",script)
+        self.assertIn("series.banner_url || series.fanart_url",script)
         self.assertIn("series.clearlogo_url",script)
         self.assertIn(".library-tile-poster",styles)
         self.assertIn("repeat(auto-fill,minmax(min(230px,100%),1fr))",styles)

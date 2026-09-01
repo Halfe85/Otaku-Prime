@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """Fanart.tv URL enrichment for Prime TV-show catalogue placements.
 
-This module never downloads image bytes.  It selects stable Fanart.tv asset
-URLs and stores them in Prime; the web browser remains responsible for normal
-HTTP image caching.
+This module selects candidate Fanart.tv asset URLs. The TV-show mediator passes
+those candidates through Prime's persistent artwork store before catalogue
+metadata is written, so browsers never need to fetch Fanart.tv assets directly.
 """
 from __future__ import annotations
 
@@ -138,8 +138,9 @@ class FanartTVMediator:
     def artwork(payload):
         return {
             "poster_url":_select(payload,("tvposter",)),
+            "fanart_url":_select(payload,("showbackground",)),
             "clearlogo_url":_select(payload,("clearlogo","hdtvlogo")),
-            "banner_url":_select(payload,("tvbanner","showbackground")),
+            "banner_url":_select(payload,("tvbanner",)),
         }
 
     def enrich(self,placement):
@@ -162,8 +163,9 @@ class FanartTVMediator:
         show["artwork_source"]="fanarttv" if any(artwork.values()) else show.get("artwork_source")
         if any(artwork.values()):
             LOGGER.info(
-                "Fanart.tv artwork selected for TVDB %s: poster=%s clearlogo=%s banner=%s",
+                "Fanart.tv artwork selected for TVDB %s: poster=%s fanart=%s clearlogo=%s banner=%s",
                 tvdb_id,artwork.get("poster_url") or "none",
+                artwork.get("fanart_url") or "none",
                 artwork.get("clearlogo_url") or "none",artwork.get("banner_url") or "none")
         else:
             LOGGER.info("Fanart.tv returned no selectable artwork for TVDB %s",tvdb_id)

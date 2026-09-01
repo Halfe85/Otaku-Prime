@@ -4,6 +4,11 @@
 from __future__ import annotations
 
 import sqlite3
+import time
+
+
+class ServiceWorkHalted(RuntimeError):
+    """Raised when an addon update retires an in-flight unit of work."""
 
 
 class ServiceInstanceLock:
@@ -84,19 +89,30 @@ def stop_service_components(
     watchlist_watchdog,
     *,
     web_join_timeout=1,
-    worker_timeout=35,
+    worker_timeout=3,
 ):
-    """Release the web listener before waiting for background workers.
+    """Halt producers, release the listener, then honor one shutdown deadline.
 
     Kodi starts the replacement addon service as soon as an update has been
-    installed.  The old service must therefore relinquish its listening socket
-    first; mediator and watchlist workers may need longer to leave an in-flight
-    provider request.
+    installed. No component may consume the full timeout independently.
     """
+    deadline = time.monotonic() + max(0.0, float(worker_timeout))
+    pause = getattr(watchlist_watchdog, "pause", None)
+    if pause:
+        pause()
+    artwork_probe = getattr(server, "artwork_diagnostic_probe", None)
+    if artwork_probe:
+        artwork_probe.stop()
+    artwork_store = getattr(server, "artwork_store", None)
+    if artwork_store:
+        artwork_store.stop(timeout=min(1.0,max(0.0,deadline-time.monotonic())))
     try:
         server.shutdown()
     finally:
         server.server_close()
 
-    server_thread.join(timeout=web_join_timeout)
-    watchlist_watchdog.stop(timeout=worker_timeout)
+    server_thread.join(timeout=min(
+        max(0.0, float(web_join_timeout)),
+        max(0.0, deadline - time.monotonic()),
+    ))
+    watchlist_watchdog.stop(timeout=max(0.0, deadline - time.monotonic()))

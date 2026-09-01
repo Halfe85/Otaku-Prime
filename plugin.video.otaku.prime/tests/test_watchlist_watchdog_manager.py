@@ -46,6 +46,19 @@ class _ProviderProjectionWriter(_Writer):
             int(item["progress"]),int(entry["episode_count"]))}
 
 
+class _LifecycleComponent:
+    def __init__(self): self.stop_requested=False; self.starts=0; self._thread=None
+    def request_stop(self): self.stop_requested=True
+    def start(self): self.starts+=1
+    def stop(self,timeout=None): self.stop_requested=True; return True
+
+
+class _LifecycleWriter(_Writer):
+    def __init__(self): super().__init__(); self.event=None; self.stop_requested=False
+    def set_halt_event(self,event): self.event=event
+    def request_stop(self): self.stop_requested=True; self.event.set()
+
+
 class WatchlistWatchdogManagerTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -108,6 +121,22 @@ class WatchlistWatchdogManagerTests(unittest.TestCase):
         )
         self.assertFalse(result["changed"])
         self.assertEqual(events, [])
+
+    def test_pause_retires_all_producers_and_rejects_new_work(self):
+        writer=_LifecycleWriter(); identity=_LifecycleComponent(); mediator=_LifecycleComponent()
+        manager=WatchlistWatchdogService(
+            [],self.store,writer,identity_enricher=identity,mediator=mediator)
+
+        result=manager.pause()
+
+        self.assertTrue(result["paused"])
+        self.assertTrue(writer.event.is_set())
+        self.assertTrue(writer.stop_requested)
+        self.assertTrue(identity.stop_requested)
+        self.assertTrue(mediator.stop_requested)
+        self.assertEqual({"scheduled":False,"paused":True},manager.request_remote_sync())
+        self.assertEqual({"scheduled":False,"paused":True},manager.identity_complete())
+        self.assertEqual(0,mediator.starts)
 
     def test_remote_diff_emits_added_updated_and_removed(self):
         events = []

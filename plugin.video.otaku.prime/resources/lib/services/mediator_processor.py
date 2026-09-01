@@ -13,6 +13,7 @@ from resources.lib.services.mediator_helper_simkl import (
     MediatorMetadataPending,
     MediatorPlacementError,
 )
+from resources.lib.service_lifecycle import ServiceWorkHalted
 
 LOGGER=get_logger(__name__)
 
@@ -81,13 +82,18 @@ def _merge_placements(anilist,mal):
 
 class MediatorProcessor:
     """Resolve one Watchlist row without ever changing provider identities."""
-    def __init__(self,endpoints=None,simkl_client=None):
+    def __init__(self,endpoints=None,simkl_client=None,halt_requested=None):
         self.endpoints=endpoints or {
             "simkl":SimklMediatorEndpoint(client=simkl_client),
             "anilist":AniListMediatorEndpoint(),
             "mal":MALMediatorEndpoint(),
             "kitsu":KitsuMediatorEndpoint(),
         }
+        self.halt_requested=halt_requested or (lambda:False)
+
+    def _checkpoint(self):
+        if self.halt_requested():
+            raise ServiceWorkHalted("metadata mediation halted for addon shutdown")
 
     @staticmethod
     def _available(name,endpoint,item):
@@ -97,19 +103,26 @@ class MediatorProcessor:
         return bool(checker(item)) if checker else True
 
     def _try(self,name,item,attempts,pending_placements=None):
+        self._checkpoint()
         endpoint=self.endpoints[name]
         if not self._available(name,endpoint,item):
             reason="Simkl identity is conflicted" if name=="simkl" and str(item.get("identity_resolution_status") or "")=="CONFLICT_EXACT" else "provider ID unavailable"
             attempts.append({"provider":name,"skipped":True,"error":reason})
             return None
         try:
-            return endpoint.resolve(item)
+            result=endpoint.resolve(item)
+            self._checkpoint()
+            return result
+        except ServiceWorkHalted:
+            raise
         except MediatorMetadataPending as exc:
+            self._checkpoint()
             attempts.append({"provider":name,"skipped":False,"pending":True,"error":str(exc)})
             if pending_placements is not None and getattr(exc,"placement",None):
                 pending_placements.append((name,exc.placement))
             return None
         except Exception as exc:
+            self._checkpoint()
             attempts.append({"provider":name,"skipped":False,"error":str(exc)})
             LOGGER.info("Mediator %s endpoint could not resolve Prime item %s: %s",name,item.get("local_id"),exc)
             return None
@@ -118,14 +131,20 @@ class MediatorProcessor:
         """Keep structural coordinates, but resolve library ownership independently."""
         identity=None
         for provider in ("anilist","mal"):
+            self._checkpoint()
             endpoint=self.endpoints.get(provider)
             getter=getattr(endpoint,"franchise_identity",None)
             value=item.get(provider+"_id")
             if not getter or value in (None,""):
                 continue
             try:
-                identity=getter(value); break
+                identity=getter(value)
+                self._checkpoint()
+                break
+            except ServiceWorkHalted:
+                raise
             except Exception as exc:
+                self._checkpoint()
                 LOGGER.info(
                     "%s franchise identity unavailable for Prime item %s: %s",
                     provider.title(),item.get("local_id"),exc)
@@ -146,6 +165,7 @@ class MediatorProcessor:
         return placement
 
     def resolve(self,item):
+        self._checkpoint()
         attempts=[]; pending_placements=[]
         simkl=self._try("simkl",item,attempts,pending_placements)
         if simkl:

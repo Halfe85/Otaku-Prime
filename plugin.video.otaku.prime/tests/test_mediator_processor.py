@@ -2,6 +2,7 @@ import unittest
 
 from resources.lib.services.mediator_processor import MediatorProcessor
 from resources.lib.services.mediator_helper_simkl import MediatorMetadataPending
+from resources.lib.service_lifecycle import ServiceWorkHalted
 
 
 class Endpoint:
@@ -43,6 +44,24 @@ class MediatorProcessorTests(unittest.TestCase):
         result=MediatorProcessor(endpoints=endpoints).resolve(self.item())
         self.assertEqual("simkl",result["provider_path"])
         self.assertEqual((1,0,0,0),tuple(endpoints[name].calls for name in ("simkl","anilist","mal","kitsu")))
+
+    def test_halt_after_provider_response_prevents_fallback_requests(self):
+        halted=[False]
+        class HaltingEndpoint(Endpoint):
+            def resolve(self,item):
+                self.calls+=1; halted[0]=True
+                raise RuntimeError("request ended during shutdown")
+        endpoints={name:Endpoint(name,placement(name))
+                   for name in ("simkl","anilist","mal","kitsu")}
+        endpoints["simkl"]=HaltingEndpoint("simkl")
+
+        with self.assertRaises(ServiceWorkHalted):
+            MediatorProcessor(
+                endpoints=endpoints,halt_requested=lambda:halted[0]
+            ).resolve(self.item())
+
+        self.assertEqual((1,0,0,0),tuple(
+            endpoints[name].calls for name in ("simkl","anilist","mal","kitsu")))
 
     def test_simkl_coordinates_use_anilist_canonical_franchise_identity(self):
         simkl=placement("simkl",season=0)

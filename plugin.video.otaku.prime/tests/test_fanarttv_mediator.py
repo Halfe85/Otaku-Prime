@@ -28,6 +28,7 @@ class FanartTVMediatorTests(unittest.TestCase):
             "clearlogo":[{"url":"https://assets/clearlogo.png","lang":"en","likes":"1"}],
             "hdtvlogo":[{"url":"https://assets/hdtvlogo.png","lang":"en","likes":"99"}],
             "tvbanner":[{"url":"https://assets/banner.jpg","lang":"00","likes":"5"}],
+            "showbackground":[{"url":"https://assets/fanart.jpg","lang":"00","likes":"7"}],
         }
 
     def test_client_uses_tvdb_id_and_returns_only_json_metadata(self):
@@ -72,6 +73,7 @@ class FanartTVMediatorTests(unittest.TestCase):
 
         show=placement["tv_show"]
         self.assertEqual("https://assets/poster-en-high.jpg",show["poster_url"])
+        self.assertEqual("https://assets/fanart.jpg",show["fanart_url"])
         self.assertEqual("https://assets/clearlogo.png",show["clearlogo_url"])
         self.assertEqual("https://assets/banner.jpg",show["banner_url"])
         self.assertEqual("fanarttv",show["artwork_source"])

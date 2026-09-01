@@ -60,6 +60,7 @@ class LibraryCatalogTests(unittest.TestCase):
             runtime_minutes=24,
             air_status="airing",
             poster_url="https://img.example/poster.webp",
+            fanart_url="https://img.example/fanart.webp",
             clearlogo_url="https://img.example/logo.webp",
             banner_url="https://img.example/banner.webp",
             genres=["Action","Fantasy"],
@@ -294,6 +295,7 @@ class LibraryCatalogTests(unittest.TestCase):
         detail=self.catalog.library_series_detail(self.series["local_id"])
 
         self.assertEqual("https://img.example/poster.webp",tile["poster_url"])
+        self.assertEqual("https://img.example/fanart.webp",tile["fanart_url"])
         self.assertEqual("https://img.example/logo.webp",tile["clearlogo_url"])
         self.assertEqual("https://img.example/banner.webp",detail["banner_url"])
 

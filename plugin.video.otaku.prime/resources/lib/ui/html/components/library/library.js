@@ -453,14 +453,15 @@
     logo.hidden = true;
     logo.removeAttribute("src");
     logo.alt = "";
-    if (series.banner_url) {
+    var heroArtwork = series.banner_url || series.fanart_url;
+    if (heroArtwork) {
       banner.onload = function () { banner.hidden = false; hero.classList.add("has-banner"); };
       banner.onerror = function () {
         banner.hidden = true;
         hero.classList.remove("has-banner");
-        reportArtworkFailure("banner",series.banner_url,title);
+        reportArtworkFailure(series.banner_url ? "banner" : "fanart",heroArtwork,title);
       };
-      banner.src = String(series.banner_url);
+      banner.src = String(heroArtwork);
     }
     if (series.clearlogo_url) {
       logo.onload = function () {

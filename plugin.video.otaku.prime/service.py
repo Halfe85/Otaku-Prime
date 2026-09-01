@@ -23,6 +23,8 @@ from resources.lib.services.watchlist_watchdog_release import (
 )
 from resources.lib.services.watchlist_provider_writer import WatchlistProviderWriter
 from resources.lib.services.mediator_tvshow import TVShowMediatorService
+from resources.lib.services.artwork_store import PersistentArtworkStore
+from resources.lib.services.prime_physical import PrimePhysicalService
 from resources.lib.services.watch_state_projector import CatalogWatchStateProjector
 from resources.lib.watchlist.anilist_sync import AniListWatchlistImportService
 from resources.lib.watchlist.provider_importers import (
@@ -123,7 +125,12 @@ def _run_service(profile: str) -> None:
         KitsuWatchlistImportService(watchlist_accounts, watchlist_items),
         SimklWatchlistImportService(watchlist_accounts, watchlist_items),
     ]
-    tvshow_mediator = TVShowMediatorService(watchlist_items,catalog)
+    artwork_store=PersistentArtworkStore(halt_requested=monitor.abortRequested)
+    artwork_store.start()
+    prime_physical=PrimePhysicalService(
+        catalog,halt_requested=monitor.abortRequested)
+    tvshow_mediator = TVShowMediatorService(
+        watchlist_items,catalog,artwork_store=artwork_store,physical=prime_physical)
     identity_enricher = WatchlistIdentityEnrichmentService(watchlist_items)
     provider_writer = WatchlistProviderWriter(watchlist_accounts)
     watchlist_watchdog = ReleaseAwareWatchlistWatchdogService(
@@ -153,6 +160,7 @@ def _run_service(profile: str) -> None:
             on_watchlist_changed=watchlist_watchdog.request_remote_sync,
             on_watchlist_state_changed=watchlist_watchdog.update_item,
             on_episode_watch_state_changed=watch_state_projector.update_episode,
+            artwork_store=artwork_store,
         )
     except OSError as exc:
         log(
@@ -162,9 +170,14 @@ def _run_service(profile: str) -> None:
                 WEB_HOST, WEB_PORT, exc
             ),
         )
+        prime_physical.project_all()
         watchlist_watchdog.start()
         monitor.waitForAbort()
-        watchlist_watchdog.stop(timeout=35)
+        xbmc.log("OTAKU PRIME: pausing background work for addon shutdown", xbmc.LOGINFO)
+        watchlist_watchdog.pause()
+        configure_logging(None,kodi_log)
+        watchlist_watchdog.stop(timeout=3)
+        artwork_store.stop(timeout=1)
         return
 
     server_thread = threading.Thread(
@@ -173,6 +186,9 @@ def _run_service(profile: str) -> None:
         daemon=True,
     )
     server_thread.start()
+    # Bind the admin UI first, then backfill STRM placeholders for catalogue
+    # rows created before Prime Physical existed.
+    prime_physical.project_all()
     watchlist_watchdog.start()
     log("INFO","service","Web service listening on all IPv4 interfaces at port {}".format(WEB_PORT))
     network_urls = _network_web_urls(WEB_PORT)
@@ -200,15 +216,16 @@ def _run_service(profile: str) -> None:
     monitor.waitForAbort()
 
     # Kodi gives addon services only a short shutdown window during repository
-    # updates.  Release port 9898 first so the newly installed service can bind
-    # it even when a provider request keeps an old worker alive for longer.
-    xbmc.log("OTAKU PRIME: stopping web service", xbmc.LOGINFO)
+    # updates. Halt every producer before closing the listener, and detach the
+    # SQLite app-log sink so a late network response cannot reopen the database.
+    xbmc.log("OTAKU PRIME: pausing background work for addon shutdown", xbmc.LOGINFO)
+    configure_logging(None,kodi_log)
     stop_service_components(
         server,
         server_thread,
         watchlist_watchdog,
         web_join_timeout=1,
-        worker_timeout=35,
+        worker_timeout=3,
     )
 
     xbmc.log("OTAKU PRIME: service stopped", xbmc.LOGINFO)

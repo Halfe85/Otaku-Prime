@@ -29,6 +29,11 @@ class _Server:
         self.events.append("web-close")
 
 
+class _Artwork:
+    def __init__(self,events): self.events=events
+    def stop(self,timeout=None): self.events.append(("artwork-stop",timeout))
+
+
 class _Thread:
     def __init__(self, events):
         self.events = events
@@ -43,6 +48,9 @@ class _Watchdog:
 
     def stop(self, timeout=None):
         self.events.append(("worker-stop", timeout))
+
+    def pause(self):
+        self.events.append("worker-pause")
 
 
 class _Store:
@@ -106,7 +114,7 @@ class ServiceLifecycleTests(unittest.TestCase):
             self.assertTrue(second.acquire())
             second.release()
 
-    def test_web_socket_is_released_before_worker_wait(self):
+    def test_workers_are_paused_before_web_socket_is_released(self):
         events = []
 
         stop_service_components(
@@ -114,18 +122,32 @@ class ServiceLifecycleTests(unittest.TestCase):
             _Thread(events),
             _Watchdog(events),
             web_join_timeout=1,
-            worker_timeout=35,
+            worker_timeout=3,
         )
 
         self.assertEqual(
-            events,
+            events[:4],
             [
+                "worker-pause",
                 "web-shutdown",
                 "web-close",
                 ("web-join", 1),
-                ("worker-stop", 35),
             ],
         )
+        self.assertEqual("worker-stop",events[-1][0])
+        self.assertGreaterEqual(events[-1][1],0)
+        self.assertLessEqual(events[-1][1],3)
+
+    def test_artwork_downloads_are_halted_before_web_socket_is_released(self):
+        events=[]; server=_Server(events); server.artwork_store=_Artwork(events)
+
+        stop_service_components(
+            server,_Thread(events),_Watchdog(events),
+            web_join_timeout=1,worker_timeout=3)
+
+        self.assertEqual("worker-pause",events[0])
+        self.assertEqual("artwork-stop",events[1][0])
+        self.assertEqual("web-shutdown",events[2])
 
 
 if __name__ == "__main__":

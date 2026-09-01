@@ -274,6 +274,7 @@ class WatchlistIdentityEnrichmentService:
     def __init__(self,store,client=None,request_delay=0.25,on_complete=None,on_progress=None):
         self.store=store; self.client=client or ProviderIdentityClient(); self.request_delay=max(0,float(request_delay))
         self._stop=threading.Event(); self.on_complete=on_complete; self.on_progress=on_progress
+        self._stopping=threading.Event()
         self._lock=threading.Lock(); self._thread=None
 
     @staticmethod
@@ -341,6 +342,9 @@ class WatchlistIdentityEnrichmentService:
                             identity_status in ("CONFLICT_EXACT","PENDING_PUBLICATION") and
                             publication_unconfirmed):
                         resolved=self.client.resolve(item) or {}
+                        if self._stop.is_set() or self._stopping.is_set():
+                            release_to_mediator=False
+                            break
                         ids={name:resolved.get(name) for name in PROVIDERS if resolved.get(name) not in (None,"")}
                         if ids: self.store.apply_resolved_ids(item["local_id"],ids)
                         if resolved.get("_simkl_reference_id") and resolved.get("_special_locator"):
@@ -370,6 +374,9 @@ class WatchlistIdentityEnrichmentService:
                         release_to_mediator=self._record_if_present(
                             item["local_id"],"RESOLVED")
                 except IdentityMappingConflict as exc:
+                    if self._stop.is_set() or self._stopping.is_set():
+                        release_to_mediator=False
+                        break
                     if self._publication_unconfirmed(item):
                         partial+=1
                         release_to_mediator=self._record_if_present(
@@ -385,6 +392,9 @@ class WatchlistIdentityEnrichmentService:
                             "Simkl identity conflict for Prime item %s; mediator will bypass Simkl: %s",
                             item["local_id"],exc)
                 except Exception as exc:
+                    if self._stop.is_set() or self._stopping.is_set():
+                        release_to_mediator=False
+                        break
                     failed+=1; LOGGER.exception("Provider ID enrichment failed for Prime item %s",item["local_id"])
                     release_to_mediator=self._record_if_present(
                         item["local_id"],"PARTIAL",str(exc))
@@ -397,6 +407,10 @@ class WatchlistIdentityEnrichmentService:
                     notified_bucket=bucket; self._notify_progress(index,total,bucket)
                 if self.request_delay and self._stop.wait(self.request_delay): break
 
+            if self._stop.is_set() or self._stopping.is_set():
+                LOGGER.info("Provider ID enrichment halted for Kodi addon shutdown")
+                return {"halted":True,"complete":complete,"partial":partial,
+                        "unavailable":unavailable,"failed":failed}
             self.store.finalize_merge()
             LOGGER.info("Provider ID enrichment complete: complete=%s partial=%s unavailable=%s failed=%s",
                         complete,partial,unavailable,failed)
@@ -408,10 +422,17 @@ class WatchlistIdentityEnrichmentService:
         finally: self._lock.release()
 
     def start(self):
+        if self._stopping.is_set():
+            return {"scheduled":False,"busy":False,"stopping":True}
         if self._thread and self._thread.is_alive(): return {"scheduled":False,"busy":True}
         self._stop.clear(); self._thread=threading.Thread(target=self.run_once,name="OtakuPrimeIdentityEnrichment",daemon=True)
         self._thread.start(); return {"scheduled":True,"busy":False}
 
-    def stop(self,timeout=5):
+    def request_stop(self):
+        self._stopping.set()
         self._stop.set()
+
+    def stop(self,timeout=3):
+        self.request_stop()
         if self._thread: self._thread.join(timeout=timeout)
+        return not bool(self._thread and self._thread.is_alive())

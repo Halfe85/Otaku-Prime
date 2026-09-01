@@ -28,6 +28,8 @@ class ReleaseAwareWatchlistWatchdogService(WatchlistWatchdogService):
 
     def identity_progress(self,progress=None):
         """Wake the mediator whenever another ten-percent Watchdog batch is ready."""
+        if self._halt_requested():
+            return {"scheduled":False,"paused":True}
         if self.mediator:
             self.mediator.start()
         self._last_release_monotonic = 0.0
@@ -57,6 +59,8 @@ class ReleaseAwareWatchlistWatchdogService(WatchlistWatchdogService):
         )
         refreshed = 0
         for local_id in sorted(candidates):
+            if self._halt_requested():
+                break
             try:
                 result = refresher(local_id) or {}
                 if result.get("busy"):
@@ -80,6 +84,8 @@ class ReleaseAwareWatchlistWatchdogService(WatchlistWatchdogService):
         return refreshed
 
     def _process_release_schedules(self, force=False):
+        if self._halt_requested():
+            return 0
         now_epoch = int(time.time())
         self._refresh_released_items(now_epoch)
         try:
@@ -91,6 +97,8 @@ class ReleaseAwareWatchlistWatchdogService(WatchlistWatchdogService):
             self.error_handler(exc)
             return 0
         for event in events:
+            if self._halt_requested():
+                break
             previous = event["previous"]
             current = event["item"]
             released_episode = previous.get("next_episode_number")
@@ -119,7 +127,7 @@ class ReleaseAwareWatchlistWatchdogService(WatchlistWatchdogService):
 
     def _run(self):
         boot = True
-        while not self._stop.is_set():
+        while not self._halt_requested():
             try:
                 self._detect_account_change()
                 now = time.monotonic()
@@ -139,6 +147,8 @@ class ReleaseAwareWatchlistWatchdogService(WatchlistWatchdogService):
                 self._wake.wait(wait_seconds)
                 self._wake.clear()
             except Exception as exc:
+                if self._halt_requested():
+                    break
                 LOGGER.exception("Watchlist watchdog cycle failed; retrying without stopping the service")
                 self.error_handler(exc)
                 self._wake.wait(min(5.0, max(1.0, self.local_poll_seconds)))

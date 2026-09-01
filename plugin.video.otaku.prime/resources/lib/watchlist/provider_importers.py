@@ -11,6 +11,7 @@ from urllib.parse import urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 from resources.lib.services.remote_identity import clean_remote_text
+from resources.lib.service_lifecycle import ServiceWorkHalted
 from resources.lib.logging_config import get_logger
 from resources.lib.watchlist.mal import MAL_API_URL, MALAuthenticator
 from resources.lib.watchlist.kitsu import KitsuAuthenticator
@@ -48,6 +49,16 @@ def _format(value):
         "music": "MUSIC",
         "music video": "MUSIC",
     }.get(value, str(value or "").upper() or None)
+
+
+class _HaltAwareImportService:
+    def set_halt_event(self,event):
+        self._halt_event=event
+
+    def _checkpoint(self):
+        event=getattr(self,"_halt_event",None)
+        if event is not None and event.is_set():
+            raise ServiceWorkHalted("watchlist import halted for addon shutdown")
 
 
 class _JsonClient:
@@ -114,7 +125,7 @@ class MALWatchlistClient(_JsonClient):
         return rows
 
 
-class MALWatchlistImportService:
+class MALWatchlistImportService(_HaltAwareImportService):
     provider = "mal"
     allow_periodic = True
 
@@ -126,6 +137,7 @@ class MALWatchlistImportService:
         self.authenticator=authenticator or MALAuthenticator()
 
     def sync(self):
+        self._checkpoint()
         account = self.accounts.get_credentials(self.user_id, self.provider)
         if not account:
             self.store.replace_provider_snapshot(self.provider, [])
@@ -134,11 +146,13 @@ class MALWatchlistImportService:
         LOGGER.info("MAL watchlist fetch started")
         if account.get("token_expires_at") and int(account["token_expires_at"])<=int(time.time())+60:
             access,refresh,expires=self.authenticator.refresh(account.get("refresh_token") or "")
+            self._checkpoint()
             self.accounts.save(user_id=self.user_id,provider=self.provider,
               external_user_id=account["external_user_id"],external_username=account["external_username"],
               access_token=access,refresh_token=refresh,token_expires_at=expires)
             account["access_token"]=access
         rows = self.client.fetch(account["access_token"])
+        self._checkpoint()
         normalized = []
         for row in rows:
             node = row.get("node") or {}
@@ -163,6 +177,7 @@ class MALWatchlistImportService:
                 "is_adult": str(node.get("nsfw") or "").lower() == "black",
                 "raw": row,
             })
+        self._checkpoint()
         self.store.replace_provider_snapshot(self.provider, normalized)
         if not normalized:
             LOGGER.warning("MAL watchlist fetch completed with no usable anime rows")
@@ -209,7 +224,7 @@ class KitsuWatchlistClient(_JsonClient):
         return entries, anime, mappings
 
 
-class KitsuWatchlistImportService:
+class KitsuWatchlistImportService(_HaltAwareImportService):
     provider = "kitsu"
     allow_periodic = True
 
@@ -221,6 +236,7 @@ class KitsuWatchlistImportService:
         self.authenticator=authenticator or KitsuAuthenticator()
 
     def sync(self):
+        self._checkpoint()
         account = self.accounts.get_credentials(self.user_id, self.provider)
         if not account:
             self.store.replace_provider_snapshot(self.provider, [])
@@ -229,6 +245,7 @@ class KitsuWatchlistImportService:
         LOGGER.info("Kitsu watchlist fetch started")
         if account.get("token_expires_at") and int(account["token_expires_at"])<=int(time.time())+60:
             access,refresh,expires=self.authenticator.refresh(account.get("refresh_token") or "")
+            self._checkpoint()
             self.accounts.save(user_id=self.user_id,provider=self.provider,
               external_user_id=account["external_user_id"],external_username=account["external_username"],
               access_token=access,refresh_token=refresh,token_expires_at=expires)
@@ -236,6 +253,7 @@ class KitsuWatchlistImportService:
         entries, anime_by_id, mappings_by_id = self.client.fetch(
             account["external_user_id"], account["access_token"]
         )
+        self._checkpoint()
         normalized = []
         for entry in entries:
             relationships = entry.get("relationships") or {}
@@ -277,6 +295,7 @@ class KitsuWatchlistImportService:
                 "is_adult": str(attrs.get("ageRating") or "").upper() == "R18",
                 "raw": {"library_entry": entry, "anime": anime},
             })
+        self._checkpoint()
         self.store.replace_provider_snapshot(self.provider, normalized)
         if not normalized:
             LOGGER.warning("Kitsu watchlist fetch completed with no usable anime rows")
@@ -333,7 +352,7 @@ class SimklWatchlistClient(_JsonClient):
         return payload.get("anime") or []
 
 
-class SimklWatchlistImportService:
+class SimklWatchlistImportService(_HaltAwareImportService):
     # Periodic runs only call the cheap activities endpoint first. Full data is
     # fetched when Simkl reports a changed anime timestamp.
     provider = "simkl"
@@ -415,6 +434,7 @@ class SimklWatchlistImportService:
         return normalized
 
     def _merge_delta(self, normalized):
+        self._checkpoint()
         # Preserve unchanged rows: date_from returns only changed items.
         if not normalized:
             return 0
@@ -449,10 +469,12 @@ class SimklWatchlistImportService:
                 "is_adult": bool(row.get("is_adult")),
                 "raw": raw,
             })
+        self._checkpoint()
         self.store.replace_provider_snapshot(self.provider, merged)
         return len(normalized)
 
     def sync(self):
+        self._checkpoint()
         account = self.accounts.get_credentials(self.user_id, self.provider)
         if not account:
             self.store.replace_provider_snapshot(self.provider, [])
@@ -463,6 +485,7 @@ class SimklWatchlistImportService:
         LOGGER.info("Simkl watchlist fetch started")
         token = account["access_token"]
         activities = self.client.activities(token)
+        self._checkpoint()
         anime_activity = activities.get("anime") or {}
         current = anime_activity.get("all") or activities.get("all")
         removed = anime_activity.get("removed_from_list")
@@ -474,6 +497,7 @@ class SimklWatchlistImportService:
         # state was cleared/recreated while the timestamp survived.
         if not previous or not has_local_baseline:
             rows = self.client.anime(token)
+            self._checkpoint()
             normalized = self._normalize(rows)
             self.store.replace_provider_snapshot(self.provider, normalized)
             self._save_state("anime_all", current or "")
@@ -499,12 +523,15 @@ class SimklWatchlistImportService:
             }
 
         changed = self._normalize(self.client.anime(token, date_from=previous))
+        self._checkpoint()
         count = self._merge_delta(changed)
         if removed and removed != previous_removed:
             normalized=self._normalize(self.client.anime(token))
+            self._checkpoint()
             self.store.replace_provider_snapshot(self.provider,normalized)
             count=len(normalized)
 
+        self._checkpoint()
         self._save_state("anime_all", current or previous)
         self._save_state("anime_removed", removed or previous_removed or "")
         LOGGER.info("Simkl delta watchlist fetch complete: imported=%s", count)

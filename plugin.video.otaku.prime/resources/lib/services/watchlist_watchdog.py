@@ -13,6 +13,7 @@ from resources.lib.database.watchlist_items import (
     WatchlistItemStore,
 )
 from resources.lib.logging_config import get_logger
+from resources.lib.service_lifecycle import ServiceWorkHalted
 
 
 LOGGER = get_logger(__name__)
@@ -306,6 +307,7 @@ class WatchlistWatchdogService:
         self.local_poll_seconds = max(0.25, float(local_poll_seconds))
         self.error_handler = error_handler or (lambda exc: None)
         self._stop = threading.Event()
+        self._paused = threading.Event()
         self._wake = threading.Event()
         self._remote_requested = threading.Event()
         self._run_lock = threading.Lock()
@@ -317,6 +319,16 @@ class WatchlistWatchdogService:
         self._subscriber_lock = threading.Lock()
         self._connected_account_signature = None
         self._last_account_check_monotonic = 0.0
+        for importer in self.importers:
+            setter = getattr(importer, "set_halt_event", None)
+            if setter:
+                setter(self._paused)
+        writer_setter = getattr(self.provider_writer, "set_halt_event", None)
+        if writer_setter:
+            writer_setter(self._paused)
+
+    def _halt_requested(self):
+        return self._stop.is_set() or self._paused.is_set()
 
     # Public manager API -------------------------------------------------
     def list_items(self):
@@ -341,6 +353,8 @@ class WatchlistWatchdogService:
 
     def update_item(self, local_id, status=None, progress=None, source="prime"):
         """Only supported program entry point for changing canonical watchlist state."""
+        if self._halt_requested():
+            raise ServiceWorkHalted("watchlist manager is paused for addon shutdown")
         local_id = str(local_id)
         current = self.store.item(local_id)
         if not current:
@@ -366,6 +380,8 @@ class WatchlistWatchdogService:
 
     def request_remote_sync(self, *args, **kwargs):
         """Wake immediately after provider connect/disconnect or explicit refresh."""
+        if self._halt_requested():
+            return {"scheduled": False, "paused": True}
         reason = args[0] if args else kwargs.get("provider") or kwargs.get("reason") or "explicit"
         LOGGER.info("Watchlist remote sync requested: reason=%s", reason)
         self._remote_requested.set()
@@ -377,6 +393,7 @@ class WatchlistWatchdogService:
         if self._thread and self._thread.is_alive():
             return {"scheduled": False, "busy": True}
         self._stop.clear()
+        self._paused.clear()
         self._wake.clear()
         self._thread = threading.Thread(
             target=self._run, name="OtakuPrimeWatchlistWatchdog", daemon=True
@@ -384,21 +401,47 @@ class WatchlistWatchdogService:
         self._thread.start()
         return {"scheduled": True, "busy": False}
 
-    def stop(self, timeout=35):
-        self._stop.set()
+    def pause(self):
+        """Prevent new work and retire child producers before Kodi replaces us."""
+        already_paused = self._paused.is_set()
+        self._paused.set()
         self._wake.set()
-        # Retire the mediator before waiting for provider/identity workers.  An
-        # enrichment progress callback may otherwise restart it during shutdown.
+        self._remote_requested.clear()
+        writer_stop = getattr(self.provider_writer, "request_stop", None)
+        if writer_stop:
+            writer_stop()
+        if self.identity_enricher:
+            requester = getattr(self.identity_enricher, "request_stop", None)
+            if requester:
+                requester()
         if self.mediator:
             requester = getattr(self.mediator, "request_stop", None)
             if requester:
                 requester()
+        if not already_paused:
+            LOGGER.info("Watchlist processing paused for Kodi addon shutdown")
+        return {"paused": True}
+
+    def stop(self, timeout=3):
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        self._stop.set()
+        self.pause()
         if self.identity_enricher:
-            self.identity_enricher.stop(timeout=timeout)
+            self.identity_enricher.stop(timeout=max(0.0, deadline-time.monotonic()))
         if self._thread:
-            self._thread.join(timeout=timeout)
+            self._thread.join(timeout=max(0.0, deadline-time.monotonic()))
         if self.mediator:
-            self.mediator.stop(timeout=timeout)
+            self.mediator.stop(timeout=max(0.0, deadline-time.monotonic()))
+        stopped=not any(
+            thread and thread.is_alive()
+            for thread in (
+                self._thread,
+                getattr(self.identity_enricher,"_thread",None),
+                getattr(self.mediator,"_thread",None),
+            )
+        )
+        LOGGER.info("Watchlist processing stopped=%s",stopped)
+        return stopped
 
     def local_changed(self, local_id=None):
         """Wake after a Prime write or identity-enrichment pass."""
@@ -406,6 +449,8 @@ class WatchlistWatchdogService:
         return {"scheduled": True}
 
     def identity_complete(self):
+        if self._halt_requested():
+            return {"scheduled":False,"paused":True}
         self.local_changed()
         if self.mediator:
             self.mediator.start()
@@ -499,7 +544,7 @@ class WatchlistWatchdogService:
 
     def _run(self):
         boot = True
-        while not self._stop.is_set():
+        while not self._halt_requested():
             try:
                 self._detect_account_change()
                 now = time.monotonic()
@@ -515,6 +560,8 @@ class WatchlistWatchdogService:
                 self._wake.wait(self.local_poll_seconds)
                 self._wake.clear()
             except Exception as exc:
+                if self._halt_requested():
+                    break
                 LOGGER.exception("Watchlist watchdog cycle failed; retrying without stopping the service")
                 self.error_handler(exc)
                 self._wake.wait(min(5.0, max(1.0, self.local_poll_seconds)))
@@ -527,7 +574,7 @@ class WatchlistWatchdogService:
             before_rows = {row["local_id"]: row for row in self.store.list_all()}
             results = []
             for importer in self.importers:
-                if self._stop.is_set():
+                if self._halt_requested():
                     break
                 try:
                     if boot and getattr(importer, "provider", None) == "simkl":
@@ -539,6 +586,8 @@ class WatchlistWatchdogService:
                         getattr(importer, "provider", importer.__class__.__name__),
                     )
                     result = importer.sync()
+                    if self._halt_requested():
+                        raise ServiceWorkHalted("watchlist refresh halted after provider response")
                     results.append(result)
                     LOGGER.info(
                         "Watchdog provider refresh complete: provider=%s connected=%s imported=%s mode=%s",
@@ -547,13 +596,21 @@ class WatchlistWatchdogService:
                         result.get("imported", result.get("watchlist_rows", 0)),
                         result.get("mode") or "full",
                     )
+                except ServiceWorkHalted:
+                    LOGGER.info("Watchdog provider refresh halted for Kodi addon shutdown")
+                    break
                 except Exception as exc:
+                    if self._halt_requested():
+                        LOGGER.info("Watchdog provider refresh response discarded during shutdown")
+                        break
                     LOGGER.exception(
                         "Watchdog remote provider refresh failed: provider=%s",
                         getattr(importer, "provider", importer.__class__.__name__),
                     )
                     self.error_handler(exc)
                     results.append({"error": str(exc)})
+            if self._halt_requested():
+                return {"paused":True,"providers":results}
             merge = self.store.finalize_merge()
             self._reconcile_remote_rows(self.store.list_all())
             final_rows = {row["local_id"]: row for row in self.store.list_all()}
@@ -579,6 +636,8 @@ class WatchlistWatchdogService:
 
     def _reconcile_remote_rows(self, items):
         for item in items:
+            if self._halt_requested():
+                raise ServiceWorkHalted("watchlist reconciliation halted")
             local_id = item["local_id"]
             providers = self.store.provider_entries(local_id)
             if not providers:
@@ -613,6 +672,8 @@ class WatchlistWatchdogService:
     def _process_local_changes(self):
         now = time.time()
         for item in self.store.dirty_master_items():
+            if self._halt_requested():
+                return
             local_id = item["local_id"]
             if self._retry_after.get(local_id, 0) > now:
                 continue
@@ -624,6 +685,8 @@ class WatchlistWatchdogService:
         master_epoch = int(item.get("master_updated_epoch") or 0)
         all_ok = True
         for provider in SUPPORTED_WATCHLIST_PROVIDERS:
+            if self._halt_requested():
+                raise ServiceWorkHalted("provider mirroring halted")
             provider_id = item.get(provider + "_id")
             if provider_id in (None, ""):
                 continue
@@ -644,6 +707,8 @@ class WatchlistWatchdogService:
                 continue
             try:
                 result = self.provider_writer.push(provider, item, entry)
+                if self._halt_requested():
+                    raise ServiceWorkHalted("provider mirroring halted after response")
                 if result.get("skipped"):
                     continue
                 self.store.mark_provider_synced(provider, item, result)
@@ -652,7 +717,11 @@ class WatchlistWatchdogService:
                     "Watchdog mirrored Prime item %s to %s",
                     item["local_id"], provider,
                 )
+            except ServiceWorkHalted:
+                return
             except Exception as exc:
+                if self._halt_requested():
+                    return
                 all_ok = False
                 if getattr(exc, "retryable", True):
                     retry_seconds = max(60, int(getattr(exc, "retry_after", 0) or 0))

@@ -50,9 +50,12 @@ class ArtworkDiagnosticProbe:
         self._pending = []
         self._seen = {}
         self._active = False
+        self._stopping = threading.Event()
         self._lock = threading.Lock()
 
     def schedule(self, raw_url, kind="artwork", title="unknown title"):
+        if self._stopping.is_set():
+            return False
         try:
             safe_url, parsed = _safe_url(raw_url)
         except ValueError:
@@ -81,10 +84,16 @@ class ArtworkDiagnosticProbe:
         ).start()
         return True
 
+    def stop(self):
+        """Discard queued probes; an active network probe may finish silently."""
+        self._stopping.set()
+        with self._lock:
+            self._pending.clear()
+
     def _run(self):
         while True:
             with self._lock:
-                if not self._pending:
+                if self._stopping.is_set() or not self._pending:
                     self._active = False
                     return
                 job = self._pending.pop(0)
@@ -95,12 +104,16 @@ class ArtworkDiagnosticProbe:
         return sorted({str(row[4][0]) for row in rows if row[4]})
 
     def _diagnose(self, safe_url, kind, title):
+        if self._stopping.is_set():
+            return
         parsed = urlsplit(safe_url)
         port = parsed.port or (443 if parsed.scheme == "https" else 80)
         started = time.monotonic()
         try:
             addresses = self._addresses(parsed.hostname, port)
         except socket.gaierror as exc:
+            if self._stopping.is_set():
+                return
             LOGGER.warning(
                 "Artwork network diagnostic failed: result=dns_failure kind=%s "
                 "title=%s host=%s error=%s url=%s",
@@ -132,6 +145,8 @@ class ArtworkDiagnosticProbe:
                 content_type = str(response.headers.get("Content-Type") or "unknown")
                 content_length = str(response.headers.get("Content-Length") or "unknown")
         except HTTPError as exc:
+            if self._stopping.is_set():
+                return
             LOGGER.warning(
                 "Artwork network diagnostic failed: result=http_error status=%s "
                 "kind=%s title=%s host=%s dns=%s duration=%.2fs url=%s",
@@ -145,6 +160,8 @@ class ArtworkDiagnosticProbe:
             )
             return
         except URLError as exc:
+            if self._stopping.is_set():
+                return
             reason = exc.reason
             LOGGER.warning(
                 "Artwork network diagnostic failed: result=%s kind=%s title=%s "
@@ -160,6 +177,8 @@ class ArtworkDiagnosticProbe:
             )
             return
         except (OSError, TimeoutError, ssl.SSLError) as exc:
+            if self._stopping.is_set():
+                return
             LOGGER.warning(
                 "Artwork network diagnostic failed: result=%s kind=%s title=%s "
                 "host=%s dns=%s duration=%.2fs error=%s url=%s",
@@ -172,6 +191,8 @@ class ArtworkDiagnosticProbe:
                 exc,
                 safe_url,
             )
+            return
+        if self._stopping.is_set():
             return
         LOGGER.info(
             "Artwork network diagnostic succeeded: status=%s kind=%s title=%s "

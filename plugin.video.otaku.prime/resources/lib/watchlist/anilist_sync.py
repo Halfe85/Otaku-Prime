@@ -8,6 +8,7 @@ from urllib.request import Request,urlopen
 
 from resources.lib.logging_config import get_logger
 from resources.lib.services.anilist_rate_limit import ANILIST_RATE_LIMITER
+from resources.lib.service_lifecycle import ServiceWorkHalted
 
 LOGGER = get_logger(__name__)
 STATUSES=("CURRENT","COMPLETED","PAUSED","DROPPED","PLANNING","REPEATING")
@@ -74,8 +75,17 @@ class AniListWatchlistImportService:
         self.user_id=user_id
         self.watchlist_store=watchlist_store
         self.watchlist_store.initialize()
+        self._halt_event=None
+
+    def set_halt_event(self,event):
+        self._halt_event=event
+
+    def _checkpoint(self):
+        if self._halt_event is not None and self._halt_event.is_set():
+            raise ServiceWorkHalted("AniList import halted for addon shutdown")
 
     def sync(self):
+        self._checkpoint()
         account=self.accounts.get_credentials(self.user_id,"anilist")
         if not account:
             self.watchlist_store.replace_provider_snapshot("anilist",[])
@@ -83,6 +93,7 @@ class AniListWatchlistImportService:
             return {"connected":False,"imported":0,"filtered":0,"watchlist_rows":0}
         LOGGER.info("AniList watchlist fetch started")
         entries=self.client.fetch(account["external_user_id"],account["access_token"])
+        self._checkpoint()
         canonical=[]
         for entry in entries:
             media=entry.get("media") or {}
@@ -119,6 +130,7 @@ class AniListWatchlistImportService:
                 "raw":entry,
             })
 
+        self._checkpoint()
         stored_count = self.watchlist_store.replace_provider_snapshot("anilist",canonical)
         if not stored_count:
             LOGGER.warning("AniList watchlist fetch completed with no usable anime rows")

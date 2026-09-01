@@ -41,6 +41,25 @@ class NoFanart:
     def enrich(self,placement): return placement
 
 
+class PhysicalHandoff:
+    def __init__(self): self.series_ids=[]
+    def project_series(self,series_id):
+        self.series_ids.append(str(series_id))
+        return {"created":1}
+
+
+class LocalArtworkStore:
+    def __init__(self): self.calls=[]
+    def persist(self,media_type,ids,art_type,source_url):
+        self.calls.append((media_type,dict(ids),art_type,source_url))
+        return {
+            "web_url":"/api/artwork/{}/{}/{}.jpg".format(
+                media_type,ids.get("tvdb") or ids.get("anilist"),art_type),
+            "kodi_path":"special://profile/prime-art/{}/{}.jpg".format(
+                ids.get("tvdb") or ids.get("anilist"),art_type),
+        }
+
+
 class PosterEndpoint:
     def __init__(self,provider,url): self.provider=provider; self.url=url; self.calls=[]
     def poster(self,provider_id): self.calls.append(str(provider_id)); return self.url
@@ -139,6 +158,19 @@ class WatchlistTVShowMediatorTests(unittest.TestCase):
         self.assertEqual([(1,41),(2,42)],[(row["source_episode_number"],row["episode_number"]) for row in episodes])
         self.assertEqual(1,self.watchlist.item(self.prime_id)["added_to_library"])
 
+    def test_completed_tv_placement_hands_only_prime_series_id_to_physical(self):
+        physical=PhysicalHandoff()
+        service=TVShowMediatorService(
+            self.watchlist,self.catalog,client=object(),
+            processor=HelperProcessor(self.placement()),fanart=NoFanart(),
+            physical=physical)
+
+        result=service.run_once()
+        series=self.catalog.list_series()[0]
+
+        self.assertEqual(1,result["placed"])
+        self.assertEqual([series["local_id"]],physical.series_ids)
+
     def test_special_provider_ids_follow_into_every_ova_episode(self):
         placement=self.placement("anilist")
         placement["library_type"]="series"
@@ -186,6 +218,7 @@ class WatchlistTVShowMediatorTests(unittest.TestCase):
         placement=self.placement("simkl")
         placement["tv_show"].update({
             "poster_url":"https://img.example/poster.webp",
+            "fanart_url":"https://img.example/fanart.webp",
             "clearlogo_url":"https://img.example/logo.webp",
             "banner_url":"https://img.example/banner.webp",
         })
@@ -197,8 +230,34 @@ class WatchlistTVShowMediatorTests(unittest.TestCase):
 
         self.assertEqual(1,result["placed"])
         self.assertEqual("https://img.example/poster.webp",series["poster_url"])
+        self.assertEqual("https://img.example/fanart.webp",series["fanart_url"])
         self.assertEqual("https://img.example/logo.webp",series["clearlogo_url"])
         self.assertEqual("https://img.example/banner.webp",series["banner_url"])
+
+    def test_production_artwork_store_replaces_remote_urls_with_local_routes(self):
+        placement=self.placement("simkl")
+        placement["tv_show"].update({
+            "poster_url":"https://img.example/poster.webp",
+            "fanart_url":"https://img.example/fanart.webp",
+            "clearlogo_url":"https://img.example/logo.webp",
+            "banner_url":"https://img.example/banner.webp",
+        })
+        artwork=LocalArtworkStore()
+        service=TVShowMediatorService(
+            self.watchlist,self.catalog,client=object(),
+            processor=HelperProcessor(placement),fanart=NoFanart(),
+            artwork_store=artwork)
+
+        result=service.run_once()
+        series=self.catalog.list_series()[0]
+
+        self.assertEqual(1,result["placed"])
+        self.assertEqual("/api/artwork/tvshows/74796/poster.jpg",series["poster_url"])
+        self.assertEqual("/api/artwork/tvshows/74796/fanart.jpg",series["fanart_url"])
+        self.assertEqual("/api/artwork/tvshows/74796/clearlogo.jpg",series["clearlogo_url"])
+        self.assertEqual("/api/artwork/tvshows/74796/banner.jpg",series["banner_url"])
+        self.assertEqual(["poster","fanart","banner","clearlogo"],
+                         [call[2] for call in artwork.calls])
 
     def test_missing_fanart_poster_uses_provider_priority_fallback(self):
         placement=self.placement("simkl")

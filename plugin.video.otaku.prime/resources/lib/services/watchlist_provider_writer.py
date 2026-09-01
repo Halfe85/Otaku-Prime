@@ -10,6 +10,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from resources.lib.logging_config import get_logger
+from resources.lib.service_lifecycle import ServiceWorkHalted
 from resources.lib.watchlist.mal import MAL_API_URL, MALAuthenticator
 from resources.lib.watchlist.kitsu import KitsuAuthenticator
 from resources.lib.watchlist.simkl import PACKAGED_CLIENT_ID, SIMKL_API_URL
@@ -84,6 +85,18 @@ class WatchlistProviderWriter:
         self._sleep = sleeper or time.sleep
         self._last_request_at = {}
         self._pace_lock = threading.Lock()
+        self._halt_event = None
+
+    def set_halt_event(self,event):
+        self._halt_event=event
+
+    def request_stop(self):
+        if self._halt_event is not None:
+            self._halt_event.set()
+
+    def _checkpoint(self):
+        if self._halt_event is not None and self._halt_event.is_set():
+            raise ServiceWorkHalted("provider writer halted for addon shutdown")
 
     def _pace(self, provider):
         interval = float(PROVIDER_WRITE_INTERVALS.get(provider, 0))
@@ -93,11 +106,16 @@ class WatchlistProviderWriter:
             now = self._monotonic()
             delay = self._last_request_at.get(provider, now - interval) + interval - now
             if delay > 0:
-                self._sleep(delay)
+                if self._halt_event is not None:
+                    if self._halt_event.wait(delay):
+                        raise ServiceWorkHalted("provider writer pacing was halted")
+                else:
+                    self._sleep(delay)
                 now = self._monotonic()
             self._last_request_at[provider] = now
 
     def _credentials(self, provider):
+        self._checkpoint()
         account = self.accounts.get_credentials(self.user_id, provider)
         if not account:
             return None
@@ -105,6 +123,7 @@ class WatchlistProviderWriter:
         if provider in ("mal", "kitsu") and expires and int(expires) <= int(time.time()) + 60:
             authenticator = self.mal_authenticator if provider == "mal" else self.kitsu_authenticator
             access, refresh, new_expires = authenticator.refresh(account.get("refresh_token") or "")
+            self._checkpoint()
             self.accounts.save(
                 user_id=self.user_id,
                 provider=provider,
@@ -120,7 +139,9 @@ class WatchlistProviderWriter:
         return account
 
     def _request(self, request, service, provider=None):
+        self._checkpoint()
         self._pace(provider or str(service).lower())
+        self._checkpoint()
         try:
             with self._open(request, timeout=self.timeout) as response:
                 raw = response.read()
@@ -143,6 +164,7 @@ class WatchlistProviderWriter:
             raise WatchlistProviderWriteError(
                 "Unable to update {} watchlist".format(service), retry_after=60
             ) from exc
+        self._checkpoint()
         if not raw:
             return {}
         try:
@@ -152,6 +174,7 @@ class WatchlistProviderWriter:
         return value
 
     def push(self, provider, item, provider_entry=None):
+        self._checkpoint()
         provider = str(provider or "").lower()
         account = self._credentials(provider)
         if not account:
