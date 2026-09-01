@@ -292,6 +292,27 @@ class WatchlistIdentityEnrichmentService:
         try: self.on_progress({"processed":processed,"total":total,"percent":min(100,bucket*10)})
         except Exception: LOGGER.exception("Mediator progress callback failed")
 
+    def _record_if_present(self,local_id,status,error=None):
+        try:
+            self.store.record_identity_resolution(local_id,status,error)
+            return True
+        except KeyError:
+            LOGGER.info(
+                "Identity work item %s was merged into another Prime item; "
+                "discarding the stale queue entry",local_id)
+            return False
+
+    def _release_if_present(self,local_id):
+        marker=getattr(self.store,"mark_mediator_ready",None)
+        if not marker: return False
+        try:
+            marker(local_id,True)
+            return True
+        except KeyError:
+            LOGGER.info(
+                "Identity work item %s was merged before mediator release",local_id)
+            return False
+
     def run_once(self):
         if not self._lock.acquire(blocking=False): return {"scheduled":False,"busy":True}
         complete=partial=unavailable=failed=0
@@ -300,6 +321,13 @@ class WatchlistIdentityEnrichmentService:
             total=len(pending); notified_bucket=0
             for index,item in enumerate(pending,1):
                 if self._stop.is_set(): break
+                current=getattr(self.store,"item",lambda _id:None)(item["local_id"])
+                if current is None:
+                    LOGGER.info(
+                        "Skipping stale identity queue item %s after duplicate merge",
+                        item["local_id"])
+                    continue
+                item=current
                 release_to_mediator=True
                 try:
                     identity_status=str(item.get("identity_resolution_status") or "")
@@ -321,42 +349,48 @@ class WatchlistIdentityEnrichmentService:
                         current=getattr(self.store,"item",lambda _id:None)(item["local_id"]) or item
                         if self._needs_identity(current):
                             if resolved:
-                                partial+=1; self.store.record_identity_resolution(item["local_id"],"PARTIAL")
+                                partial+=1
+                                release_to_mediator=self._record_if_present(
+                                    item["local_id"],"PARTIAL")
                             elif publication_unconfirmed:
-                                partial+=1; self.store.record_identity_resolution(
+                                partial+=1
+                                release_to_mediator=self._record_if_present(
                                     item["local_id"],"PENDING_PUBLICATION",
                                     "Provider identity and publication metadata are not available yet")
                             else:
-                                unavailable+=1; self.store.record_identity_resolution(
+                                unavailable+=1
+                                release_to_mediator=self._record_if_present(
                                     item["local_id"],"NOT_FOUND","Provider ID not currently available")
                         else:
-                            complete+=1; self.store.record_identity_resolution(item["local_id"],"RESOLVED")
+                            complete+=1
+                            release_to_mediator=self._record_if_present(
+                                item["local_id"],"RESOLVED")
                     else:
-                        complete+=1; self.store.record_identity_resolution(item["local_id"],"RESOLVED")
+                        complete+=1
+                        release_to_mediator=self._record_if_present(
+                            item["local_id"],"RESOLVED")
                 except IdentityMappingConflict as exc:
                     if self._publication_unconfirmed(item):
                         partial+=1
-                        self.store.record_identity_resolution(
+                        release_to_mediator=self._record_if_present(
                             item["local_id"],"PENDING_PUBLICATION",str(exc))
                         LOGGER.info(
                             "Simkl identity for unpublished Prime item %s is provisional; "
                             "retrying after future watchlist refreshes: %s",item["local_id"],exc)
                     else:
                         unavailable+=1
-                        self.store.record_identity_resolution(
+                        release_to_mediator=self._record_if_present(
                             item["local_id"],"CONFLICT_EXACT",str(exc))
                         LOGGER.warning(
                             "Simkl identity conflict for Prime item %s; mediator will bypass Simkl: %s",
                             item["local_id"],exc)
                 except Exception as exc:
                     failed+=1; LOGGER.exception("Provider ID enrichment failed for Prime item %s",item["local_id"])
-                    self.store.record_identity_resolution(item["local_id"],"PARTIAL",str(exc))
+                    release_to_mediator=self._record_if_present(
+                        item["local_id"],"PARTIAL",str(exc))
                 finally:
                     if release_to_mediator and not int(item.get("added_to_library") or 0):
-                        marker=getattr(self.store,"mark_mediator_ready",None)
-                        if marker:
-                            try: marker(item["local_id"],True)
-                            except Exception: LOGGER.exception("Could not release Prime item to mediator")
+                        self._release_if_present(item["local_id"])
 
                 bucket=int(index*10/total) if total else 10
                 if bucket>notified_bucket:

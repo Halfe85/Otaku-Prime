@@ -1,6 +1,9 @@
 import os
+import sqlite3
 import sys
 import tempfile
+import threading
+import time
 import unittest
 
 ROOT=os.path.dirname(os.path.dirname(__file__)); sys.path.insert(0,ROOT)
@@ -34,6 +37,59 @@ class WatchlistIdentityTests(unittest.TestCase):
         rows={row["anilist_id"]:row for row in self.items.list_all()}
         self.items.apply_resolved_ids(rows["1"]["local_id"],{"anilist":"1","mal":"11","kitsu":"21","simkl":"31"})
         result=self.items.list_all(); self.assertEqual(1,len(result)); self.assertEqual("anilist,mal",result[0]["connected_providers"])
+
+    def test_enrichment_skips_queue_row_deleted_by_identity_merge(self):
+        base={"english_name":"Same Show","list_status":"CURRENT",
+              "provider_status":"watching","progress":1}
+        self.items.replace_provider_snapshot("anilist",[
+            dict(base,provider_item_id="1",ids={"anilist":"1"})])
+        self.items.replace_provider_snapshot("mal",[
+            dict(base,provider_item_id="11",ids={"mal":"11"})])
+
+        class Client:
+            def resolve(self,item):
+                return {"anilist":"1","mal":"11","kitsu":"21","simkl":"31"}
+
+        result=WatchlistIdentityEnrichmentService(
+            self.items,client=Client(),request_delay=0).run_once()
+
+        rows=self.items.list_all()
+        self.assertEqual(1,len(rows))
+        self.assertEqual("anilist,mal",rows[0]["connected_providers"])
+        self.assertEqual(0,result["failed"])
+
+    def test_resolved_id_write_waits_for_provider_owner_transaction(self):
+        self.items.replace_provider_snapshot("anilist",[{
+            "provider_item_id":"1","ids":{"anilist":"1"},
+            "english_name":"Same Show","list_status":"CURRENT",
+            "provider_status":"watching","progress":1,
+        }])
+        target=self.items.list_all()[0]["local_id"]
+        blocker=sqlite3.connect(self.path,timeout=10)
+        blocker.execute("PRAGMA journal_mode=WAL")
+        blocker.execute("BEGIN IMMEDIATE")
+        blocker.execute(
+            "INSERT INTO watchlist_items(local_id,kitsu_id) VALUES(?,?)",
+            ("provider-owner","21"))
+        errors=[]
+
+        def apply_ids():
+            try:
+                self.items.apply_resolved_ids(target,{"anilist":"1","kitsu":"21"})
+            except Exception as exc:
+                errors.append(exc)
+
+        worker=threading.Thread(target=apply_ids)
+        worker.start()
+        time.sleep(0.05)
+        self.assertTrue(worker.is_alive())
+        blocker.commit()
+        blocker.close()
+        worker.join(timeout=5)
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual([],errors)
+        self.assertEqual("21",self.items.item(target)["kitsu_id"])
 
     def test_true_identity_conflict_is_terminal(self):
         self.items.replace_provider_snapshot("anilist",[{

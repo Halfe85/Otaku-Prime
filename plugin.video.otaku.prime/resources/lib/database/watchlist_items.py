@@ -341,6 +341,10 @@ class WatchlistItemStore:
         if provider not in SUPPORTED_WATCHLIST_PROVIDERS: raise ValueError("unsupported watchlist provider")
         rows=list({str(entry["provider_item_id"]):entry for entry in entries}.values()); ids=set()
         with self._connection() as db:
+            # Identity enrichment runs beside provider refreshes. Lock before
+            # reading identity owners so another writer cannot create an owner
+            # between _matching_local_ids() and the following UPDATE.
+            db.execute("BEGIN IMMEDIATE")
             for entry in rows:
                 ids.add(str(entry["provider_item_id"])); self._upsert_snapshot_row(db,provider,entry)
             if ids:
@@ -482,6 +486,11 @@ class WatchlistItemStore:
                if name in ID_COLUMNS and value not in (None,"")}
         if not clean: return local_id
         with self._connection() as db:
+            # The ownership check and any duplicate merge are one write
+            # transaction. Without this, a provider refresh can commit a newly
+            # discovered owner after the reads below and make the final UPDATE
+            # fail its UNIQUE constraint.
+            db.execute("BEGIN IMMEDIATE")
             current=db.execute("SELECT * FROM watchlist_items WHERE local_id=?",(local_id,)).fetchone()
             if not current: raise KeyError("watchlist item not found")
             for provider,value in clean.items():
