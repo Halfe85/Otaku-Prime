@@ -10,10 +10,12 @@ import unittest
 import xml.etree.ElementTree as ElementTree
 
 from resources.lib.services.runtime_prime_physical import (
-    RuntimePrimePhysicalService,
     _kodi_refresh_movie,
     _kodi_refresh_tvshow,
     _kodi_video_scan,
+)
+from resources.lib.services.runtime_prime_physical_movies import (
+    RuntimePrimePhysicalMoviesService as RuntimePrimePhysicalService,
 )
 
 
@@ -185,7 +187,7 @@ class RuntimePrimePhysicalTests(unittest.TestCase):
         self.assertTrue(self.scans.requests[0]["path"].endswith("/Movies/Example Movie 2025/"))
         self.assertTrue(result["scan"]["queued"])
 
-    def test_kodi_configuration_registers_movies_as_local_information_source(self):
+    def test_kodi_configuration_registers_movies_as_recursive_local_information_source(self):
         database = os.path.join(self.temporary.name, "MyVideos999.db")
         with sqlite3.connect(database) as db:
             db.execute("""CREATE TABLE path(
@@ -209,6 +211,8 @@ class RuntimePrimePhysicalTests(unittest.TestCase):
 
         self.assertTrue(result["movies"]["source"]["configured"])
         self.assertTrue(result["movies"]["content"]["configured"])
+        self.assertEqual(1, result["movies"]["content"]["scan_recursive"])
+        self.assertEqual(1, result["movies"]["content"]["use_folder_names"])
         sources = ElementTree.parse(os.path.join(root, "sources.xml")).getroot()
         entries = {
             node.findtext("name"): node.findtext("path")
@@ -218,10 +222,11 @@ class RuntimePrimePhysicalTests(unittest.TestCase):
         self.assertEqual(movie_source, entries["Otaku Prime Movies"])
         with sqlite3.connect(database) as db:
             row = db.execute(
-                "SELECT strContent,strScraper FROM path WHERE strPath=?",
+                "SELECT strContent,strScraper,scanRecursive,useFolderNames "
+                "FROM path WHERE strPath=?",
                 (movie_source,),
             ).fetchone()
-        self.assertEqual(("movies", "metadata.local"), row)
+        self.assertEqual(("movies", "metadata.local", 1, 1), row)
 
     def test_kodi_scan_uses_directory_scoped_hidden_video_library_scan(self):
         calls = []
