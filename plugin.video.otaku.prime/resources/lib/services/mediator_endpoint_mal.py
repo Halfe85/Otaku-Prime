@@ -13,6 +13,7 @@ from resources.lib.services.mediator_helper_simkl import (
     MediatorMetadataPending,
     MediatorPlacementError,
 )
+from resources.lib.service_lifecycle import ServiceWorkHalted
 from resources.lib.watchlist.mal import MAL_API_URL,MAL_CLIENT_ID
 
 SPECIAL_FORMATS={"movie","ova","oav","oad","ona","special","tv_special","music","music_video"}
@@ -59,19 +60,31 @@ def _mature(*media_rows):
 class MALMediatorClient:
     _staff_lock=threading.Lock()
     _staff_last_request=0.0
-    def __init__(self,timeout=30,opener=None):
+    def __init__(self,timeout=30,opener=None,halt_requested=None):
         self.timeout=int(timeout); self._open=opener or urlopen; self._cache={}; self._cast_cache={}
+        self._halt_requested=halt_requested or (lambda:False)
 
     def _json(self,url):
+        if self._halt_requested():
+            raise ServiceWorkHalted("MAL mediation halted for addon shutdown")
         request=Request(url,headers={"Accept":"application/json",
                                      "User-Agent":"Otaku-Prime/0.1.2 mal-staff"})
         try:
             with self._staff_lock:
                 remaining=0.4-(time.monotonic()-self.__class__._staff_last_request)
-                if remaining>0: time.sleep(remaining)
+                if remaining>0:
+                    deadline=time.monotonic()+remaining
+                    while time.monotonic()<deadline:
+                        if self._halt_requested():
+                            raise ServiceWorkHalted("MAL pacing halted for addon shutdown")
+                        time.sleep(min(0.05,max(0.0,deadline-time.monotonic())))
                 try:
                     with self._open(request,timeout=min(self.timeout,15)) as response:
-                        return json.loads(response.read().decode("utf-8"))
+                        value=json.loads(response.read().decode("utf-8"))
+                    if self._halt_requested():
+                        raise ServiceWorkHalted(
+                            "MAL mediation response discarded for addon shutdown")
+                    return value
                 finally:
                     self.__class__._staff_last_request=time.monotonic()
         except HTTPError as exc:
@@ -120,8 +133,15 @@ class MALMediatorClient:
         request=Request(url,headers={"X-MAL-CLIENT-ID":MAL_CLIENT_ID,"Accept":"application/json",
                                      "User-Agent":"Otaku-Prime/0.1.2 mal-mediator"})
         try:
+            if self._halt_requested():
+                raise ServiceWorkHalted("MAL mediation halted for addon shutdown")
             with self._open(request,timeout=self.timeout) as response:
                 payload=json.loads(response.read().decode("utf-8"))
+            if self._halt_requested():
+                raise ServiceWorkHalted(
+                    "MAL mediation response discarded for addon shutdown")
+        except ServiceWorkHalted:
+            raise
         except HTTPError as exc:
             raise MediatorPlacementError("MAL anime {} returned HTTP {}".format(key,exc.code)) from exc
         except (URLError,TimeoutError,OSError,ValueError,json.JSONDecodeError) as exc:

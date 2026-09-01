@@ -30,6 +30,12 @@ class WatchlistIdentityTests(unittest.TestCase):
         self.assertEqual({"complete":1,"partial":0,"unavailable":0,"failed":0},result)
         self.assertEqual(("1","11","21","31"),tuple(row[name+"_id"] for name in ("anilist","mal","kitsu","simkl")))
 
+    def test_production_network_timeout_reaches_identity_clients(self):
+        service=WatchlistIdentityEnrichmentService(
+            self.items,network_timeout=3,request_delay=0)
+        self.assertEqual(3,service.client.simkl.timeout)
+        self.assertEqual(3,service.client.kitsu.timeout)
+
     def test_resolved_overlap_merges_rows_from_unconnected_trackers(self):
         base={"english_name":"Show","list_status":"CURRENT","provider_status":"watching","progress":1}
         self.items.replace_provider_snapshot("anilist",[dict(base,provider_item_id="1",ids={"anilist":"1"})])

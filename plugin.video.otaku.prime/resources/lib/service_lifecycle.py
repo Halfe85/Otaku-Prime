@@ -100,12 +100,14 @@ def stop_service_components(
     pause = getattr(watchlist_watchdog, "pause", None)
     if pause:
         pause()
+    artwork_store = getattr(server, "artwork_store", None)
     artwork_probe = getattr(server, "artwork_diagnostic_probe", None)
     if artwork_probe:
-        artwork_probe.stop()
-    artwork_store = getattr(server, "artwork_store", None)
+        request_stop=getattr(artwork_probe,"request_stop",None)
+        if request_stop: request_stop()
     if artwork_store:
-        artwork_store.stop(timeout=min(1.0,max(0.0,deadline-time.monotonic())))
+        request_stop=getattr(artwork_store,"request_stop",None)
+        if request_stop: request_stop()
     try:
         server.shutdown()
     finally:
@@ -115,4 +117,19 @@ def stop_service_components(
         max(0.0, float(web_join_timeout)),
         max(0.0, deadline - time.monotonic()),
     ))
-    watchlist_watchdog.stop(timeout=max(0.0, deadline - time.monotonic()))
+    if artwork_probe:
+        artwork_probe.stop(timeout=min(1.0,max(0.0,deadline-time.monotonic())))
+    if artwork_store:
+        artwork_store.stop(timeout=min(1.0,max(0.0,deadline-time.monotonic())))
+    worker_stopped=watchlist_watchdog.stop(
+        timeout=max(0.0, deadline - time.monotonic()))
+    components={
+        "web":server_thread,
+        "artwork-diagnostic":getattr(artwork_probe,"_thread",None),
+        "artwork-store":getattr(artwork_store,"_thread",None),
+    }
+    active=[name for name,thread in components.items()
+            if thread and getattr(thread,"is_alive",lambda:False)()]
+    if not worker_stopped:
+        active.append("watchlist-workers")
+    return {"stopped":not active,"active":active}

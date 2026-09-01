@@ -1,6 +1,8 @@
 import os
 import tempfile
 import unittest
+import threading
+from urllib.error import URLError
 
 from resources.lib.database.catalog import CatalogStore
 from resources.lib.database.watchlist_items import WatchlistItemStore
@@ -11,6 +13,7 @@ from resources.lib.services.mediator_helper_anilist import (
 )
 from resources.lib.services.mediator_helper_simkl import MediatorMetadataPending
 from resources.lib.services.mediator_tvshow import TVShowMediatorService
+from resources.lib.service_lifecycle import ServiceWorkHalted
 
 
 class SegmentFactory:
@@ -20,6 +23,20 @@ class SegmentFactory:
     def __call__(self):
         self.value += 1
         return "{:06x}".format(self.value)
+
+
+class AniListShutdownTests(unittest.TestCase):
+    def test_abort_prevents_a_timed_out_request_from_retrying(self):
+        halted=threading.Event(); calls=[]
+        def opener(request,timeout=None):
+            calls.append(timeout); halted.set(); raise URLError("timed out")
+        client=AniListMediatorClient(
+            timeout=3,opener=opener,halt_requested=halted.is_set)
+
+        with self.assertRaises(ServiceWorkHalted):
+            client._query("query { Viewer { id } }",{})
+
+        self.assertEqual([3],calls)
 
 
 def media(media_id, title, media_format, episodes, prequel=None, year=2020,

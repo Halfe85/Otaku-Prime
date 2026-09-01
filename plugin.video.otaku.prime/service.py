@@ -27,11 +27,17 @@ from resources.lib.services.artwork_store import PersistentArtworkStore
 from resources.lib.services.prime_physical import PrimePhysicalService
 from resources.lib.services.watch_state_projector import CatalogWatchStateProjector
 from resources.lib.watchlist.anilist_sync import AniListWatchlistImportService
+from resources.lib.watchlist.anilist_sync import AniListWatchlistClient
 from resources.lib.watchlist.provider_importers import (
+    MALWatchlistClient,
     MALWatchlistImportService,
+    KitsuWatchlistClient,
     KitsuWatchlistImportService,
+    SimklWatchlistClient,
     SimklWatchlistImportService,
 )
+from resources.lib.watchlist.mal import MALAuthenticator
+from resources.lib.watchlist.kitsu import KitsuAuthenticator
 from resources.lib.web import create_server
 from resources.lib.logging_config import configure_logging,get_logger
 from resources.lib.service_lifecycle import (
@@ -45,6 +51,7 @@ from resources.lib.service_lifecycle import (
 WEB_HOST = "0.0.0.0"
 WEB_PORT = 9898
 USERS_DB_NAME = "users.sqlite"
+BACKGROUND_NETWORK_TIMEOUT = 3
 
 
 class PrimeMonitor(xbmc.Monitor):
@@ -120,19 +127,46 @@ def _run_service(profile: str) -> None:
         getattr(logger,{"ERROR":"error","WARNING":"warning"}.get(level,"info"))(message)
 
     watchlist_importers = [
-        AniListWatchlistImportService(watchlist_accounts, watchlist_items),
-        MALWatchlistImportService(watchlist_accounts, watchlist_items),
-        KitsuWatchlistImportService(watchlist_accounts, watchlist_items),
-        SimklWatchlistImportService(watchlist_accounts, watchlist_items),
+        AniListWatchlistImportService(
+            watchlist_accounts,watchlist_items,
+            client=AniListWatchlistClient(
+                timeout=BACKGROUND_NETWORK_TIMEOUT,
+                halt_requested=monitor.abortRequested)),
+        MALWatchlistImportService(
+            watchlist_accounts,watchlist_items,
+            client=MALWatchlistClient(
+                timeout=BACKGROUND_NETWORK_TIMEOUT,
+                halt_requested=monitor.abortRequested),
+            authenticator=MALAuthenticator(timeout=BACKGROUND_NETWORK_TIMEOUT)),
+        KitsuWatchlistImportService(
+            watchlist_accounts,watchlist_items,
+            client=KitsuWatchlistClient(
+                timeout=BACKGROUND_NETWORK_TIMEOUT,
+                halt_requested=monitor.abortRequested),
+            authenticator=KitsuAuthenticator(timeout=BACKGROUND_NETWORK_TIMEOUT)),
+        SimklWatchlistImportService(
+            watchlist_accounts,watchlist_items,
+            client=SimklWatchlistClient(
+                timeout=BACKGROUND_NETWORK_TIMEOUT,
+                halt_requested=monitor.abortRequested)),
     ]
-    artwork_store=PersistentArtworkStore(halt_requested=monitor.abortRequested)
+    artwork_store=PersistentArtworkStore(
+        timeout=BACKGROUND_NETWORK_TIMEOUT,
+        halt_requested=monitor.abortRequested)
     artwork_store.start()
     prime_physical=PrimePhysicalService(
         catalog,halt_requested=monitor.abortRequested)
     tvshow_mediator = TVShowMediatorService(
-        watchlist_items,catalog,artwork_store=artwork_store,physical=prime_physical)
-    identity_enricher = WatchlistIdentityEnrichmentService(watchlist_items)
-    provider_writer = WatchlistProviderWriter(watchlist_accounts)
+        watchlist_items,catalog,artwork_store=artwork_store,physical=prime_physical,
+        network_timeout=BACKGROUND_NETWORK_TIMEOUT,
+        halt_requested=monitor.abortRequested)
+    identity_enricher = WatchlistIdentityEnrichmentService(
+        watchlist_items,network_timeout=BACKGROUND_NETWORK_TIMEOUT,
+        halt_requested=monitor.abortRequested)
+    provider_writer = WatchlistProviderWriter(
+        watchlist_accounts,timeout=BACKGROUND_NETWORK_TIMEOUT,
+        mal_authenticator=MALAuthenticator(timeout=BACKGROUND_NETWORK_TIMEOUT),
+        kitsu_authenticator=KitsuAuthenticator(timeout=BACKGROUND_NETWORK_TIMEOUT))
     watchlist_watchdog = ReleaseAwareWatchlistWatchdogService(
         watchlist_importers,
         watchlist_items,
@@ -161,6 +195,7 @@ def _run_service(profile: str) -> None:
             on_watchlist_state_changed=watchlist_watchdog.update_item,
             on_episode_watch_state_changed=watch_state_projector.update_episode,
             artwork_store=artwork_store,
+            network_timeout=BACKGROUND_NETWORK_TIMEOUT,
         )
     except OSError as exc:
         log(
@@ -220,15 +255,19 @@ def _run_service(profile: str) -> None:
     # SQLite app-log sink so a late network response cannot reopen the database.
     xbmc.log("OTAKU PRIME: pausing background work for addon shutdown", xbmc.LOGINFO)
     configure_logging(None,kodi_log)
-    stop_service_components(
+    shutdown=stop_service_components(
         server,
         server_thread,
         watchlist_watchdog,
         web_join_timeout=1,
         worker_timeout=3,
     )
-
-    xbmc.log("OTAKU PRIME: service stopped", xbmc.LOGINFO)
+    if shutdown["stopped"]:
+        xbmc.log("OTAKU PRIME: service stopped", xbmc.LOGINFO)
+    else:
+        xbmc.log(
+            "OTAKU PRIME: shutdown deadline reached; active components: {}".format(
+                ", ".join(shutdown["active"])),xbmc.LOGWARNING)
 
 
 def main() -> None:

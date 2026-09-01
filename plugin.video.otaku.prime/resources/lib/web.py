@@ -39,9 +39,10 @@ MAX_FORM_BYTES = 16 * 1024
 def create_server(host: str, port: int, user_store, app_log_store=None,
                   on_watchlist_changed=None,on_watchlist_state_changed=None,
                   on_episode_watch_state_changed=None,
-                  artwork_diagnostic_probe=None,artwork_store=None) -> ThreadingHTTPServer:
+                  artwork_diagnostic_probe=None,artwork_store=None,
+                  network_timeout=15) -> ThreadingHTTPServer:
     auth = AuthService(user_store)
-    authenticator_api = AuthenticatorAPI()
+    authenticator_api = AuthenticatorAPI(timeout=network_timeout)
     watchlist_accounts = WatchlistAccountStore(user_store.db_path)
     watchlist_accounts.initialize()
     watchlist_items = WatchlistItemStore(user_store.db_path)
@@ -52,7 +53,8 @@ def create_server(host: str, port: int, user_store, app_log_store=None,
     app_log_store.initialize()
     simkl_flows = {}
     simkl_flows_lock = threading.Lock()
-    artwork_diagnostic_probe = artwork_diagnostic_probe or ArtworkDiagnosticProbe()
+    artwork_diagnostic_probe = artwork_diagnostic_probe or ArtworkDiagnosticProbe(
+        timeout=network_timeout)
     artwork_store = artwork_store or PersistentArtworkStore()
 
     class PrimeRequestHandler(BaseHTTPRequestHandler):

@@ -62,15 +62,18 @@ class _HaltAwareImportService:
 
 
 class _JsonClient:
-    def __init__(self, timeout=30, opener=None):
+    def __init__(self, timeout=30, opener=None, halt_requested=None):
         self.timeout = int(timeout)
         self._open = opener or urlopen
+        self._halt_requested = halt_requested or (lambda: False)
 
     @staticmethod
     def _json(response):
         return json.loads(response.read().decode("utf-8"))
 
     def _request(self, url, headers):
+        if self._halt_requested():
+            raise ServiceWorkHalted("watchlist provider request halted for addon shutdown")
         request = Request(url, headers=headers)
         parsed = urlsplit(url)
         endpoint = "{}://{}{}".format(parsed.scheme, parsed.netloc, parsed.path)
@@ -80,6 +83,9 @@ class _JsonClient:
         try:
             with self._open(request, timeout=self.timeout) as response:
                 payload = self._json(response)
+            if self._halt_requested():
+                raise ServiceWorkHalted(
+                    "watchlist provider response discarded for addon shutdown")
             LOGGER.info(
                 "%s API request complete: GET %s duration=%.2fs",
                 service,
@@ -87,6 +93,8 @@ class _JsonClient:
                 time.monotonic() - started,
             )
             return payload
+        except ServiceWorkHalted:
+            raise
         except HTTPError as exc:
             log = LOGGER.warning if exc.code in (401, 403, 429) else LOGGER.error
             log("%s API request failed: GET %s returned HTTP %s", service, endpoint, exc.code)
@@ -311,8 +319,9 @@ class KitsuWatchlistImportService(_HaltAwareImportService):
 class SimklWatchlistClient(_JsonClient):
     """Simkl anime sync reader following the activities/date_from model."""
 
-    def __init__(self, client_id=None, timeout=30, opener=None):
-        super().__init__(timeout=timeout, opener=opener)
+    def __init__(self, client_id=None, timeout=30, opener=None,halt_requested=None):
+        super().__init__(timeout=timeout, opener=opener,
+                         halt_requested=halt_requested)
         self.client_id = str(client_id or PACKAGED_CLIENT_ID).strip()
 
     def _headers(self, access_token):

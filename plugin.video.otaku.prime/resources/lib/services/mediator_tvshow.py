@@ -10,7 +10,7 @@ from resources.lib.services.mediator_helper_simkl import (
     SimklMediatorClient,
 )
 from resources.lib.services.mediator_processor import MediatorProcessor
-from resources.lib.services.mediator_fanarttv import FanartTVMediator
+from resources.lib.services.mediator_fanarttv import FanartTVClient,FanartTVMediator
 from resources.lib.services.artwork_store import (
     ARTWORK_FIELDS,
     WEB_ROOT,
@@ -48,10 +48,17 @@ class MediatorRunCancelled(RuntimeError):
 class TVShowMediatorService:
     """Consume Watchdog-ready rows # -> Z and write resolved catalogue records."""
     def __init__(self,watchlist_store,catalog_store,client=None,processor=None,helpers=None,
-                 fanart=None,artwork_store=None,physical=None):
+                 fanart=None,artwork_store=None,physical=None,network_timeout=30,
+                 halt_requested=None):
         self.watchlist_store=watchlist_store; self.catalog_store=catalog_store
-        self.client=client or SimklMediatorClient(); self._stop=threading.Event()
-        self.fanart=fanart or FanartTVMediator()
+        self._external_halt_requested=halt_requested or (lambda:False)
+        self.client=client or SimklMediatorClient(
+            timeout=network_timeout,
+            halt_requested=lambda:(self._stop.is_set() if hasattr(self,"_stop") else False) or
+                                   self._external_halt_requested())
+        self._stop=threading.Event()
+        self.fanart=fanart or FanartTVMediator(
+            FanartTVClient(timeout=network_timeout))
         self.artwork_store=artwork_store
         self.physical=physical
         self._stopping=threading.Event()
@@ -64,7 +71,9 @@ class TVShowMediatorService:
         else:
             self.processor=MediatorProcessor(
                 simkl_client=self.client,
-                halt_requested=lambda:self._stop.is_set() or self._stopping.is_set())
+                halt_requested=lambda:(self._stop.is_set() or self._stopping.is_set() or
+                                       self._external_halt_requested()),
+                network_timeout=network_timeout)
 
     @staticmethod
     def provider_for(item):
@@ -80,7 +89,8 @@ class TVShowMediatorService:
         return self.processor.resolve(item)
 
     def _ensure_current(self,item_id):
-        if self._stop.is_set() or self._stopping.is_set():
+        if (self._stop.is_set() or self._stopping.is_set() or
+                self._external_halt_requested()):
             raise MediatorRunCancelled("mediator service is stopping")
         current=self._item(item_id)
         if not current:
@@ -98,7 +108,7 @@ class TVShowMediatorService:
             value=getter(str(provider_id)) or None
             self._ensure_current(item_id)
             return value
-        except MediatorRunCancelled:
+        except (MediatorRunCancelled,ServiceWorkHalted):
             raise
         except Exception as exc:
             LOGGER.warning(
@@ -121,7 +131,7 @@ class TVShowMediatorService:
             value=str(getter(str(provider_id)) or "").strip()
             self._ensure_current(item_id)
             return value if value.startswith(("https://","http://")) else None
-        except MediatorRunCancelled:
+        except (MediatorRunCancelled,ServiceWorkHalted):
             raise
         except Exception as exc:
             LOGGER.warning(
@@ -222,7 +232,7 @@ class TVShowMediatorService:
             value=getter(str(provider_id)) or {}
             self._ensure_current(item_id)
             return value if isinstance(value,dict) else None
-        except MediatorRunCancelled:
+        except (MediatorRunCancelled,ServiceWorkHalted):
             raise
         except Exception as exc:
             LOGGER.warning(

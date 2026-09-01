@@ -387,9 +387,12 @@ class PersistentArtworkStore:
         return {"scheduled":True,"busy":False}
 
     def stop(self,timeout=3):
-        self._stop.set(); self._wake.set()
+        self.request_stop()
         if self._thread: self._thread.join(timeout=max(0.0,float(timeout)))
         return not (self._thread and self._thread.is_alive())
+
+    def request_stop(self):
+        self._stop.set(); self._wake.set()
 
     def resolve_web_path(self,request_path):
         relative=unquote(str(request_path or "")).replace("\\","/").lstrip("/")

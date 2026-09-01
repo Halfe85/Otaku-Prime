@@ -21,6 +21,7 @@ from resources.lib.services.remote_identity import (
     score_candidate,
 )
 from resources.lib.watchlist.simkl import PACKAGED_CLIENT_ID,SIMKL_API_URL
+from resources.lib.service_lifecycle import ServiceWorkHalted
 
 
 MAX_PREQUEL_DEPTH=64
@@ -41,23 +42,38 @@ class MediatorMetadataPending(MediatorPlacementError):
 
 class SimklMediatorClient:
     """Small throttled Simkl client shared by every provider path."""
-    def __init__(self,client_id=None,timeout=30,request_delay=0.25,opener=None):
+    def __init__(self,client_id=None,timeout=30,request_delay=0.25,opener=None,
+                 halt_requested=None):
         self.client_id=str(client_id or PACKAGED_CLIENT_ID).strip()
         self.timeout=int(timeout); self.request_delay=max(0,float(request_delay))
         self._open=opener or urlopen; self._last_request=0.0; self._lock=threading.Lock()
+        self._halt_requested=halt_requested or (lambda:False)
         self._anime_cache={}; self._tv_cache={}; self._episode_cache={}; self._search_cache={}
 
     def _get(self,path,params=None):
+        if self._halt_requested():
+            raise ServiceWorkHalted("Simkl mediation halted for addon shutdown")
         query={"client_id":self.client_id,"app-name":"otaku-prime","app-version":"0.1.2"}
         query.update(params or {})
         request=Request(SIMKL_API_URL+path+"?"+urlencode(query),headers={
             "Accept":"application/json","User-Agent":"Otaku-Prime/0.1.2 mediator"})
         with self._lock:
             remaining=self.request_delay-(time.monotonic()-self._last_request)
-            if remaining>0: time.sleep(remaining)
+            if remaining>0:
+                deadline=time.monotonic()+remaining
+                while time.monotonic()<deadline:
+                    if self._halt_requested():
+                        raise ServiceWorkHalted("Simkl pacing halted for addon shutdown")
+                    time.sleep(min(0.05,max(0.0,deadline-time.monotonic())))
             try:
                 with self._open(request,timeout=self.timeout) as response:
-                    return json.loads(response.read().decode("utf-8"))
+                    value=json.loads(response.read().decode("utf-8"))
+                if self._halt_requested():
+                    raise ServiceWorkHalted(
+                        "Simkl mediation response discarded for addon shutdown")
+                return value
+            except ServiceWorkHalted:
+                raise
             except HTTPError as exc:
                 raise MediatorPlacementError(
                     "Simkl {} returned HTTP {}".format(path,exc.code)) from exc

@@ -11,6 +11,7 @@ from resources.lib.services.mediator_helper_simkl import (
     MediatorMetadataPending,
     MediatorPlacementError,
 )
+from resources.lib.service_lifecycle import ServiceWorkHalted
 
 KITSU_API_URL="https://kitsu.io/api/edge"
 SPECIAL_FORMATS={"movie","ova","oav","oad","ona","special","tv_special","music","music_video"}
@@ -19,8 +20,9 @@ MAX_PREQUEL_DEPTH=64
 
 
 class KitsuMediatorClient:
-    def __init__(self,timeout=30,opener=None):
+    def __init__(self,timeout=30,opener=None,halt_requested=None):
         self.timeout=int(timeout); self._open=opener or urlopen
+        self._halt_requested=halt_requested or (lambda:False)
         self._anime_cache={}; self._prequel_cache={}; self._category_cache={}; self._cast_cache={}
 
     @staticmethod
@@ -28,9 +30,17 @@ class KitsuMediatorClient:
         return {"Accept":"application/vnd.api+json","User-Agent":"Otaku-Prime/0.1.2 kitsu-mediator"}
 
     def _json(self,url):
+        if self._halt_requested():
+            raise ServiceWorkHalted("Kitsu mediation halted for addon shutdown")
         try:
             with self._open(Request(url,headers=self._headers()),timeout=self.timeout) as response:
-                return json.loads(response.read().decode("utf-8"))
+                value=json.loads(response.read().decode("utf-8"))
+            if self._halt_requested():
+                raise ServiceWorkHalted(
+                    "Kitsu mediation response discarded for addon shutdown")
+            return value
+        except ServiceWorkHalted:
+            raise
         except HTTPError as exc:
             raise MediatorPlacementError("Kitsu returned HTTP {}".format(exc.code)) from exc
         except (URLError,TimeoutError,OSError,ValueError,json.JSONDecodeError) as exc:

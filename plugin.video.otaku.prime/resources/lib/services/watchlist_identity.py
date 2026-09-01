@@ -12,6 +12,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
 from resources.lib.logging_config import get_logger
 from resources.lib.services.remote_identity import best_title_similarity,item_titles
+from resources.lib.service_lifecycle import ServiceWorkHalted
 from resources.lib.watchlist.simkl import PACKAGED_CLIENT_ID, SIMKL_API_URL
 
 LOGGER=get_logger(__name__)
@@ -34,8 +35,9 @@ class KitsuIdentityClient:
 
     EXTERNAL_SITES={"anilist":"anilist/anime","mal":"myanimelist/anime"}
 
-    def __init__(self,timeout=30,opener=None):
+    def __init__(self,timeout=30,opener=None,halt_requested=None):
         self.timeout=int(timeout); self._open=opener or urlopen
+        self._halt_requested=halt_requested or (lambda:False)
 
     @staticmethod
     def _headers():
@@ -43,6 +45,8 @@ class KitsuIdentityClient:
                 "User-Agent":"Otaku-Prime/0.1.2 identity-watchdog"}
 
     def _json(self,url):
+        if self._halt_requested():
+            raise ServiceWorkHalted("Kitsu identity request halted for addon shutdown")
         endpoint=urlsplit(url)
         safe="{}://{}{}".format(endpoint.scheme,endpoint.netloc,endpoint.path)
         started=time.monotonic()
@@ -50,6 +54,10 @@ class KitsuIdentityClient:
         try:
             with self._open(Request(url,headers=self._headers()),timeout=self.timeout) as response:
                 payload=json.loads(response.read().decode("utf-8"))
+            if self._halt_requested():
+                raise ServiceWorkHalted("Kitsu identity response discarded for addon shutdown")
+        except ServiceWorkHalted:
+            raise
         except HTTPError as exc:
             log=LOGGER.warning if exc.code in (401,403,404,429) else LOGGER.error
             log("Kitsu identity API request failed: GET %s returned HTTP %s",safe,exc.code)
@@ -110,6 +118,8 @@ class ProviderIdentityClient:
         simkl_error=None
         try:
             resolved=self.simkl.resolve(item) or {}
+        except ServiceWorkHalted:
+            raise
         except IdentityMappingConflict:
             raise
         except Exception as exc:
@@ -121,6 +131,8 @@ class ProviderIdentityClient:
         if combined.get("kitsu_id") in (None,""):
             try:
                 resolved.update(self.kitsu.resolve(combined))
+            except ServiceWorkHalted:
+                raise
             except IdentityMappingConflict:
                 raise
             except Exception as exc:
@@ -132,9 +144,11 @@ class ProviderIdentityClient:
 
 class SimklIdentityClient:
     """Watchdog-only identity resolver. Mediator never searches or repairs IDs."""
-    def __init__(self,client_id=None,timeout=30,opener=None,redirect_opener=None):
+    def __init__(self,client_id=None,timeout=30,opener=None,redirect_opener=None,
+                 halt_requested=None):
         self.client_id=str(client_id or PACKAGED_CLIENT_ID).strip(); self.timeout=int(timeout)
         self._open=opener or urlopen; self._redirect_open=redirect_opener or build_opener(_StopRedirect()).open
+        self._halt_requested=halt_requested or (lambda:False)
 
     def _params(self,extra=None):
         values={"client_id":self.client_id,"app-name":"otaku-prime","app-version":"0.1.2"}; values.update(extra or {})
@@ -144,15 +158,24 @@ class SimklIdentityClient:
     def _headers(): return {"Accept":"application/json","User-Agent":"Otaku-Prime/0.1.2 watchdog"}
 
     def _json(self,url):
+        if self._halt_requested():
+            raise ServiceWorkHalted("Simkl identity request halted for addon shutdown")
         try:
             with self._open(Request(url,headers=self._headers()),timeout=self.timeout) as response:
-                return json.loads(response.read().decode("utf-8"))
+                value=json.loads(response.read().decode("utf-8"))
+            if self._halt_requested():
+                raise ServiceWorkHalted("Simkl identity response discarded for addon shutdown")
+            return value
+        except ServiceWorkHalted:
+            raise
         except HTTPError as exc:
             raise RuntimeError("Simkl identity request failed with HTTP {}".format(exc.code)) from exc
         except (URLError,TimeoutError,OSError,ValueError,json.JSONDecodeError) as exc:
             raise RuntimeError("Simkl identity request failed: {}".format(exc)) from exc
 
     def _redirect_simkl_id(self,provider,value):
+        if self._halt_requested():
+            raise ServiceWorkHalted("Simkl identity redirect halted for addon shutdown")
         url=SIMKL_API_URL+"/redirect?"+self._params({"to":"simkl",provider:str(value)})
         request=Request(url,headers=self._headers()); location=None
         try:
@@ -160,6 +183,8 @@ class SimklIdentityClient:
         except HTTPError as exc:
             if exc.code not in (301,302,303,307,308): raise
             location=exc.headers.get("Location")
+        if self._halt_requested():
+            raise ServiceWorkHalted("Simkl identity redirect discarded for addon shutdown")
         if not location: return None
         match=re.search(r"/(?:anime|tv)/(\d+)(?:/|$)",urlparse(location).path)
         return match.group(1) if match else None
@@ -271,11 +296,22 @@ class SimklIdentityClient:
 
 class WatchlistIdentityEnrichmentService:
     """Process Watchlist # -> Z and release mediator work every ten percent."""
-    def __init__(self,store,client=None,request_delay=0.25,on_complete=None,on_progress=None):
-        self.store=store; self.client=client or ProviderIdentityClient(); self.request_delay=max(0,float(request_delay))
+    def __init__(self,store,client=None,request_delay=0.25,on_complete=None,on_progress=None,
+                 network_timeout=30,halt_requested=None):
+        self._external_halt_requested=halt_requested or (lambda:False)
+        self.store=store; self.client=client or ProviderIdentityClient(
+            simkl=SimklIdentityClient(timeout=network_timeout,
+                                      halt_requested=self._halt_requested),
+            kitsu=KitsuIdentityClient(timeout=network_timeout,
+                                      halt_requested=self._halt_requested))
+        self.request_delay=max(0,float(request_delay))
         self._stop=threading.Event(); self.on_complete=on_complete; self.on_progress=on_progress
         self._stopping=threading.Event()
         self._lock=threading.Lock(); self._thread=None
+
+    def _halt_requested(self):
+        return (self._stop.is_set() or self._stopping.is_set() or
+                self._external_halt_requested())
 
     @staticmethod
     def _needs_identity(item):
@@ -321,7 +357,7 @@ class WatchlistIdentityEnrichmentService:
             getter=getattr(self.store,"list_watchdog_work",None); pending=getter() if getter else self.store.list_missing_provider_ids()
             total=len(pending); notified_bucket=0
             for index,item in enumerate(pending,1):
-                if self._stop.is_set(): break
+                if self._halt_requested(): break
                 current=getattr(self.store,"item",lambda _id:None)(item["local_id"])
                 if current is None:
                     LOGGER.info(
@@ -342,7 +378,7 @@ class WatchlistIdentityEnrichmentService:
                             identity_status in ("CONFLICT_EXACT","PENDING_PUBLICATION") and
                             publication_unconfirmed):
                         resolved=self.client.resolve(item) or {}
-                        if self._stop.is_set() or self._stopping.is_set():
+                        if self._halt_requested():
                             release_to_mediator=False
                             break
                         ids={name:resolved.get(name) for name in PROVIDERS if resolved.get(name) not in (None,"")}
@@ -374,7 +410,7 @@ class WatchlistIdentityEnrichmentService:
                         release_to_mediator=self._record_if_present(
                             item["local_id"],"RESOLVED")
                 except IdentityMappingConflict as exc:
-                    if self._stop.is_set() or self._stopping.is_set():
+                    if self._halt_requested():
                         release_to_mediator=False
                         break
                     if self._publication_unconfirmed(item):
@@ -392,7 +428,7 @@ class WatchlistIdentityEnrichmentService:
                             "Simkl identity conflict for Prime item %s; mediator will bypass Simkl: %s",
                             item["local_id"],exc)
                 except Exception as exc:
-                    if self._stop.is_set() or self._stopping.is_set():
+                    if self._halt_requested():
                         release_to_mediator=False
                         break
                     failed+=1; LOGGER.exception("Provider ID enrichment failed for Prime item %s",item["local_id"])
@@ -407,7 +443,7 @@ class WatchlistIdentityEnrichmentService:
                     notified_bucket=bucket; self._notify_progress(index,total,bucket)
                 if self.request_delay and self._stop.wait(self.request_delay): break
 
-            if self._stop.is_set() or self._stopping.is_set():
+            if self._halt_requested():
                 LOGGER.info("Provider ID enrichment halted for Kodi addon shutdown")
                 return {"halted":True,"complete":complete,"partial":partial,
                         "unavailable":unavailable,"failed":failed}

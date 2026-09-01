@@ -2,6 +2,7 @@ import unittest
 
 from resources.lib.services.mediator_processor import MediatorProcessor
 from resources.lib.services.mediator_helper_simkl import MediatorMetadataPending
+from resources.lib.services.mediator_helper_simkl import SimklMediatorClient
 from resources.lib.service_lifecycle import ServiceWorkHalted
 
 
@@ -38,6 +39,14 @@ def placement(provider,season=1):
 
 class MediatorProcessorTests(unittest.TestCase):
     def item(self): return {"local_id":"x","simkl_id":"1","anilist_id":"2","mal_id":"3","kitsu_id":"4"}
+
+    def test_production_network_timeout_reaches_every_native_endpoint(self):
+        processor=MediatorProcessor(
+            simkl_client=SimklMediatorClient(timeout=3),network_timeout=3)
+        self.assertEqual(3,processor.endpoints["simkl"].client.timeout)
+        self.assertEqual(3,processor.endpoints["anilist"].client.timeout)
+        self.assertEqual(3,processor.endpoints["mal"].client.timeout)
+        self.assertEqual(3,processor.endpoints["kitsu"].client.timeout)
 
     def test_simkl_wins_without_calling_other_endpoints(self):
         endpoints={name:Endpoint(name,placement(name)) for name in ("simkl","anilist","mal","kitsu")}

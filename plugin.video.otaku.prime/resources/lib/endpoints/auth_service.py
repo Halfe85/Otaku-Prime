@@ -24,11 +24,13 @@ class AuthenticatorAPIError(RuntimeError):
 class AuthenticatorAPI:
     """Resolve provider auth URLs and validate provider access tokens."""
 
-    def __init__(self, anilist_client_id: Optional[str] = None) -> None:
-        self._anilist = AniListAuthenticator(client_id=anilist_client_id)
-        self._kitsu = KitsuAuthenticator()
-        self._mal = MALAuthenticator()
-        self._simkl = SimklAuthenticator()
+    def __init__(self, anilist_client_id: Optional[str] = None,
+                 timeout: int = 15) -> None:
+        self._anilist = AniListAuthenticator(
+            client_id=anilist_client_id,timeout=timeout)
+        self._kitsu = KitsuAuthenticator(timeout=timeout)
+        self._mal = MALAuthenticator(timeout=timeout)
+        self._simkl = SimklAuthenticator(timeout=timeout)
 
     def list_providers(self) -> dict:
         return {

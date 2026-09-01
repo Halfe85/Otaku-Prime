@@ -9,11 +9,20 @@ class AniListRateLimiter:
         self.interval=60.0/max(1,int(requests_per_minute))
         self._lock=threading.Lock(); self._next_request=0.0
 
-    def wait(self):
-        with self._lock:
-            now=time.monotonic(); delay=max(0.0,self._next_request-now)
-            if delay: time.sleep(delay)
-            self._next_request=time.monotonic()+self.interval
+    def wait(self,halt_requested=None):
+        """Pace requests without holding the lock or hiding a Kodi abort."""
+        halt_requested=halt_requested or (lambda:False)
+        while True:
+            if halt_requested(): return False
+            with self._lock:
+                now=time.monotonic(); delay=max(0.0,self._next_request-now)
+                if delay<=0:
+                    self._next_request=now+self.interval
+                    return True
+            deadline=time.monotonic()+delay
+            while time.monotonic()<deadline:
+                if halt_requested(): return False
+                time.sleep(min(0.1,max(0.0,deadline-time.monotonic())))
 
     @staticmethod
     def retry_delay(error,default=60):

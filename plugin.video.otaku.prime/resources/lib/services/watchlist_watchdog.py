@@ -440,7 +440,17 @@ class WatchlistWatchdogService:
                 getattr(self.mediator,"_thread",None),
             )
         )
-        LOGGER.info("Watchlist processing stopped=%s",stopped)
+        active=[thread.name for thread in (
+            self._thread,
+            getattr(self.identity_enricher,"_thread",None),
+            getattr(self.mediator,"_thread",None),
+        ) if thread and thread.is_alive()]
+        if active:
+            LOGGER.warning(
+                "Watchlist shutdown deadline reached with active workers: %s",
+                ", ".join(active))
+        else:
+            LOGGER.info("Watchlist processing stopped=True")
         return stopped
 
     def local_changed(self, local_id=None):

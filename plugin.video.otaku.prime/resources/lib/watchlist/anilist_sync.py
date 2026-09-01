@@ -19,10 +19,13 @@ ANILIST_HEADERS={"Content-Type":"application/json","Accept":"application/json",
 class AniListWatchlistClient:
     API_URL="https://graphql.anilist.co"
 
-    def __init__(self,timeout=30,opener=None):
+    def __init__(self,timeout=30,opener=None,halt_requested=None):
         self.timeout=timeout; self._rate_limited=opener is None; self._open=opener or urlopen
+        self._halt_requested=halt_requested or (lambda:False)
 
     def fetch(self,user_id,access_token):
+        if self._halt_requested():
+            raise ServiceWorkHalted("AniList watchlist request halted for addon shutdown")
         query="""query($userId:Int!){MediaListCollection(userId:$userId,type:ANIME){
           lists{status entries{status progress updatedAt media{id idMal isAdult format episodes
             startDate{year month day} synonyms title{english romaji native userPreferred}}}}}}"""
@@ -32,9 +35,14 @@ class AniListWatchlistClient:
         started = time.monotonic()
         LOGGER.info("AniList API request started: POST %s", self.API_URL)
         try:
-            if self._rate_limited: ANILIST_RATE_LIMITER.wait()
+            if self._rate_limited and not ANILIST_RATE_LIMITER.wait(self._halt_requested):
+                raise ServiceWorkHalted("AniList watchlist pacing halted for addon shutdown")
             with self._open(request,timeout=self.timeout) as response:
                 payload=json.loads(response.read().decode("utf-8"))
+            if self._halt_requested():
+                raise ServiceWorkHalted("AniList watchlist response discarded for addon shutdown")
+        except ServiceWorkHalted:
+            raise
         except HTTPError as exc:
             log = LOGGER.warning if exc.code in (401, 403, 429) else LOGGER.error
             log("AniList API request failed: POST %s returned HTTP %s", self.API_URL, exc.code)

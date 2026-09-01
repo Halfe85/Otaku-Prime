@@ -14,6 +14,7 @@ from resources.lib.services.mediator_helper_simkl import (
     MediatorMetadataPending,
     MediatorPlacementError,
 )
+from resources.lib.service_lifecycle import ServiceWorkHalted
 
 
 MAX_PREQUEL_DEPTH = 64
@@ -30,15 +31,18 @@ class AniListMediatorClient:
 
     API_URL = "https://graphql.anilist.co"
 
-    def __init__(self, timeout=30, opener=None):
+    def __init__(self, timeout=30, opener=None, halt_requested=None):
         self.timeout = int(timeout)
         self._open = opener or urlopen
         self._rate_limited = opener is None
+        self._halt_requested = halt_requested or (lambda: False)
         self._media_cache = {}
         self._schedule_cache = {}
         self._cast_cache = {}
 
     def _query(self, query, variables):
+        if self._halt_requested():
+            raise ServiceWorkHalted("AniList metadata request halted for addon shutdown")
         request = Request(
             self.API_URL,
             data=json.dumps({"query": query, "variables": variables}).encode("utf-8"),
@@ -52,21 +56,38 @@ class AniListMediatorClient:
         payload = None
         for attempt in range(2):
             try:
-                if self._rate_limited:
-                    ANILIST_RATE_LIMITER.wait()
+                if self._rate_limited and not ANILIST_RATE_LIMITER.wait(self._halt_requested):
+                    raise ServiceWorkHalted(
+                        "AniList metadata pacing halted for addon shutdown")
                 with self._open(request, timeout=self.timeout) as response:
                     payload = json.loads(response.read().decode("utf-8"))
+                if self._halt_requested():
+                    raise ServiceWorkHalted(
+                        "AniList metadata response discarded for addon shutdown")
                 break
+            except ServiceWorkHalted:
+                raise
             except HTTPError as exc:
                 if exc.code == 429 and attempt == 0:
-                    time.sleep(ANILIST_RATE_LIMITER.retry_delay(exc))
+                    delay=ANILIST_RATE_LIMITER.retry_delay(exc)
+                    deadline=time.monotonic()+delay
+                    while time.monotonic()<deadline:
+                        if self._halt_requested():
+                            raise ServiceWorkHalted(
+                                "AniList retry halted for addon shutdown")
+                        time.sleep(min(0.1,max(0.0,deadline-time.monotonic())))
                     continue
                 raise MediatorPlacementError(
                     "AniList GraphQL returned HTTP {}".format(exc.code)
                 ) from exc
             except (URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
                 if attempt == 0:
-                    time.sleep(1)
+                    deadline=time.monotonic()+1.0
+                    while time.monotonic()<deadline:
+                        if self._halt_requested():
+                            raise ServiceWorkHalted(
+                                "AniList retry halted for addon shutdown")
+                        time.sleep(min(0.1,max(0.0,deadline-time.monotonic())))
                     continue
                 raise MediatorPlacementError("AniList GraphQL failed: {}".format(exc)) from exc
         if not isinstance(payload, dict):

@@ -50,6 +50,7 @@ class ArtworkDiagnosticProbe:
         self._pending = []
         self._seen = {}
         self._active = False
+        self._thread = None
         self._stopping = threading.Event()
         self._lock = threading.Lock()
 
@@ -77,24 +78,34 @@ class ArtworkDiagnosticProbe:
             if self._active:
                 return True
             self._active = True
-        threading.Thread(
+        thread=threading.Thread(
             target=self._run,
             name="OtakuPrimeArtworkDiagnostic",
             daemon=True,
-        ).start()
+        )
+        self._thread=thread
+        thread.start()
         return True
 
-    def stop(self):
-        """Discard queued probes; an active network probe may finish silently."""
+    def request_stop(self):
         self._stopping.set()
         with self._lock:
             self._pending.clear()
+
+    def stop(self,timeout=3):
+        """Discard queued probes and wait briefly for the active bounded probe."""
+        self.request_stop()
+        thread=self._thread
+        if thread:
+            thread.join(timeout=max(0.0,float(timeout)))
+        return not bool(thread and thread.is_alive())
 
     def _run(self):
         while True:
             with self._lock:
                 if self._stopping.is_set() or not self._pending:
                     self._active = False
+                    self._thread = None
                     return
                 job = self._pending.pop(0)
             self._diagnose(*job)

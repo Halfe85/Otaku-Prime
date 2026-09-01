@@ -9,6 +9,9 @@ from resources.lib.services.mediator_endpoint_anilist import AniListMediatorEndp
 from resources.lib.services.mediator_endpoint_kitsu import KitsuMediatorEndpoint
 from resources.lib.services.mediator_endpoint_mal import MALMediatorEndpoint
 from resources.lib.services.mediator_endpoint_simkl import SimklMediatorEndpoint
+from resources.lib.services.mediator_helper_anilist import AniListMediatorClient
+from resources.lib.services.mediator_endpoint_mal import MALMediatorClient
+from resources.lib.services.mediator_endpoint_kitsu import KitsuMediatorClient
 from resources.lib.services.mediator_helper_simkl import (
     MediatorMetadataPending,
     MediatorPlacementError,
@@ -82,14 +85,19 @@ def _merge_placements(anilist,mal):
 
 class MediatorProcessor:
     """Resolve one Watchlist row without ever changing provider identities."""
-    def __init__(self,endpoints=None,simkl_client=None,halt_requested=None):
+    def __init__(self,endpoints=None,simkl_client=None,halt_requested=None,
+                 network_timeout=30):
+        halt_requested=halt_requested or (lambda:False)
         self.endpoints=endpoints or {
             "simkl":SimklMediatorEndpoint(client=simkl_client),
-            "anilist":AniListMediatorEndpoint(),
-            "mal":MALMediatorEndpoint(),
-            "kitsu":KitsuMediatorEndpoint(),
+            "anilist":AniListMediatorEndpoint(client=AniListMediatorClient(
+                timeout=network_timeout,halt_requested=halt_requested)),
+            "mal":MALMediatorEndpoint(client=MALMediatorClient(
+                timeout=network_timeout,halt_requested=halt_requested)),
+            "kitsu":KitsuMediatorEndpoint(client=KitsuMediatorClient(
+                timeout=network_timeout,halt_requested=halt_requested)),
         }
-        self.halt_requested=halt_requested or (lambda:False)
+        self.halt_requested=halt_requested
 
     def _checkpoint(self):
         if self.halt_requested():
