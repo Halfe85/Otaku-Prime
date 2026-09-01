@@ -18,7 +18,7 @@ from resources.lib.services.watchlist_release import release_epoch
 
 
 LOGGER = get_logger(__name__)
-SPECIAL_ROOT = "special://profile/Library"
+SPECIAL_ROOT = "special://profile/library"
 SOURCES_SPECIAL_PATH = "special://profile/sources.xml"
 SOURCE_NAME = "Otaku Prime TV-Series"
 VIDEO_CONTENT = "tvshows"
@@ -37,7 +37,7 @@ def _default_root():
             return translated
     except (ImportError, RuntimeError, AttributeError):
         pass
-    return os.path.join(os.path.expanduser("~"), ".kodi", "userdata", "Library")
+    return os.path.join(os.path.expanduser("~"), ".kodi", "userdata", "library")
 
 
 def _default_sources_path():
