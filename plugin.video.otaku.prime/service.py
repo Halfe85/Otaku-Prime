@@ -157,7 +157,8 @@ def _run_service(profile: str) -> None:
         halt_requested=monitor.abortRequested)
     artwork_store.start()
     prime_physical=PrimePhysicalService(
-        catalog,halt_requested=monitor.abortRequested)
+        catalog,artwork_store=artwork_store,
+        halt_requested=monitor.abortRequested)
     tvshow_mediator = TVShowMediatorService(
         watchlist_items,catalog,artwork_store=artwork_store,physical=prime_physical,
         network_timeout=BACKGROUND_NETWORK_TIMEOUT,
