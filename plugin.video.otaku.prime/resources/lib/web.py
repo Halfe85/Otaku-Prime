@@ -469,6 +469,25 @@ def create_server(host: str, port: int, user_store, app_log_store=None,
         def do_POST(self):
             path = self.path.split("?", 1)[0]
 
+            if path == "/api/logs/artwork-failure":
+                if not self._current_user():
+                    self._send_json(401,{"ok":False,"message":"Sign in again."}); return
+                payload=self._read_api_payload()
+                kind=str(payload.get("kind") or "artwork").strip().lower()[:24]
+                if kind not in ("poster","clearlogo","banner"):
+                    kind="artwork"
+                title=" ".join(str(payload.get("title") or "unknown title").split())[:180]
+                raw_url=str(payload.get("url") or "").strip()[:2048]
+                parsed=urlsplit(raw_url)
+                if parsed.scheme not in ("http","https") or not parsed.hostname:
+                    self._send_json(400,{"ok":False,"message":"Invalid artwork URL."}); return
+                safe_url="{}://{}{}".format(parsed.scheme,parsed.netloc,parsed.path)
+                LOGGER.warning(
+                    "Browser failed to load %s artwork for %s: host=%s url=%s",
+                    kind,title,parsed.hostname,safe_url)
+                self._send_json(202,{"ok":True})
+                return
+
             if path.startswith("/api/library/episodes/") and path.endswith("/watch-status"):
                 if not self._current_user():
                     self._send_json(401,{"ok":False,"message":"Sign in again."}); return

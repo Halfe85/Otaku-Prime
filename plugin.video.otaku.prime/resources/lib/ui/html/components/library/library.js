@@ -10,6 +10,7 @@
   var seriesModal = document.getElementById("library-series-modal");
   var episodeModal = document.getElementById("library-episode-modal");
   var expandedSeasons = new Set();
+  var reportedArtworkFailures = new Set();
   var state = {
     series: [],
     movies: [],
@@ -144,6 +145,21 @@
     return node;
   }
 
+  function reportArtworkFailure(kind, url, title) {
+    if (!url) return;
+    var key = String(kind) + "|" + String(url);
+    if (reportedArtworkFailures.has(key)) return;
+    reportedArtworkFailures.add(key);
+    window.console.warn("Prime artwork failed", kind, url);
+    fetch("/api/logs/artwork-failure", {
+      method: "POST",
+      credentials: "same-origin",
+      keepalive: true,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: kind, url: String(url), title: String(title || "") })
+    }).catch(function () {});
+  }
+
   function artworkImage(url, className, alt, onReady, onMissing) {
     var image = element("img", className);
     image.alt = alt || "";
@@ -263,7 +279,11 @@
       if (blurMatureArtwork(item)) tile.classList.add("mature-artwork-blurred");
       var artwork = element("div", "library-tile-art");
       if (item.poster_url) {
-        artwork.appendChild(artworkImage(item.poster_url,"library-tile-poster",""));
+        artwork.appendChild(artworkImage(
+          item.poster_url,"library-tile-poster","",null,function () {
+            tile.classList.add("missing-poster");
+            reportArtworkFailure("poster",item.poster_url,title);
+          }));
       } else {
         tile.classList.add("missing-poster");
       }
@@ -274,6 +294,8 @@
         var logoWrap = element("div", "library-tile-logo-wrap");
         var logo = artworkImage(item.clearlogo_url,"library-tile-logo",title,function () {
           tile.classList.add("has-logo");
+        },function () {
+          reportArtworkFailure("clearlogo",item.clearlogo_url,title);
         });
         logoWrap.appendChild(logo);
         tile.appendChild(logoWrap);
@@ -433,7 +455,11 @@
     logo.alt = "";
     if (series.banner_url) {
       banner.onload = function () { banner.hidden = false; hero.classList.add("has-banner"); };
-      banner.onerror = function () { banner.hidden = true; hero.classList.remove("has-banner"); };
+      banner.onerror = function () {
+        banner.hidden = true;
+        hero.classList.remove("has-banner");
+        reportArtworkFailure("banner",series.banner_url,title);
+      };
       banner.src = String(series.banner_url);
     }
     if (series.clearlogo_url) {
@@ -442,7 +468,11 @@
         logo.alt = title;
         hero.classList.add("has-logo");
       };
-      logo.onerror = function () { logo.hidden = true; hero.classList.remove("has-logo"); };
+      logo.onerror = function () {
+        logo.hidden = true;
+        hero.classList.remove("has-logo");
+        reportArtworkFailure("clearlogo",series.clearlogo_url,title);
+      };
       logo.src = String(series.clearlogo_url);
     }
   }

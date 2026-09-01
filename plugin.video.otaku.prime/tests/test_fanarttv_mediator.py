@@ -67,13 +67,15 @@ class FanartTVMediatorTests(unittest.TestCase):
         })()
         placement={"tv_show":{"tvdb_id":"74796","poster_url":"provider.jpg"}}
 
-        FanartTVMediator(client).enrich(placement)
+        with self.assertLogs("otaku_prime.services-mediator_fanarttv",level="INFO") as logs:
+            FanartTVMediator(client).enrich(placement)
 
         show=placement["tv_show"]
         self.assertEqual("https://assets/poster-en-high.jpg",show["poster_url"])
         self.assertEqual("https://assets/clearlogo.png",show["clearlogo_url"])
         self.assertEqual("https://assets/banner.jpg",show["banner_url"])
         self.assertEqual("fanarttv",show["artwork_source"])
+        self.assertIn("Fanart.tv artwork selected for TVDB 74796","\n".join(logs.output))
 
     def test_unconfigured_fanart_is_non_fatal_and_keeps_provider_fallback(self):
         client=type("Client",(),{"configured":False})()

@@ -99,22 +99,32 @@ class FanartTVClient:
         if not key: return {}
         if not self.configured: return {}
         with self._lock:
-            if key in self._cache: return self._cache[key]
+            if key in self._cache:
+                LOGGER.info("Fanart.tv API cache hit: TVDB %s",key)
+                return self._cache[key]
         headers={"Accept":"application/json","User-Agent":"Otaku-Prime/0.1.2 fanarttv"}
         if self.api_key: headers["api-key"]=self.api_key
         if self.client_key: headers["client-key"]=self.client_key
+        LOGGER.info("Fanart.tv API request started: TVDB %s",key)
         try:
             with self._open(Request(FANARTTV_API_URL+"/"+key,headers=headers),
                             timeout=self.timeout) as response:
                 payload=json.loads(response.read().decode("utf-8"))
         except HTTPError as exc:
-            if exc.code==404: payload={}
+            if exc.code==404:
+                LOGGER.info("Fanart.tv has no TV artwork record for TVDB %s",key)
+                payload={}
             else: raise FanartTVError(
                 "Fanart.tv TV {} returned HTTP {}".format(key,exc.code)) from exc
         except (URLError,TimeoutError,OSError,ValueError,json.JSONDecodeError) as exc:
             raise FanartTVError("Fanart.tv TV {} failed: {}".format(key,exc)) from exc
         if not isinstance(payload,dict):
             raise FanartTVError("Fanart.tv returned an invalid TV artwork response")
+        LOGGER.info(
+            "Fanart.tv API request complete: TVDB %s posters=%s logos=%s banners=%s backgrounds=%s",
+            key,len(payload.get("tvposter") or []),
+            len(payload.get("clearlogo") or [])+len(payload.get("hdtvlogo") or []),
+            len(payload.get("tvbanner") or []),len(payload.get("showbackground") or []))
         with self._lock: self._cache[key]=payload
         return payload
 
@@ -150,4 +160,11 @@ class FanartTVMediator:
         for key,value in artwork.items():
             if value: show[key]=value
         show["artwork_source"]="fanarttv" if any(artwork.values()) else show.get("artwork_source")
+        if any(artwork.values()):
+            LOGGER.info(
+                "Fanart.tv artwork selected for TVDB %s: poster=%s clearlogo=%s banner=%s",
+                tvdb_id,artwork.get("poster_url") or "none",
+                artwork.get("clearlogo_url") or "none",artwork.get("banner_url") or "none")
+        else:
+            LOGGER.info("Fanart.tv returned no selectable artwork for TVDB %s",tvdb_id)
         return placement

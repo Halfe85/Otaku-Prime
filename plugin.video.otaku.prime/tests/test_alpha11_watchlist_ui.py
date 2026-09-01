@@ -114,6 +114,41 @@ class Alpha11WatchlistUITests(unittest.TestCase):
         self.assertIn("repeat(auto-fill,minmax(min(230px,100%),1fr))",styles)
         self.assertIn(".library-tile-logo-wrap",styles)
         self.assertIn(".library-series-hero",styles)
+        self.assertIn("function reportArtworkFailure(kind, url, title)",script)
+        self.assertIn('fetch("/api/logs/artwork-failure"',script)
+
+    def test_browser_artwork_failure_is_written_to_app_log(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database=os.path.join(directory,"users.sqlite")
+            users=UserStore(database); users.initialize()
+            try:
+                server=create_server("127.0.0.1",0,users)
+            except PermissionError:
+                self.skipTest("sandbox does not permit local listener sockets")
+            thread=threading.Thread(target=server.serve_forever,daemon=True); thread.start()
+            connection=None
+            try:
+                connection=http.client.HTTPConnection("127.0.0.1",server.server_port,timeout=3)
+                body=urlencode({"username":"admin","password":"admin"})
+                connection.request("POST","/login",body,
+                                   {"Content-Type":"application/x-www-form-urlencoded"})
+                response=connection.getresponse(); cookie=response.getheader("Set-Cookie").split(";",1)[0]
+                response.read(); connection.close()
+                connection=http.client.HTTPConnection("127.0.0.1",server.server_port,timeout=3)
+                payload=json.dumps({"kind":"poster","title":"Example",
+                                    "url":"https://assets.fanart.tv/fanart/example.jpg?secret=no"})
+                with self.assertLogs("otaku_prime.web",level="WARNING") as logs:
+                    connection.request("POST","/api/logs/artwork-failure",payload,
+                                       {"Content-Type":"application/json","Cookie":cookie})
+                    response=connection.getresponse(); response.read()
+                self.assertEqual(202,response.status)
+                message="\n".join(logs.output)
+                self.assertIn("Browser failed to load poster artwork for Example",message)
+                self.assertIn("host=assets.fanart.tv",message)
+                self.assertNotIn("secret=no",message)
+            finally:
+                if connection: connection.close()
+                server.shutdown(); server.server_close(); thread.join(timeout=3)
 
     def test_library_separates_tv_series_and_standalone_movies(self):
         page=render_home(
