@@ -18,6 +18,7 @@ from resources.lib.database.app_logs import AppLogStore
 from resources.lib.database.catalog import CatalogStore
 from resources.lib.endpoints.auth_service import AuthenticatorAPI, AuthenticatorAPIError
 from resources.lib.logging_config import get_logger
+from resources.lib.services.artwork_diagnostics import ArtworkDiagnosticProbe
 LOGGER=get_logger(__name__)
 from resources.lib.ui import (
     read_static_asset,
@@ -35,7 +36,8 @@ MAX_FORM_BYTES = 16 * 1024
 
 def create_server(host: str, port: int, user_store, app_log_store=None,
                   on_watchlist_changed=None,on_watchlist_state_changed=None,
-                  on_episode_watch_state_changed=None) -> ThreadingHTTPServer:
+                  on_episode_watch_state_changed=None,
+                  artwork_diagnostic_probe=None) -> ThreadingHTTPServer:
     auth = AuthService(user_store)
     authenticator_api = AuthenticatorAPI()
     watchlist_accounts = WatchlistAccountStore(user_store.db_path)
@@ -48,6 +50,7 @@ def create_server(host: str, port: int, user_store, app_log_store=None,
     app_log_store.initialize()
     simkl_flows = {}
     simkl_flows_lock = threading.Lock()
+    artwork_diagnostic_probe = artwork_diagnostic_probe or ArtworkDiagnosticProbe()
 
     class PrimeRequestHandler(BaseHTTPRequestHandler):
         server_version = "OtakuPrime/0.1"
@@ -482,9 +485,13 @@ def create_server(host: str, port: int, user_store, app_log_store=None,
                 if parsed.scheme not in ("http","https") or not parsed.hostname:
                     self._send_json(400,{"ok":False,"message":"Invalid artwork URL."}); return
                 safe_url="{}://{}{}".format(parsed.scheme,parsed.netloc,parsed.path)
+                client_address=str(self.client_address[0] or "unknown")[:64]
+                browser=" ".join(str(self.headers.get("User-Agent") or "unknown").split())[:240]
                 LOGGER.warning(
-                    "Browser failed to load %s artwork for %s: host=%s url=%s",
-                    kind,title,parsed.hostname,safe_url)
+                    "Browser failed to load %s artwork for %s: client=%s browser=%s "
+                    "host=%s url=%s",
+                    kind,title,client_address,browser,parsed.hostname,safe_url)
+                artwork_diagnostic_probe.schedule(raw_url,kind=kind,title=title)
                 self._send_json(202,{"ok":True})
                 return
 

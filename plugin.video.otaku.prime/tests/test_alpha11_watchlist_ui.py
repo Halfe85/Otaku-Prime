@@ -118,11 +118,17 @@ class Alpha11WatchlistUITests(unittest.TestCase):
         self.assertIn('fetch("/api/logs/artwork-failure"',script)
 
     def test_browser_artwork_failure_is_written_to_app_log(self):
+        class Probe:
+            def __init__(self): self.calls=[]
+            def schedule(self,url,kind="artwork",title="unknown title"):
+                self.calls.append((url,kind,title)); return True
+
         with tempfile.TemporaryDirectory() as directory:
             database=os.path.join(directory,"users.sqlite")
             users=UserStore(database); users.initialize()
+            probe=Probe()
             try:
-                server=create_server("127.0.0.1",0,users)
+                server=create_server("127.0.0.1",0,users,artwork_diagnostic_probe=probe)
             except PermissionError:
                 self.skipTest("sandbox does not permit local listener sockets")
             thread=threading.Thread(target=server.serve_forever,daemon=True); thread.start()
@@ -146,6 +152,9 @@ class Alpha11WatchlistUITests(unittest.TestCase):
                 self.assertIn("Browser failed to load poster artwork for Example",message)
                 self.assertIn("host=assets.fanart.tv",message)
                 self.assertNotIn("secret=no",message)
+                self.assertEqual(
+                    [("https://assets.fanart.tv/fanart/example.jpg?secret=no",
+                      "poster","Example")],probe.calls)
             finally:
                 if connection: connection.close()
                 server.shutdown(); server.server_close(); thread.join(timeout=3)
