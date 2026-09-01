@@ -53,7 +53,14 @@ from resources.lib.service_lifecycle import (
 WEB_HOST = "0.0.0.0"
 WEB_PORT = 9898
 USERS_DB_NAME = "users.sqlite"
+# Short timeout for non-critical background metadata/artwork requests so Kodi can
+# retire an addon service quickly during updates.
 BACKGROUND_NETWORK_TIMEOUT = 3
+# Watchlist snapshots can be substantially larger GraphQL/REST responses. Three
+# seconds was too aggressive and caused healthy AniList connections to fail while
+# waiting for the response body. Keep provider synchronization independent from
+# the short metadata timeout.
+WATCHLIST_NETWORK_TIMEOUT = 15
 
 
 class PrimeMonitor(xbmc.Monitor):
@@ -132,24 +139,24 @@ def _run_service(profile: str) -> None:
         AniListWatchlistImportService(
             watchlist_accounts,watchlist_items,
             client=AniListWatchlistClient(
-                timeout=BACKGROUND_NETWORK_TIMEOUT,
+                timeout=WATCHLIST_NETWORK_TIMEOUT,
                 halt_requested=monitor.abortRequested)),
         MALWatchlistImportService(
             watchlist_accounts,watchlist_items,
             client=MALWatchlistClient(
-                timeout=BACKGROUND_NETWORK_TIMEOUT,
+                timeout=WATCHLIST_NETWORK_TIMEOUT,
                 halt_requested=monitor.abortRequested),
-            authenticator=MALAuthenticator(timeout=BACKGROUND_NETWORK_TIMEOUT)),
+            authenticator=MALAuthenticator(timeout=WATCHLIST_NETWORK_TIMEOUT)),
         KitsuWatchlistImportService(
             watchlist_accounts,watchlist_items,
             client=KitsuWatchlistClient(
-                timeout=BACKGROUND_NETWORK_TIMEOUT,
+                timeout=WATCHLIST_NETWORK_TIMEOUT,
                 halt_requested=monitor.abortRequested),
-            authenticator=KitsuAuthenticator(timeout=BACKGROUND_NETWORK_TIMEOUT)),
+            authenticator=KitsuAuthenticator(timeout=WATCHLIST_NETWORK_TIMEOUT)),
         SimklWatchlistImportService(
             watchlist_accounts,watchlist_items,
             client=SimklWatchlistClient(
-                timeout=BACKGROUND_NETWORK_TIMEOUT,
+                timeout=WATCHLIST_NETWORK_TIMEOUT,
                 halt_requested=monitor.abortRequested)),
     ]
     artwork_store=PersistentArtworkStore(
@@ -167,9 +174,9 @@ def _run_service(profile: str) -> None:
         watchlist_items,network_timeout=BACKGROUND_NETWORK_TIMEOUT,
         halt_requested=monitor.abortRequested)
     provider_writer = WatchlistProviderWriter(
-        watchlist_accounts,timeout=BACKGROUND_NETWORK_TIMEOUT,
-        mal_authenticator=MALAuthenticator(timeout=BACKGROUND_NETWORK_TIMEOUT),
-        kitsu_authenticator=KitsuAuthenticator(timeout=BACKGROUND_NETWORK_TIMEOUT))
+        watchlist_accounts,timeout=WATCHLIST_NETWORK_TIMEOUT,
+        mal_authenticator=MALAuthenticator(timeout=WATCHLIST_NETWORK_TIMEOUT),
+        kitsu_authenticator=KitsuAuthenticator(timeout=WATCHLIST_NETWORK_TIMEOUT))
     watchlist_watchdog = ReleaseAwareWatchlistWatchdogService(
         watchlist_importers,
         watchlist_items,
