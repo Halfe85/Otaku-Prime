@@ -11,10 +11,13 @@ class RuntimeTVShowMediatorService(TVShowMediatorService):
 
     def __init__(self, *args, timestamp_mediator=None, **kwargs):
         network_timeout = kwargs.get("network_timeout", 30)
+        timestamp_timeout = kwargs.pop(
+            "timestamp_timeout", max(5, int(network_timeout or 0))
+        )
         super().__init__(*args, **kwargs)
         self.timestamp_mediator = timestamp_mediator or MediatorTimestampService(
             self.catalog_store,
-            timeout=max(5, int(network_timeout or 0)),
+            timeout=max(1, int(timestamp_timeout or 0)),
             halt_requested=lambda: (
                 self._stop.is_set()
                 or self._stopping.is_set()
