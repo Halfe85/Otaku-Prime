@@ -40,7 +40,11 @@ def parse_birth_date(value):
     today = datetime.date.today()
     if parsed > today:
         raise ValueError("birth date cannot be in the future")
-    if parsed < today.replace(year=today.year - 120):
+    try:
+        oldest = today.replace(year=today.year - 120)
+    except ValueError:
+        oldest = today.replace(month=2, day=28, year=today.year - 120)
+    if parsed < oldest:
         raise ValueError("birth date is outside the supported age range")
     return parsed.isoformat()
 
@@ -175,6 +179,15 @@ class AgeContentPolicyStore:
             )""")
             db.execute("""INSERT OR IGNORE INTO watchlist_preferences(singleton,mature)
               VALUES(1,0)""")
+            row = db.execute(
+                "SELECT birth_date FROM prime_age_preferences WHERE singleton=1"
+            ).fetchone()
+            age = age_years(row["birth_date"] if row else None)
+            if age is None or age < 18:
+                # Alpha migration safety: never carry an old enabled mature flag
+                # into the new DOB-gated policy when adult age is not established.
+                db.execute("""UPDATE watchlist_preferences SET mature=0,
+                  updated_at=CURRENT_TIMESTAMP WHERE singleton=1 AND mature<>0""")
 
     def state(self):
         self.initialize()
