@@ -29,6 +29,7 @@ from resources.lib.services.artwork_store import PersistentArtworkStore
 from resources.lib.services.runtime_prime_physical_movies import (
     RuntimePrimePhysicalMoviesService as PrimePhysicalService,
 )
+from resources.lib.services.timestamp_api import attach_timestamp_api
 from resources.lib.services.watch_state_projector import CatalogWatchStateProjector
 from resources.lib.watchlist.anilist_sync import AniListWatchlistImportService
 from resources.lib.watchlist.anilist_sync import AniListWatchlistClient
@@ -58,6 +59,9 @@ USERS_DB_NAME = "users.sqlite"
 # Short timeout for non-critical background metadata/artwork requests so Kodi can
 # retire an addon service quickly during updates.
 BACKGROUND_NETWORK_TIMEOUT = 3
+# Timestamp providers run in their own queue, so they can tolerate a little more
+# network latency without blocking identity mediation or Kodi projection.
+TIMESTAMP_NETWORK_TIMEOUT = 8
 # Watchlist snapshots can be substantially larger GraphQL/REST responses. Three
 # seconds was too aggressive and caused healthy AniList connections to fail while
 # waiting for the response body. Keep provider synchronization independent from
@@ -171,6 +175,7 @@ def _run_service(profile: str) -> None:
     tvshow_mediator = TVShowMediatorService(
         watchlist_items,catalog,artwork_store=artwork_store,physical=prime_physical,
         network_timeout=BACKGROUND_NETWORK_TIMEOUT,
+        timestamp_timeout=TIMESTAMP_NETWORK_TIMEOUT,
         halt_requested=monitor.abortRequested)
     identity_enricher = WatchlistIdentityEnrichmentService(
         watchlist_items,network_timeout=BACKGROUND_NETWORK_TIMEOUT,
@@ -209,6 +214,7 @@ def _run_service(profile: str) -> None:
             artwork_store=artwork_store,
             network_timeout=BACKGROUND_NETWORK_TIMEOUT,
         )
+        attach_timestamp_api(server, catalog)
     except OSError as exc:
         log(
             "WARNING",
