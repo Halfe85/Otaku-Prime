@@ -20,8 +20,6 @@ document.documentElement.classList.add("js");
     var hentai = terms(item.genres).some(function (value) {
       return value.toLowerCase() === "hentai";
     });
-    // Provider rating is more specific than the generic mature flag. MAL marks
-    // both R+ and Rx as mature, so R+ must be recognized before the fallback.
     if (/^RX/.test(compact)) return "RX";
     if (/^R\+/.test(compact)) return "R+";
     if (compact === "R" || /^R[-(]/.test(compact)) return "R";
@@ -37,7 +35,6 @@ document.documentElement.classList.add("js");
     var age = policy.age === null || policy.age === undefined ? null : Number(policy.age);
     if (value === "RX") return !(age !== null && age >= 18 && Number(policy.mature) === 1);
     if (value === "R" || value === "R+") return age === null || age < 15;
-    // PG-13 is withheld from Kodi below 10 but remains visually unblurred in Prime.
     return false;
   }
 
@@ -51,7 +48,6 @@ document.documentElement.classList.add("js");
       var item = items.get(String(tile.dataset.seriesId || "").toLowerCase());
       if (item) tile.classList.toggle("mature-artwork-blurred", shouldBlur(item));
     });
-
     var hero = document.getElementById("library-series-hero");
     var localId = localIdFromText(document.getElementById("library-series-local-id"));
     var detail = items.get(localId);
@@ -59,14 +55,23 @@ document.documentElement.classList.add("js");
   }
 
   async function json(url) {
-    var response = await fetch(url, {
-      credentials: "same-origin",
-      headers: { "Accept": "application/json" },
-      cache: "no-store"
-    });
-    var payload = await response.json();
-    if (!response.ok || !payload.ok) throw new Error(payload.message || "Prime request failed");
-    return payload;
+    var controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    var timeout = window.setTimeout(function () {
+      if (controller) controller.abort();
+    }, 8000);
+    try {
+      var response = await fetch(url, {
+        credentials: "same-origin",
+        headers: { "Accept": "application/json" },
+        cache: "no-store",
+        signal: controller ? controller.signal : undefined
+      });
+      var payload = await response.json();
+      if (!response.ok || !payload.ok) throw new Error(payload.message || "Prime request failed");
+      return payload;
+    } finally {
+      window.clearTimeout(timeout);
+    }
   }
 
   async function refresh() {
@@ -85,8 +90,8 @@ document.documentElement.classList.add("js");
       });
       applyBlur();
     } catch (_) {
-      // The main Library component owns visible request errors. The age overlay
-      // deliberately stays silent and retries on the next normal refresh.
+      // Age overlay is optional. Never block or replace the Library UI when it
+      // cannot obtain policy metadata; the normal Library component owns errors.
     } finally {
       loading = false;
     }
@@ -100,6 +105,7 @@ document.documentElement.classList.add("js");
   window.addEventListener("prime:agepolicychange", function (event) {
     policy = event && event.detail ? event.detail : policy;
     applyBlur();
+    refresh();
   });
   window.addEventListener("prime:maturechange", function (event) {
     if (event && event.detail) policy.mature = Number(event.detail.mature) === 1 ? 1 : 0;
@@ -109,6 +115,8 @@ document.documentElement.classList.add("js");
     if (event && event.detail && event.detail.id === "library") refresh();
   });
 
+  // One bounded initial lookup is enough. The Admin controls push subsequent
+  // age-policy changes through prime:agepolicychange; do not duplicate the
+  // Library component's own recurring catalogue polling.
   refresh();
-  window.setInterval(refresh, 5000);
 }());
