@@ -15,6 +15,9 @@ from resources.lib.services.age_content_policy import (
 
 
 class AgeContentPolicyTests(unittest.TestCase):
+    def _paths(self, root):
+        return os.path.join(root, "prime.sqlite"), os.path.join(root, "system", "identity.json")
+
     def test_rating_normalization_handles_anime_rating_labels(self):
         self.assertEqual("RX", normalize_rating({"age_rating": "Rx - Hentai"}))
         self.assertEqual("R+", normalize_rating({"age_rating": "R+ - Mild Nudity"}))
@@ -58,10 +61,8 @@ class AgeContentPolicyTests(unittest.TestCase):
             parse_birth_date("31/02/2000")
 
     def test_upgrade_without_birth_date_forces_old_mature_flag_off(self):
-        handle = tempfile.NamedTemporaryFile(delete=False)
-        path = handle.name
-        handle.close()
-        try:
+        with tempfile.TemporaryDirectory() as root:
+            path, profile = self._paths(root)
             with sqlite3.connect(path) as db:
                 db.execute("""CREATE TABLE watchlist_preferences(
                   singleton INTEGER PRIMARY KEY CHECK(singleton=1),
@@ -69,34 +70,84 @@ class AgeContentPolicyTests(unittest.TestCase):
                   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )""")
                 db.execute("INSERT INTO watchlist_preferences(singleton,mature) VALUES(1,1)")
-            store = AgeContentPolicyStore(path)
+            store = AgeContentPolicyStore(path, system_profile_path=profile)
             store.initialize()
             state = store.state()
             self.assertIsNone(state["age"])
             self.assertEqual(0, state["mature"])
             self.assertFalse(state["mature_allowed"])
-        finally:
-            os.unlink(path)
+            self.assertFalse(state["birth_date_locked"])
 
     def test_mature_switch_only_enables_for_adult_age(self):
-        handle = tempfile.NamedTemporaryFile(delete=False)
-        path = handle.name
-        handle.close()
-        try:
-            store = AgeContentPolicyStore(path)
+        with tempfile.TemporaryDirectory() as root:
+            path, profile = self._paths(root)
+            store = AgeContentPolicyStore(path, system_profile_path=profile)
             store.initialize()
             today = datetime.date.today()
             try:
                 born = today.replace(year=today.year - 20)
             except ValueError:
                 born = today.replace(month=2, day=28, year=today.year - 20)
-            store.set_birth_date(born.strftime("%d/%m/%Y"))
+            state = store.set_birth_date(born.strftime("%d/%m/%Y"))
+            self.assertTrue(state["birth_date_locked"])
+            self.assertTrue(state["storage_persistent"])
             state = store.set_mature(1)
             self.assertGreaterEqual(state["age"], 18)
             self.assertTrue(state["mature_allowed"])
             self.assertEqual(1, state["mature"])
-        finally:
+
+    def test_birth_date_cannot_be_changed_after_first_save(self):
+        with tempfile.TemporaryDirectory() as root:
+            path, profile = self._paths(root)
+            store = AgeContentPolicyStore(path, system_profile_path=profile)
+            store.set_birth_date("01/01/2000")
+            with self.assertRaises(ValueError):
+                store.set_birth_date("02/01/2000")
+            state = store.state()
+            self.assertEqual("2000-01-01", state["birth_date"])
+            self.assertTrue(state["birth_date_locked"])
+
+    def test_system_profile_survives_addon_database_destruction(self):
+        with tempfile.TemporaryDirectory() as root:
+            path, profile = self._paths(root)
+            first = AgeContentPolicyStore(path, system_profile_path=profile)
+            first.set_birth_date("01/01/2000")
+            self.assertTrue(os.path.isfile(profile))
+
+            # Simulate deleting/reinstalling the addon database while keeping the
+            # operating-system user's persistent identity file.
             os.unlink(path)
+            second = AgeContentPolicyStore(path, system_profile_path=profile)
+            state = second.state()
+            self.assertEqual("2000-01-01", state["birth_date"])
+            self.assertTrue(state["birth_date_locked"])
+            self.assertTrue(state["storage_persistent"])
+            # Mature is intentionally an addon preference and resets OFF.
+            self.assertEqual(0, state["mature"])
+
+    def test_existing_alpha_database_birth_date_migrates_outside_addon(self):
+        with tempfile.TemporaryDirectory() as root:
+            path, profile = self._paths(root)
+            with sqlite3.connect(path) as db:
+                db.execute("""CREATE TABLE prime_age_preferences(
+                  singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+                  birth_date TEXT,
+                  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )""")
+                db.execute(
+                    "INSERT INTO prime_age_preferences(singleton,birth_date) VALUES(1,?)",
+                    ("2000-01-01",),
+                )
+            store = AgeContentPolicyStore(path, system_profile_path=profile)
+            state = store.state()
+            self.assertEqual("2000-01-01", state["birth_date"])
+            self.assertTrue(state["birth_date_locked"])
+            self.assertTrue(os.path.isfile(profile))
+            with sqlite3.connect(path) as db:
+                value = db.execute(
+                    "SELECT birth_date FROM prime_age_preferences WHERE singleton=1"
+                ).fetchone()[0]
+            self.assertIsNone(value)
 
 
 if __name__ == "__main__":
