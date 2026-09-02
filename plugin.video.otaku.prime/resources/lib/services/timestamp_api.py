@@ -2,6 +2,7 @@
 """Attach small runtime APIs to Prime's existing HTTP server."""
 from __future__ import annotations
 
+import threading
 from urllib.parse import urlsplit
 
 from resources.lib.logging_config import get_logger
@@ -17,7 +18,7 @@ MATURE_PATH = "/api/preferences/mature"
 WATCHLIST_ITEMS_PATH = "/api/watchlist/items"
 
 
-def attach_timestamp_api(server, catalog_store):
+def attach_timestamp_api(server, catalog_store, on_age_policy_changed=None):
     """Attach timestamp, age-policy, and age-visible watchlist endpoints."""
     handler = getattr(server, "RequestHandlerClass", None)
     if handler is None or getattr(handler, "_prime_timestamp_api_attached", False):
@@ -29,6 +30,20 @@ def attach_timestamp_api(server, catalog_store):
     age_visible_watchlist.initialize()
     original_get = handler.do_GET
     original_post = handler.do_POST
+
+    def reconcile_async():
+        if not on_age_policy_changed:
+            return
+        def run():
+            try:
+                on_age_policy_changed()
+            except Exception:
+                LOGGER.exception("Prime Physical age-policy reconciliation failed")
+        threading.Thread(
+            target=run,
+            name="OtakuPrimeAgePolicyReconcile",
+            daemon=True,
+        ).start()
 
     def do_GET(self):
         path = urlsplit(self.path).path
@@ -42,8 +57,6 @@ def attach_timestamp_api(server, catalog_store):
             if not self._current_user():
                 self._send_json(401, {"ok": False, "message": "Sign in again."})
                 return
-            # Restricted/Rx rows remain visible in Prime. Age policy only decides
-            # whether their completed catalogue entries may be projected to Kodi.
             self._send_json(
                 200, {"ok": True, "entries": age_visible_watchlist.list_ui_items()}
             )
@@ -95,9 +108,11 @@ def attach_timestamp_api(server, catalog_store):
         except ValueError as exc:
             self._send_json(400, {"ok": False, "message": str(exc)})
             return
-        # Prime Physical watches the persisted policy directly. Do not perform a
-        # remote provider refresh just because the local age policy changed.
+
+        # Respond immediately. Physical-library reconciliation can involve Kodi
+        # JSON-RPC and disk work and must never hold the HTTP request open.
         self._send_json(200, {"ok": True, "policy": policy, "preferences": policy})
+        reconcile_async()
 
     handler.do_GET = do_GET
     handler.do_POST = do_POST
