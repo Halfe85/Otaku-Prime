@@ -41,6 +41,7 @@
 
   var ageForm = document.getElementById("age-content-form");
   var birthDate = document.getElementById("age-birth-date");
+  var ageSave = document.getElementById("age-content-save");
   var ageValue = document.getElementById("age-content-value");
   var matureToggle = document.getElementById("mature-content-toggle");
   var matureValue = document.getElementById("mature-content-value");
@@ -48,13 +49,26 @@
   var policy = null;
 
   function policyMessage(next) {
-    if (!next || next.age === null || next.age === undefined) return "Birth date not configured.";
-    return "Age " + next.age + ". Kodi age policy is active.";
+    if (!next) return "Birth date not configured.";
+    if (next.storage_error) return "Age profile is locked but could not be read. Mature content remains disabled.";
+    if (next.age === null || next.age === undefined) return "Birth date not configured. It can be set once.";
+    return "Age " + next.age + (next.birth_date_locked
+      ? ". Birth date is locked to the operating-system user profile."
+      : ". Kodi age policy is active.");
   }
 
   function applyPolicy(next, announce) {
     policy = next || {};
-    if (birthDate) birthDate.value = policy.birth_date_display || "";
+    var locked = !!policy.birth_date_locked;
+    if (birthDate) {
+      birthDate.value = policy.birth_date_display || "";
+      birthDate.disabled = locked;
+      birthDate.setAttribute("aria-readonly", locked ? "true" : "false");
+    }
+    if (ageSave) {
+      ageSave.disabled = locked;
+      ageSave.textContent = locked ? "Age locked" : "Set and lock age";
+    }
     if (ageValue) {
       ageValue.textContent = policy.age === null || policy.age === undefined
         ? "Not configured"
@@ -72,23 +86,37 @@
     }
     if (feedback && announce) feedback.textContent = policyMessage(policy);
     window.dispatchEvent(new CustomEvent("prime:agepolicychange", { detail: policy }));
-    // Keep the existing Library listener compatible while the age-aware overlay
-    // extends blur behavior to R/R+.
     window.dispatchEvent(new CustomEvent("prime:maturechange", {
       detail: { mature: Number(policy.mature) === 1 ? 1 : 0 }
     }));
   }
 
+  async function policyFetch(url, options) {
+    var controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    var timeout = window.setTimeout(function () { if (controller) controller.abort(); }, 8000);
+    try {
+      var request = options || {};
+      request.credentials = "same-origin";
+      request.cache = "no-store";
+      request.signal = controller ? controller.signal : undefined;
+      var response = await fetch(url, request);
+      var payload = await response.json();
+      if (!response.ok || !payload.ok) throw new Error(payload.message || "Could not access age policy.");
+      return payload;
+    } catch (error) {
+      if (error && error.name === "AbortError") throw new Error("Age policy request timed out.");
+      throw error;
+    } finally {
+      window.clearTimeout(timeout);
+    }
+  }
+
   async function readPolicy() {
     if (!ageForm) return;
     try {
-      var response = await fetch("/api/preferences/age-policy", {
-        credentials: "same-origin",
-        headers: { "Accept": "application/json" },
-        cache: "no-store"
+      var payload = await policyFetch("/api/preferences/age-policy", {
+        headers: { "Accept": "application/json" }
       });
-      var payload = await response.json();
-      if (!response.ok || !payload.ok) throw new Error(payload.message || "Could not load age policy.");
       applyPolicy(payload.policy, false);
       if (feedback) feedback.textContent = policyMessage(payload.policy);
     } catch (error) {
@@ -97,29 +125,29 @@
   }
 
   async function writePolicy(body) {
-    var response = await fetch("/api/preferences/age-policy", {
+    var payload = await policyFetch("/api/preferences/age-policy", {
       method: "POST",
-      credentials: "same-origin",
       headers: { "Accept": "application/json", "Content-Type": "application/json" },
       body: JSON.stringify(body || {})
     });
-    var payload = await response.json();
-    if (!response.ok || !payload.ok) throw new Error(payload.message || "Could not save age policy.");
     return payload.policy;
   }
 
   if (ageForm) ageForm.addEventListener("submit", async function (event) {
     event.preventDefault();
-    var button = ageForm.querySelector("button[type=submit]");
-    if (button) button.disabled = true;
-    if (feedback) feedback.textContent = "Saving age policy…";
+    if (policy && policy.birth_date_locked) {
+      if (feedback) feedback.textContent = "Birth date is already locked and cannot be changed.";
+      return;
+    }
+    if (ageSave) ageSave.disabled = true;
+    if (feedback) feedback.textContent = "Saving and locking age policy…";
     try {
       var next = await writePolicy({ birth_date: birthDate ? birthDate.value.trim() : "" });
       applyPolicy(next, true);
     } catch (error) {
       if (feedback) feedback.textContent = error.message || "Could not save age policy.";
     } finally {
-      if (button) button.disabled = false;
+      if (ageSave) ageSave.disabled = !!(policy && policy.birth_date_locked);
     }
   });
 
