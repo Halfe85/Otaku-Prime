@@ -8,7 +8,15 @@ import sqlite3
 import threading
 from contextlib import contextmanager
 
+from resources.lib.logging_config import get_logger
+from resources.lib.services.system_age_profile import (
+    BirthDateLockedError,
+    SystemAgeProfile,
+    SystemAgeProfileError,
+)
 
+
+LOGGER = get_logger(__name__)
 RATING_G = "G"
 RATING_PG = "PG"
 RATING_PG13 = "PG-13"
@@ -130,19 +138,16 @@ def evaluate_content(row, age=None, mature_enabled=False):
 
 
 class AgeContentPolicyStore:
-    """Persist the administrator DOB and enforce the adult-toggle age gate."""
+    """Persist Mature in Prime and DOB in one locked OS-user profile."""
 
-    def __init__(self, db_path):
+    def __init__(self, db_path, system_profile=None, system_profile_path=None):
         self.db_path = str(db_path)
+        self._system_profile = system_profile or SystemAgeProfile(system_profile_path)
         self._initialized = False
         self._initialize_lock = threading.RLock()
 
     @contextmanager
     def _connection(self):
-        # The main Prime database stores configure WAL during service startup.
-        # Reissuing PRAGMA journal_mode=WAL on every age-policy read can require
-        # database locking and was causing the web UI to stall under the former
-        # 0.5-second policy poller. Keep these connections read/write-light.
         db = sqlite3.connect(self.db_path, timeout=5)
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA busy_timeout=5000")
@@ -152,6 +157,13 @@ class AgeContentPolicyStore:
         finally:
             db.close()
 
+    def _legacy_birth_date(self):
+        with self._connection() as db:
+            row = db.execute(
+                "SELECT birth_date FROM prime_age_preferences WHERE singleton=1"
+            ).fetchone()
+        return str(row["birth_date"] or "").strip() if row else ""
+
     def initialize(self):
         if self._initialized:
             return
@@ -159,6 +171,7 @@ class AgeContentPolicyStore:
             if self._initialized:
                 return
             with self._connection() as db:
+                # Kept only to migrate Alpha installs that stored DOB in addon SQLite.
                 db.execute("""CREATE TABLE IF NOT EXISTS prime_age_preferences(
                   singleton INTEGER PRIMARY KEY CHECK(singleton=1),
                   birth_date TEXT,
@@ -173,44 +186,112 @@ class AgeContentPolicyStore:
                 )""")
                 db.execute("""INSERT OR IGNORE INTO watchlist_preferences(singleton,mature)
                   VALUES(1,0)""")
-                row = db.execute(
+                legacy_row = db.execute(
                     "SELECT birth_date FROM prime_age_preferences WHERE singleton=1"
                 ).fetchone()
-                age = age_years(row["birth_date"] if row else None)
-                if age is None or age < 18:
+                legacy_birth_date = str(
+                    legacy_row["birth_date"] or ""
+                ).strip() if legacy_row else ""
+
+            profile = self._system_profile.read()
+            if not profile["exists"] and legacy_birth_date:
+                try:
+                    self._system_profile.write_once(legacy_birth_date)
+                    profile = self._system_profile.read()
+                    LOGGER.info(
+                        "Migrated Prime birth date from Kodi addon data to locked OS-user profile: %s",
+                        profile.get("path"),
+                    )
+                except (BirthDateLockedError, SystemAgeProfileError, OSError) as exc:
+                    # Keep the old value as a locked fallback for this install.
+                    LOGGER.error(
+                        "Could not migrate Prime birth date to OS-user profile %s: %s",
+                        self._system_profile.path,
+                        exc,
+                    )
+
+            profile = self._system_profile.read()
+            if profile.get("birth_date"):
+                with self._connection() as db:
+                    # System profile is authoritative; remove duplicate DOB from
+                    # addon-owned SQLite after migration.
+                    db.execute("""UPDATE prime_age_preferences SET birth_date=NULL,
+                      updated_at=CURRENT_TIMESTAMP WHERE singleton=1 AND birth_date IS NOT NULL""")
+                effective_birth_date = profile["birth_date"]
+            elif profile["exists"]:
+                # Corrupt existing profile fails closed and stays locked.
+                effective_birth_date = None
+            else:
+                effective_birth_date = legacy_birth_date or None
+
+            age = age_years(effective_birth_date)
+            if age is None or age < 18:
+                with self._connection() as db:
                     db.execute("""UPDATE watchlist_preferences SET mature=0,
                       updated_at=CURRENT_TIMESTAMP WHERE singleton=1 AND mature<>0""")
             self._initialized = True
 
     def state(self):
         self.initialize()
+        profile = self._system_profile.read()
+        legacy_birth_date = "" if profile["exists"] else self._legacy_birth_date()
+        if profile.get("birth_date"):
+            birth_date = profile["birth_date"]
+        elif profile["exists"]:
+            birth_date = None
+        else:
+            birth_date = legacy_birth_date or None
+
         with self._connection() as db:
-            age_row = db.execute(
-                "SELECT birth_date FROM prime_age_preferences WHERE singleton=1"
-            ).fetchone()
             mature_row = db.execute(
                 "SELECT mature FROM watchlist_preferences WHERE singleton=1"
             ).fetchone()
-        birth_date = age_row["birth_date"] if age_row else None
         age = age_years(birth_date)
         mature_allowed = age is not None and age >= 18
         mature = int(mature_row["mature"] if mature_row else 0)
         if not mature_allowed:
             mature = 0
-        return {"birth_date": birth_date,
-                "birth_date_display": display_birth_date(birth_date),
-                "age": age, "mature": mature,
-                "mature_allowed": bool(mature_allowed)}
+        return {
+            "birth_date": birth_date,
+            "birth_date_display": display_birth_date(birth_date),
+            "birth_date_locked": bool(profile["exists"] or legacy_birth_date),
+            "age": age,
+            "mature": mature,
+            "mature_allowed": bool(mature_allowed),
+            "storage_scope": "os_user",
+            "storage_path": profile.get("path") or self._system_profile.path,
+            "storage_persistent": bool(profile.get("birth_date")),
+            "storage_error": profile.get("error"),
+        }
 
     def set_birth_date(self, value):
         iso_date = parse_birth_date(value)
+        if not iso_date:
+            raise ValueError("birth date is required and can only be set once")
         self.initialize()
+        current = self.state()
+        if current.get("birth_date_locked"):
+            if current.get("birth_date") == iso_date and not current.get("storage_error"):
+                return current
+            raise BirthDateLockedError(
+                "Birth date is already set and cannot be changed in Otaku Prime."
+            )
+        try:
+            self._system_profile.write_once(iso_date)
+        except BirthDateLockedError:
+            raise
+        except (SystemAgeProfileError, OSError) as exc:
+            raise ValueError(
+                "could not store the operating-system age profile: {}".format(exc)
+            ) from exc
+
         with self._connection() as db:
-            db.execute("""UPDATE prime_age_preferences SET birth_date=?,
-              updated_at=CURRENT_TIMESTAMP WHERE singleton=1""", (iso_date,))
+            db.execute("""UPDATE prime_age_preferences SET birth_date=NULL,
+              updated_at=CURRENT_TIMESTAMP WHERE singleton=1""")
             if age_years(iso_date) is None or age_years(iso_date) < 18:
                 db.execute("""UPDATE watchlist_preferences SET mature=0,
                   updated_at=CURRENT_TIMESTAMP WHERE singleton=1""")
+        LOGGER.info("Prime birth date locked to OS-user profile: %s", self._system_profile.path)
         return self.state()
 
     def set_mature(self, value):
