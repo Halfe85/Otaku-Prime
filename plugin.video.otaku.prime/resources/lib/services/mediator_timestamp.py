@@ -27,6 +27,13 @@ ANISKIP_TYPE_MAP = {
     "mixed-ed": "credits",
     "recap": "recap",
 }
+ANISKIP_TYPE_PRIORITY = {
+    "op": 0,
+    "mixed-op": 1,
+    "ed": 0,
+    "mixed-ed": 1,
+    "recap": 0,
+}
 THEINTRODB_TYPES = ("intro", "recap", "credits", "preview")
 
 
@@ -65,19 +72,42 @@ class AniSkipTimestampClient:
         self.timeout = max(1, int(timeout))
         self._open = opener or urlopen
 
+    @staticmethod
+    def _candidate_rank(result, reference_length_seconds):
+        try:
+            source_length = float(result.get("episodeLength") or 0)
+        except (TypeError, ValueError):
+            source_length = 0.0
+        if reference_length_seconds > 0 and source_length > 0:
+            distance = abs(source_length - float(reference_length_seconds))
+        else:
+            distance = 0.0
+        skip_type = str(result.get("skipType") or "").strip().lower()
+        return (distance, ANISKIP_TYPE_PRIORITY.get(skip_type, 9))
+
     def fetch(self, mal_id, episode_number, episode_length_seconds=0):
+        """Fetch all AniSkip variants once and select one interval per Prime type.
+
+        Prime only knows an approximate catalogue runtime while mediating. Querying
+        AniSkip with episodeLength=0 returns the duration-independent result set;
+        the approximate runtime is then used locally to prefer the closest stored
+        variant without issuing a second provider request.
+        """
         mal_id = int(mal_id)
         episode_number = int(episode_number)
+        reference_length = max(0, int(episode_length_seconds or 0))
         query = urlencode([
-            ("episodeLength", int(episode_length_seconds or 0)),
+            ("episodeLength", 0),
             ("types", "op"),
             ("types", "ed"),
+            ("types", "mixed-op"),
+            ("types", "mixed-ed"),
             ("types", "recap"),
         ])
         url = ANISKIP_URL.format(mal_id=mal_id, episode=episode_number) + "?" + query
         LOGGER.info(
-            "Timestamp mediator AniSkip request started: mal=%s episode=%s duration=%ss",
-            mal_id, episode_number, int(episode_length_seconds or 0),
+            "Timestamp mediator AniSkip request started: mal=%s episode=%s reference_duration=%ss",
+            mal_id, episode_number, reference_length,
         )
         status, payload = _json_get(url, self.timeout, self._open)
         if status == 404 or not bool((payload or {}).get("found")):
@@ -89,8 +119,7 @@ class AniSkipTimestampClient:
         if status != 200:
             raise TimestampProviderError("AniSkip returned HTTP {}".format(status))
 
-        segments = []
-        seen = set()
+        selected = {}
         for result in (payload or {}).get("results") or []:
             skip_type = str(result.get("skipType") or "").strip().lower()
             segment_type = ANISKIP_TYPE_MAP.get(skip_type)
@@ -99,12 +128,12 @@ class AniSkipTimestampClient:
             end_ms = _millisecond(interval.get("endTime"))
             if not segment_type or start_ms is None or end_ms is None or end_ms <= start_ms:
                 continue
-            source_duration_ms = _millisecond(result.get("episodeLength"))
-            key = (segment_type, start_ms, end_ms)
-            if key in seen:
+            rank = self._candidate_rank(result, reference_length)
+            previous = selected.get(segment_type)
+            if previous is not None and previous[0] <= rank:
                 continue
-            seen.add(key)
-            segments.append({
+            source_duration_ms = _millisecond(result.get("episodeLength"))
+            selected[segment_type] = (rank, {
                 "type": segment_type,
                 "start_ms": start_ms,
                 "end_ms": end_ms,
@@ -112,6 +141,13 @@ class AniSkipTimestampClient:
                 "source_duration_ms": source_duration_ms,
                 "source_ref": str(result.get("skipId") or result.get("id") or "") or None,
             })
+
+        segments = [
+            value[1] for key, value in sorted(
+                selected.items(),
+                key=lambda item: (item[1][1]["start_ms"], item[0]),
+            )
+        ]
         LOGGER.info(
             "Timestamp mediator AniSkip request complete: mal=%s episode=%s segments=%s",
             mal_id, episode_number, len(segments),
@@ -248,8 +284,8 @@ class MediatorTimestampService:
             finally:
                 with self._lock:
                     self._pending_ids.discard(episode_id)
-            # AniSkip's public limit is 120 requests/minute. The half-second
-            # cadence keeps this worker within that ceiling even on large shows.
+            # One AniSkip request at most per episode. Half a second between work
+            # items caps the worker at 120 AniSkip requests/minute.
             if not self._halted():
                 self._sleep(0.5)
 
@@ -276,12 +312,6 @@ class MediatorTimestampService:
                 segments = self.aniskip.fetch(
                     mal_id, source_episode, episode_length_seconds=duration_seconds
                 )
-                # Some AniSkip rows are stored without a duration-compatible
-                # variant. Retry once without duration before using the fallback.
-                if not segments and duration_seconds:
-                    segments = self.aniskip.fetch(
-                        mal_id, source_episode, episode_length_seconds=0
-                    )
             except Exception as exc:
                 errors.append("aniskip: {}".format(exc))
                 LOGGER.warning(
@@ -290,8 +320,8 @@ class MediatorTimestampService:
                 )
 
         # TheIntroDB is a fallback rather than a second request for every anime
-        # episode. This protects its public daily quota and avoids duplicate
-        # segments when AniSkip already has a usable result.
+        # episode. This avoids duplicate segment sources when AniSkip already has
+        # a usable result.
         if not segments and context.get("tvdb_id") not in (None, ""):
             season_number = context.get("timestamp_season_number")
             episode_number = context.get("timestamp_episode_number")
