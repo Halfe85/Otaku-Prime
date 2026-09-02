@@ -202,6 +202,27 @@ def _run_service(profile: str) -> None:
     watchlist_watchdog.subscribe(watch_state_projector.handle_watchlist_event)
     watch_state_projector.project_all(watchlist_items.list_all())
 
+    def queue_timestamp_backfill():
+        """Queue cached/due timestamp checks for catalogue episodes from older builds."""
+        timestamp_mediator=getattr(tvshow_mediator,"timestamp_mediator",None)
+        if timestamp_mediator is None:
+            return {"items":0,"episodes":0}
+        items=episodes=0
+        for item in watchlist_items.list_all():
+            if monitor.abortRequested():
+                break
+            if not int(item.get("added_to_library") or 0):
+                continue
+            result=timestamp_mediator.schedule_watchlist_item(item)
+            count=int(result.get("scheduled") or 0)
+            if count:
+                items+=1; episodes+=count
+        log(
+            "INFO","services-mediator_timestamp",
+            "Timestamp mediator startup backfill queued: items={} episodes={}".format(
+                items,episodes))
+        return {"items":items,"episodes":episodes}
+
     try:
         server = create_server(
             WEB_HOST,
@@ -224,6 +245,7 @@ def _run_service(profile: str) -> None:
             ),
         )
         prime_physical.project_all()
+        queue_timestamp_backfill()
         watchlist_watchdog.start()
         monitor.waitForAbort()
         xbmc.log("OTAKU PRIME: pausing background work for addon shutdown", xbmc.LOGINFO)
@@ -239,9 +261,10 @@ def _run_service(profile: str) -> None:
         daemon=True,
     )
     server_thread.start()
-    # Bind the admin UI first, then backfill physical TV/movie files for catalogue
-    # rows created before Prime Physical existed.
+    # Bind the admin UI first, then backfill physical TV/movie files and timestamp
+    # metadata for catalogue rows created before those runtime layers existed.
     prime_physical.project_all()
+    queue_timestamp_backfill()
     watchlist_watchdog.start()
     log("INFO","service","Web service listening on all IPv4 interfaces at port {}".format(WEB_PORT))
     network_urls = _network_web_urls(WEB_PORT)
