@@ -94,8 +94,8 @@ def attach_timestamp_api(server, catalog_store, on_age_policy_changed=None):
             if path == AGE_POLICY_PATH and "birth_date" in payload:
                 policy = age_policy.set_birth_date(payload.get("birth_date"))
                 LOGGER.info(
-                    "Administrator age policy birth date changed: configured=%s age=%s",
-                    bool(policy.get("birth_date")), policy.get("age"),
+                    "Administrator birth date locked: age=%s scope=%s path=%s",
+                    policy.get("age"), policy.get("storage_scope"), policy.get("storage_path"),
                 )
             elif "mature" in payload:
                 policy = age_policy.set_mature(payload.get("mature"))
