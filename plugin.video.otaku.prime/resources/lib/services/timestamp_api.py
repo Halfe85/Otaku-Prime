@@ -1,27 +1,39 @@
 # -*- coding: utf-8 -*-
-"""Attach the episode timestamp endpoint to Prime's existing HTTP server."""
+"""Attach small runtime APIs to Prime's existing HTTP server."""
 from __future__ import annotations
 
 from urllib.parse import urlsplit
 
 from resources.lib.logging_config import get_logger
+from resources.lib.services.age_content_policy import AgeContentPolicyStore
 
 
 LOGGER = get_logger(__name__)
 PREFIX = "/api/library/episodes/"
 SUFFIX = "/segments"
+AGE_POLICY_PATH = "/api/preferences/age-policy"
+MATURE_PATH = "/api/preferences/mature"
 
 
 def attach_timestamp_api(server, catalog_store):
-    """Add GET /api/library/episodes/<Prime ID>/segments to a Prime server."""
+    """Attach timestamp metadata and the administrator age-policy endpoints."""
     handler = getattr(server, "RequestHandlerClass", None)
     if handler is None or getattr(handler, "_prime_timestamp_api_attached", False):
         return server
 
+    age_policy = AgeContentPolicyStore(catalog_store.db_path)
+    age_policy.initialize()
     original_get = handler.do_GET
+    original_post = handler.do_POST
 
     def do_GET(self):
         path = urlsplit(self.path).path
+        if path == AGE_POLICY_PATH:
+            if not self._current_user():
+                self._send_json(401, {"ok": False, "message": "Sign in again."})
+                return
+            self._send_json(200, {"ok": True, "policy": age_policy.state()})
+            return
         if path.startswith(PREFIX) and path.endswith(SUFFIX):
             if not self._current_user():
                 self._send_json(401, {"ok": False, "message": "Sign in again."})
@@ -43,9 +55,43 @@ def attach_timestamp_api(server, catalog_store):
             return
         return original_get(self)
 
+    def do_POST(self):
+        path = urlsplit(self.path).path
+        if path not in (AGE_POLICY_PATH, MATURE_PATH):
+            return original_post(self)
+        if not self._current_user():
+            self._send_json(401, {"ok": False, "message": "Sign in again."})
+            return
+        payload = self._read_api_payload()
+        try:
+            if path == AGE_POLICY_PATH and "birth_date" in payload:
+                policy = age_policy.set_birth_date(payload.get("birth_date"))
+                LOGGER.info(
+                    "Administrator age policy birth date changed: configured=%s age=%s",
+                    bool(policy.get("birth_date")), policy.get("age"),
+                )
+            elif "mature" in payload:
+                policy = age_policy.set_mature(payload.get("mature"))
+                LOGGER.info(
+                    "Administrator mature-content filter changed: mature=%s age=%s",
+                    policy.get("mature"), policy.get("age"),
+                )
+            else:
+                raise ValueError("birth_date or mature is required")
+        except ValueError as exc:
+            self._send_json(400, {"ok": False, "message": str(exc)})
+            return
+        # Preserve the old endpoint's provider/watchdog wakeup semantics so a
+        # policy change is noticed immediately by any connected runtime workers.
+        callback = getattr(self, "_watchlist_changed", None)
+        if callback:
+            callback("preferences")
+        self._send_json(200, {"ok": True, "policy": policy, "preferences": policy})
+
     handler.do_GET = do_GET
+    handler.do_POST = do_POST
     handler._prime_timestamp_api_attached = True
     LOGGER.info(
-        "Prime timestamp API attached: GET /api/library/episodes/<episode_id>/segments"
+        "Prime runtime APIs attached: episode segments + administrator age policy"
     )
     return server
