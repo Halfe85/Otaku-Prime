@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime
 import json
 import sqlite3
+from contextlib import contextmanager
 
 
 RATING_G = "G"
@@ -155,11 +156,16 @@ class AgeContentPolicyStore:
     def __init__(self, db_path):
         self.db_path = str(db_path)
 
+    @contextmanager
     def _connection(self):
         db = sqlite3.connect(self.db_path, timeout=10)
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA journal_mode=WAL")
-        return db
+        try:
+            with db:
+                yield db
+        finally:
+            db.close()
 
     def initialize(self):
         with self._connection() as db:
