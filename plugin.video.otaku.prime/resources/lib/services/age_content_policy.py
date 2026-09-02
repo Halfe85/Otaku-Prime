@@ -82,7 +82,10 @@ def normalize_rating(row):
         str(value).strip().casefold() == "hentai" for value in genres
     )
 
-    if compact.startswith("RX") or explicit_adult:
+    # Explicit provider ratings are more specific than Prime's generic mature
+    # boolean. MAL marks both R+ and Rx as mature, so checking the boolean first
+    # would incorrectly turn every R+ title into Rx.
+    if compact.startswith("RX"):
         return RATING_RX
     if compact.startswith("R+"):
         return RATING_R_PLUS
@@ -94,6 +97,8 @@ def normalize_rating(row):
         return RATING_PG
     if compact == "G" or compact.startswith("G-") or compact.startswith("G("):
         return RATING_G
+    if explicit_adult:
+        return RATING_RX
     return raw or None
 
 
