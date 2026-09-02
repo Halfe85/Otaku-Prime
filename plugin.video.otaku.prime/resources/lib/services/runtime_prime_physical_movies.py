@@ -2,6 +2,10 @@
 """Final runtime composition for Prime TV and Movies physical libraries."""
 from __future__ import annotations
 
+import threading
+import time
+
+from resources.lib.database.watchlist_items import WatchlistItemStore
 from resources.lib.logging_config import get_logger
 from resources.lib.services.kodi_scan_reliable import (
     ReliableKodiVideoLibraryScanQueue,
@@ -26,12 +30,30 @@ class RuntimePrimePhysicalMoviesService(RuntimePrimePhysicalService):
     def __init__(self, *args, artwork_store=None, mature_preference_getter=None, **kwargs):
         injected_scan_queue = kwargs.get("scan_queue")
         catalog_store = args[0] if args else kwargs.get("catalog_store")
+
+        self._mature_preference_store = None
+        if mature_preference_getter is None and catalog_store is not None:
+            db_path = getattr(catalog_store, "db_path", None)
+            if db_path:
+                try:
+                    self._mature_preference_store = WatchlistItemStore(db_path)
+                    self._mature_preference_store.initialize()
+                    mature_preference_getter = lambda: (
+                        self._mature_preference_store.preferences().get("mature", 0)
+                    )
+                except Exception:
+                    LOGGER.exception(
+                        "Could not attach Kodi mature-artwork policy to Prime preferences"
+                    )
+                    self._mature_preference_store = None
+
+        self._mature_preference_getter = mature_preference_getter or (lambda: 0)
         self._original_artwork_store = artwork_store
         self._mature_artwork_store = (
             MatureAwareArtworkStore(
                 artwork_store,
                 catalog_store,
-                preference_getter=mature_preference_getter,
+                preference_getter=self._mature_preference_getter,
             )
             if artwork_store is not None and catalog_store is not None
             else None
@@ -52,6 +74,38 @@ class RuntimePrimePhysicalMoviesService(RuntimePrimePhysicalService):
         self._movies = RuntimePrimeMoviePhysicalSupport(
             self, artwork_store=physical_artwork_store
         )
+
+        self._last_mature_preference = (
+            self._mature_artwork_store.mature_enabled()
+            if self._mature_artwork_store is not None
+            else None
+        )
+        self._mature_watch_thread = None
+        if self._mature_preference_store is not None:
+            self._mature_watch_thread = threading.Thread(
+                target=self._watch_mature_preference,
+                name="OtakuPrimeKodiMatureArtwork",
+                daemon=True,
+            )
+            self._mature_watch_thread.start()
+
+    def _watch_mature_preference(self):
+        """Make the existing Prime Library switch authoritative for native Kodi art."""
+        while not self._halt_requested():
+            try:
+                current = self._mature_artwork_store.mature_enabled()
+                if current != self._last_mature_preference:
+                    previous = self._last_mature_preference
+                    self._last_mature_preference = current
+                    LOGGER.info(
+                        "Kodi mature artwork switch changed: previous=%s current=%s",
+                        previous,
+                        current,
+                    )
+                    self.apply_mature_preference(current)
+            except Exception:
+                LOGGER.exception("Kodi mature artwork preference watcher failed")
+            time.sleep(0.5)
 
     def project_series(self, series_id, _log_result=True):
         """Write local-ID playback URLs before the base physical projection runs.
@@ -87,11 +141,13 @@ class RuntimePrimePhysicalMoviesService(RuntimePrimePhysicalService):
             LOGGER.warning("Kodi mature artwork update skipped: artwork store unavailable")
             return {"mature": int(bool(mature)), "series": 0, "movies": 0, "skipped": True}
 
+        effective = policy.mature_enabled()
+        self._last_mature_preference = effective
         series_ids = policy.mature_series_ids()
         movie_ids = policy.mature_movie_ids()
         LOGGER.info(
             "Kodi mature artwork preference applying: mature=%s series=%s movies=%s",
-            int(bool(mature)),
+            effective,
             len(series_ids),
             len(movie_ids),
         )
@@ -126,7 +182,7 @@ class RuntimePrimePhysicalMoviesService(RuntimePrimePhysicalService):
                 )
 
         result = {
-            "mature": int(bool(mature)),
+            "mature": effective,
             "series": projected_series,
             "movies": projected_movies,
             "failed": failed,
