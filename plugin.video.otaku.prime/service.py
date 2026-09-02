@@ -17,7 +17,7 @@ from resources.lib.database.watchlist_accounts import WatchlistAccountStore
 from resources.lib.database.app_logs import AppLogStore
 from resources.lib.database.runtime_catalog import RuntimeCatalogStore as CatalogStore
 from resources.lib.services.watchlist_identity import WatchlistIdentityEnrichmentService
-from resources.lib.services.watchlist_watchdog import WatchlistWatchdogStore
+from resources.lib.services.age_watchlist_store import AgePolicyWatchlistWatchdogStore
 from resources.lib.services.watchlist_watchdog_release import (
     ReleaseAwareWatchlistWatchdogService,
 )
@@ -120,7 +120,7 @@ def _run_service(profile: str) -> None:
     monitor = PrimeMonitor()
 
     user_store = UserStore(users_db)
-    watchlist_items = WatchlistWatchdogStore(users_db)
+    watchlist_items = AgePolicyWatchlistWatchdogStore(users_db)
     watchlist_accounts = WatchlistAccountStore(users_db)
     catalog = CatalogStore(users_db)
     app_logs = AppLogStore(users_db)
