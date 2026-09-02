@@ -6,31 +6,18 @@
   </div><p><button class="button" type="submit">Change password</button></p></form>
 </article>
 
-<article class="card preference-card" id="age-content-settings">
-  <span class="badge">Age policy</span><h3>Library content age</h3>
-  <p class="muted">Enter the birth date once as DD/MM/YYYY. After it is saved, Otaku Prime locks it to the operating-system user profile and it cannot be changed through the addon. The age identity survives deleting or reinstalling the Kodi addon.</p>
+<article class="card preference-card" id="date-of-birth-settings">
+  <span class="badge">Profile</span><h3>Date of birth</h3>
+  <p class="muted">Choose your date of birth. It can only be saved once and is stored with this operating-system user profile.</p>
   <form id="age-content-form">
     <div class="field-grid">
-      <label>Birth date
-        <input id="age-birth-date" name="birth_date" type="text" inputmode="numeric"
-               autocomplete="bday" placeholder="DD/MM/YYYY" maxlength="10"
-               pattern="[0-9]{2}/[0-9]{2}/[0-9]{4}">
+      <label>Date of birth
+        <input id="age-birth-date" name="birth_date" type="date" autocomplete="bday" required>
       </label>
-      <div>
-        <span class="muted">Calculated age</span>
-        <strong id="age-content-value">Not configured</strong>
-      </div>
     </div>
-    <p><button id="age-content-save" class="button" type="submit">Set and lock age</button></p>
+    <p><button id="age-content-save" class="button" type="submit">Save date of birth</button></p>
   </form>
-
-  <label class="preference-switch" for="mature-content-toggle">
-    <input id="mature-content-toggle" type="checkbox" value="1" disabled>
-    <span class="preference-switch-track" aria-hidden="true"><span></span></span>
-    <span id="mature-content-value" class="preference-switch-value">Mature filter unavailable</span>
-  </label>
   <p class="preference-feedback muted" id="age-content-feedback" aria-live="polite"></p>
-  <p class="muted">G / PG are always eligible. PG-13 requires age 10, R / R+ requires age 15, and Rx requires age 18 plus the Mature filter.</p>
 </article>
 
 <article class="card"><span class="badge">Alpha preview</span><h3>Debrid accounts</h3><p class="muted">Real-Debrid, AllDebrid, Premiumize, and TorBox connections will be added later.</p></article>
