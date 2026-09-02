@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import os
-import threading
-import time
 
 from resources.lib.logging_config import get_logger
 from resources.lib.services.age_content_policy import AgeContentPolicyStore
@@ -30,7 +28,7 @@ LOGGER = get_logger(__name__)
 
 
 class PolicyAwarePrimeMoviePhysicalSupport(RuntimePrimeMoviePhysicalSupport):
-    """Apply the same administrator age policy before any movie files are written."""
+    """Apply the administrator age policy before any movie files are written."""
 
     def __init__(self, physical, age_policy, artwork_store=None):
         super().__init__(physical, artwork_store=artwork_store)
@@ -60,9 +58,6 @@ class RuntimePrimePhysicalMoviesService(RuntimePrimePhysicalService):
             self._age_policy.initialize()
 
         super().__init__(*args, artwork_store=artwork_store, **kwargs)
-        # Unit/integration callers may inject their own queue. The real Kodi
-        # service replaces the legacy ACK/polling queue with the notification-
-        # driven queue before any physical projection can request a scan.
         if injected_scan_queue is None:
             self._scan_queue = ReliableKodiVideoLibraryScanQueue(
                 halt_requested=self._halt_requested,
@@ -76,42 +71,9 @@ class RuntimePrimePhysicalMoviesService(RuntimePrimePhysicalService):
             self, artwork_store=artwork_store
         )
 
-        self._last_age_policy_signature = self._policy_signature()
-        self._age_policy_thread = None
-        if self._age_policy is not None:
-            self._age_policy_thread = threading.Thread(
-                target=self._watch_age_policy,
-                name="OtakuPrimeKodiAgePolicy",
-                daemon=True,
-            )
-            self._age_policy_thread.start()
-
-    def _policy_signature(self):
-        if self._age_policy is None:
-            return None
-        state = self._age_policy.state()
-        return (
-            state.get("birth_date"),
-            state.get("age"),
-            int(state.get("mature") or 0),
-        )
-
-    def _watch_age_policy(self):
-        """Apply admin DOB/mature changes to Kodi without requiring a restart."""
-        while not self._halt_requested():
-            try:
-                current = self._policy_signature()
-                if current != self._last_age_policy_signature:
-                    previous = self._last_age_policy_signature
-                    self._last_age_policy_signature = current
-                    LOGGER.info(
-                        "Kodi age policy changed: previous=%s current=%s",
-                        previous, current,
-                    )
-                    self.reconcile_age_policy()
-            except Exception:
-                LOGGER.exception("Kodi age policy watcher failed")
-            time.sleep(0.5)
+    def age_policy_state(self):
+        """Expose the current policy without a polling worker."""
+        return self._age_policy.state() if self._age_policy is not None else None
 
     def _series_policy(self, series_id):
         series = self._series_row(series_id)
@@ -127,18 +89,14 @@ class RuntimePrimePhysicalMoviesService(RuntimePrimePhysicalService):
             try:
                 kodi = remove_tvshow_from_kodi(series_id, directory)
             except Exception:
-                LOGGER.exception(
-                    "Kodi age policy could not remove Prime TV show %s", series_id
-                )
+                LOGGER.exception("Kodi age policy could not remove Prime TV show %s", series_id)
             try:
                 physical = remove_prime_directory(
                     directory, os.path.join(self.root_path, "TV-Series")
                 )
             except Exception as exc:
                 physical = {"removed": False, "error": str(exc)}
-                LOGGER.exception(
-                    "Prime age policy could not remove physical TV show %s", series_id
-                )
+                LOGGER.exception("Prime age policy could not remove physical TV show %s", series_id)
         else:
             physical = {"removed": False, "reason": "directory_unknown"}
         LOGGER.info(
@@ -146,12 +104,8 @@ class RuntimePrimePhysicalMoviesService(RuntimePrimePhysicalService):
             series_id, decision.get("rating"), decision.get("age"), decision.get("reason"),
         )
         return {
-            "series_id": series_id,
-            "missing": False,
-            "blocked": True,
-            "age_policy": decision,
-            "kodi_remove": kodi,
-            "physical_remove": physical,
+            "series_id": series_id, "missing": False, "blocked": True,
+            "age_policy": decision, "kodi_remove": kodi, "physical_remove": physical,
         }
 
     def _exclude_movie_from_kodi(self, movie, decision):
@@ -162,18 +116,14 @@ class RuntimePrimePhysicalMoviesService(RuntimePrimePhysicalService):
             try:
                 kodi = remove_movie_from_kodi(movie_id, directory)
             except Exception:
-                LOGGER.exception(
-                    "Kodi age policy could not remove Prime movie %s", movie_id
-                )
+                LOGGER.exception("Kodi age policy could not remove Prime movie %s", movie_id)
             try:
                 physical = remove_prime_directory(
                     directory, os.path.join(self.root_path, "Movies")
                 )
             except Exception as exc:
                 physical = {"removed": False, "error": str(exc)}
-                LOGGER.exception(
-                    "Prime age policy could not remove physical movie %s", movie_id
-                )
+                LOGGER.exception("Prime age policy could not remove physical movie %s", movie_id)
         else:
             physical = {"removed": False, "reason": "directory_unknown"}
         LOGGER.info(
@@ -181,12 +131,8 @@ class RuntimePrimePhysicalMoviesService(RuntimePrimePhysicalService):
             movie_id, decision.get("rating"), decision.get("age"), decision.get("reason"),
         )
         return {
-            "movie_id": movie_id,
-            "missing": False,
-            "blocked": True,
-            "age_policy": decision,
-            "kodi_remove": kodi,
-            "physical_remove": physical,
+            "movie_id": movie_id, "missing": False, "blocked": True,
+            "age_policy": decision, "kodi_remove": kodi, "physical_remove": physical,
         }
 
     def project_series(self, series_id, _log_result=True):
@@ -199,9 +145,7 @@ class RuntimePrimePhysicalMoviesService(RuntimePrimePhysicalService):
         preprojected = None
         if directory:
             preprojected = self._strm_writer.write_series(
-                series_id,
-                directory,
-                now_epoch=int(self._now()),
+                series_id, directory, now_epoch=int(self._now())
             )
 
         result = super().project_series(series_id, _log_result=_log_result)
@@ -245,7 +189,7 @@ class RuntimePrimePhysicalMoviesService(RuntimePrimePhysicalService):
     def project_all(self):
         self._purge_blocked_before_startup_scan()
         result = super().project_all()
-        result["age_policy"] = self._age_policy.state() if self._age_policy else None
+        result["age_policy"] = self.age_policy_state()
         return result
 
     def reconcile_age_policy(self):
@@ -286,12 +230,8 @@ class RuntimePrimePhysicalMoviesService(RuntimePrimePhysicalService):
                     movie.get("local_id"),
                 )
         summary = {
-            "skipped": False,
-            "series": series_count,
-            "movies": movie_count,
-            "blocked": blocked,
-            "failed": failed,
-            "policy": state,
+            "skipped": False, "series": series_count, "movies": movie_count,
+            "blocked": blocked, "failed": failed, "policy": state,
         }
         LOGGER.info(
             "Prime Kodi age policy reconciled: series=%s movies=%s blocked=%s failed=%s",
@@ -299,7 +239,5 @@ class RuntimePrimePhysicalMoviesService(RuntimePrimePhysicalService):
         )
         return summary
 
-    # Compatibility with the previous Alpha implementation and any callers that
-    # still name the old operation directly.
     def apply_mature_preference(self, mature=None):
         return self.reconcile_age_policy()
