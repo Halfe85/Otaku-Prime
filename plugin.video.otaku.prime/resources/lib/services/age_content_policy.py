@@ -83,9 +83,6 @@ def normalize_rating(row):
         str(value).strip().casefold() == "hentai" for value in genres
     )
 
-    # Explicit provider ratings are more specific than Prime's generic mature
-    # boolean. MAL marks both R+ and Rx as mature, so checking the boolean first
-    # would incorrectly turn every R+ title into Rx.
     if compact.startswith("RX"):
         return RATING_RX
     if compact.startswith("R+"):
@@ -112,48 +109,24 @@ def evaluate_content(row, age=None, mature_enabled=False):
 
     if rating == RATING_RX:
         allowed = adult and mature_enabled
-        return {
-            "rating": rating,
-            "kodi_allowed": allowed,
-            "blur_ui": not allowed,
-            "minimum_age": 18,
-            "reason": "allowed" if allowed else "rx_requires_adult_mature_filter",
-        }
+        return {"rating": rating, "kodi_allowed": allowed, "blur_ui": not allowed,
+                "minimum_age": 18,
+                "reason": "allowed" if allowed else "rx_requires_adult_mature_filter"}
     if rating in (RATING_R, RATING_R_PLUS):
         allowed = known_age is not None and known_age >= 15
-        return {
-            "rating": rating,
-            "kodi_allowed": allowed,
-            "blur_ui": not allowed,
-            "minimum_age": 15,
-            "reason": "allowed" if allowed else "rating_requires_age_15",
-        }
+        return {"rating": rating, "kodi_allowed": allowed, "blur_ui": not allowed,
+                "minimum_age": 15,
+                "reason": "allowed" if allowed else "rating_requires_age_15"}
     if rating == RATING_PG13:
         allowed = known_age is not None and known_age >= 10
-        return {
-            "rating": rating,
-            "kodi_allowed": allowed,
-            "blur_ui": False,
-            "minimum_age": 10,
-            "reason": "allowed" if allowed else "rating_requires_age_10",
-        }
+        return {"rating": rating, "kodi_allowed": allowed, "blur_ui": False,
+                "minimum_age": 10,
+                "reason": "allowed" if allowed else "rating_requires_age_10"}
     if rating in (RATING_G, RATING_PG):
-        return {
-            "rating": rating,
-            "kodi_allowed": True,
-            "blur_ui": False,
-            "minimum_age": 0,
-            "reason": "always_allowed",
-        }
-    # Unknown/unrated ordinary content is not blocked. Explicit adult rows were
-    # normalized to RX above, so missing metadata cannot bypass the adult gate.
-    return {
-        "rating": rating,
-        "kodi_allowed": True,
-        "blur_ui": False,
-        "minimum_age": None,
-        "reason": "unrated_allowed",
-    }
+        return {"rating": rating, "kodi_allowed": True, "blur_ui": False,
+                "minimum_age": 0, "reason": "always_allowed"}
+    return {"rating": rating, "kodi_allowed": True, "blur_ui": False,
+            "minimum_age": None, "reason": "unrated_allowed"}
 
 
 class AgeContentPolicyStore:
@@ -166,9 +139,13 @@ class AgeContentPolicyStore:
 
     @contextmanager
     def _connection(self):
-        db = sqlite3.connect(self.db_path, timeout=10)
+        # The main Prime database stores configure WAL during service startup.
+        # Reissuing PRAGMA journal_mode=WAL on every age-policy read can require
+        # database locking and was causing the web UI to stall under the former
+        # 0.5-second policy poller. Keep these connections read/write-light.
+        db = sqlite3.connect(self.db_path, timeout=5)
         db.row_factory = sqlite3.Row
-        db.execute("PRAGMA journal_mode=WAL")
+        db.execute("PRAGMA busy_timeout=5000")
         try:
             with db:
                 yield db
@@ -189,8 +166,6 @@ class AgeContentPolicyStore:
                 )""")
                 db.execute("""INSERT OR IGNORE INTO prime_age_preferences(singleton,birth_date)
                   VALUES(1,NULL)""")
-                # Older databases already have this table. Keep the mature switch in
-                # its existing authoritative location but ensure it exists for clean DBs.
                 db.execute("""CREATE TABLE IF NOT EXISTS watchlist_preferences(
                   singleton INTEGER PRIMARY KEY CHECK(singleton=1),
                   mature INTEGER NOT NULL DEFAULT 0 CHECK(mature IN(0,1)),
@@ -203,8 +178,6 @@ class AgeContentPolicyStore:
                 ).fetchone()
                 age = age_years(row["birth_date"] if row else None)
                 if age is None or age < 18:
-                    # Alpha migration safety: never carry an old enabled mature flag
-                    # into the new DOB-gated policy when adult age is not established.
                     db.execute("""UPDATE watchlist_preferences SET mature=0,
                       updated_at=CURRENT_TIMESTAMP WHERE singleton=1 AND mature<>0""")
             self._initialized = True
@@ -224,13 +197,10 @@ class AgeContentPolicyStore:
         mature = int(mature_row["mature"] if mature_row else 0)
         if not mature_allowed:
             mature = 0
-        return {
-            "birth_date": birth_date,
-            "birth_date_display": display_birth_date(birth_date),
-            "age": age,
-            "mature": mature,
-            "mature_allowed": bool(mature_allowed),
-        }
+        return {"birth_date": birth_date,
+                "birth_date_display": display_birth_date(birth_date),
+                "age": age, "mature": mature,
+                "mature_allowed": bool(mature_allowed)}
 
     def set_birth_date(self, value):
         iso_date = parse_birth_date(value)
@@ -263,13 +233,10 @@ class AgeContentPolicyStore:
 
     def evaluate(self, row):
         state = self.state()
-        result = evaluate_content(
-            row, age=state.get("age"), mature_enabled=state.get("mature")
-        )
-        result.update({
-            "age": state.get("age"),
-            "birth_date": state.get("birth_date"),
-            "mature": state.get("mature"),
-            "mature_allowed": state.get("mature_allowed"),
-        })
+        result = evaluate_content(row, age=state.get("age"),
+                                  mature_enabled=state.get("mature"))
+        result.update({"age": state.get("age"),
+                       "birth_date": state.get("birth_date"),
+                       "mature": state.get("mature"),
+                       "mature_allowed": state.get("mature_allowed")})
         return result
