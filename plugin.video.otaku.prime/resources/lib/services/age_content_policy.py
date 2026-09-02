@@ -39,14 +39,18 @@ def _terms(value):
 
 
 def parse_birth_date(value):
-    """Parse the admin-facing DD/MM/YYYY value into an ISO date string."""
+    """Normalize a native calendar or legacy typed DOB to ISO YYYY-MM-DD."""
     text = str(value or "").strip()
     if not text:
         return None
     try:
-        parsed = datetime.datetime.strptime(text, "%d/%m/%Y").date()
+        if len(text) == 10 and text[4:5] == "-" and text[7:8] == "-":
+            parsed = datetime.date.fromisoformat(text)
+        else:
+            # Backward compatibility with Alpha builds that accepted DD/MM/YYYY.
+            parsed = datetime.datetime.strptime(text, "%d/%m/%Y").date()
     except ValueError as exc:
-        raise ValueError("birth date must use DD/MM/YYYY") from exc
+        raise ValueError("birth date must be a valid calendar date") from exc
     today = datetime.date.today()
     if parsed > today:
         raise ValueError("birth date cannot be in the future")
@@ -203,7 +207,6 @@ class AgeContentPolicyStore:
                         profile.get("path"),
                     )
                 except (BirthDateLockedError, SystemAgeProfileError, OSError) as exc:
-                    # Keep the old value as a locked fallback for this install.
                     LOGGER.error(
                         "Could not migrate Prime birth date to OS-user profile %s: %s",
                         self._system_profile.path,
@@ -213,13 +216,10 @@ class AgeContentPolicyStore:
             profile = self._system_profile.read()
             if profile.get("birth_date"):
                 with self._connection() as db:
-                    # System profile is authoritative; remove duplicate DOB from
-                    # addon-owned SQLite after migration.
                     db.execute("""UPDATE prime_age_preferences SET birth_date=NULL,
                       updated_at=CURRENT_TIMESTAMP WHERE singleton=1 AND birth_date IS NOT NULL""")
                 effective_birth_date = profile["birth_date"]
             elif profile["exists"]:
-                # Corrupt existing profile fails closed and stays locked.
                 effective_birth_date = None
             else:
                 effective_birth_date = legacy_birth_date or None
