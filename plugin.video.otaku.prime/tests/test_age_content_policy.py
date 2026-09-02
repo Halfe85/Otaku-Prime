@@ -53,12 +53,27 @@ class AgeContentPolicyTests(unittest.TestCase):
             {"age_rating": "Rx"}, age=18, mature_enabled=True
         )["kodi_allowed"])
 
-    def test_birth_date_requires_dd_mm_yyyy(self):
+    def test_birth_date_accepts_native_calendar_iso_and_legacy_format(self):
+        self.assertEqual("2000-12-31", parse_birth_date("2000-12-31"))
         self.assertEqual("2000-12-31", parse_birth_date("31/12/2000"))
         with self.assertRaises(ValueError):
-            parse_birth_date("2000-12-31")
-        with self.assertRaises(ValueError):
             parse_birth_date("31/02/2000")
+        with self.assertRaises(ValueError):
+            parse_birth_date("not-a-date")
+
+    def test_admin_html_uses_calendar_and_contains_no_mature_control(self):
+        root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        path = os.path.join(
+            root,
+            "resources", "lib", "ui", "html", "components", "main-container", "accounts.html",
+        )
+        with open(path, "r", encoding="utf-8") as handle:
+            html = handle.read().lower()
+        self.assertIn('type="date"', html)
+        self.assertNotIn("mature", html)
+        self.assertNotIn("pg-13", html)
+        self.assertNotIn("r+", html)
+        self.assertNotIn("rx", html)
 
     def test_upgrade_without_birth_date_forces_old_mature_flag_off(self):
         with tempfile.TemporaryDirectory() as root:
@@ -88,7 +103,7 @@ class AgeContentPolicyTests(unittest.TestCase):
                 born = today.replace(year=today.year - 20)
             except ValueError:
                 born = today.replace(month=2, day=28, year=today.year - 20)
-            state = store.set_birth_date(born.strftime("%d/%m/%Y"))
+            state = store.set_birth_date(born.isoformat())
             self.assertTrue(state["birth_date_locked"])
             self.assertTrue(state["storage_persistent"])
             state = store.set_mature(1)
@@ -100,9 +115,9 @@ class AgeContentPolicyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             path, profile = self._paths(root)
             store = AgeContentPolicyStore(path, system_profile_path=profile)
-            store.set_birth_date("01/01/2000")
+            store.set_birth_date("2000-01-01")
             with self.assertRaises(ValueError):
-                store.set_birth_date("02/01/2000")
+                store.set_birth_date("2000-01-02")
             state = store.state()
             self.assertEqual("2000-01-01", state["birth_date"])
             self.assertTrue(state["birth_date_locked"])
@@ -111,18 +126,15 @@ class AgeContentPolicyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             path, profile = self._paths(root)
             first = AgeContentPolicyStore(path, system_profile_path=profile)
-            first.set_birth_date("01/01/2000")
+            first.set_birth_date("2000-01-01")
             self.assertTrue(os.path.isfile(profile))
 
-            # Simulate deleting/reinstalling the addon database while keeping the
-            # operating-system user's persistent identity file.
             os.unlink(path)
             second = AgeContentPolicyStore(path, system_profile_path=profile)
             state = second.state()
             self.assertEqual("2000-01-01", state["birth_date"])
             self.assertTrue(state["birth_date_locked"])
             self.assertTrue(state["storage_persistent"])
-            # Mature is intentionally an addon preference and resets OFF.
             self.assertEqual(0, state["mature"])
 
     def test_existing_alpha_database_birth_date_migrates_outside_addon(self):
