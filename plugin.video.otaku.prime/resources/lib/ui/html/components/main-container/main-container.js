@@ -69,7 +69,7 @@
       return "The saved date of birth is locked but could not be read.";
     }
     if (next.birth_date_locked) {
-      return "Date of birth is saved and locked to this operating-system user profile.";
+      return "Date of birth is saved.";
     }
     return "Choose your date of birth. It can only be saved once.";
   }
