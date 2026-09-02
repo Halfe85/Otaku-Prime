@@ -52,20 +52,11 @@ from resources.lib.service_lifecycle import (
 )
 
 
-# Bind every IPv4 interface so the authenticated web UI is reachable from the LAN.
 WEB_HOST = "0.0.0.0"
 WEB_PORT = 9898
 USERS_DB_NAME = "users.sqlite"
-# Short timeout for non-critical background metadata/artwork requests so Kodi can
-# retire an addon service quickly during updates.
 BACKGROUND_NETWORK_TIMEOUT = 3
-# Timestamp providers run in their own queue, so they can tolerate a little more
-# network latency without blocking identity mediation or Kodi projection.
 TIMESTAMP_NETWORK_TIMEOUT = 8
-# Watchlist snapshots can be substantially larger GraphQL/REST responses. Three
-# seconds was too aggressive and caused healthy AniList connections to fail while
-# waiting for the response body. Keep provider synchronization independent from
-# the short metadata timeout.
 WATCHLIST_NETWORK_TIMEOUT = 15
 
 
@@ -81,17 +72,12 @@ def _profile_path() -> str:
 
 
 def _network_web_urls(port: int) -> list[str]:
-    """Return usable non-loopback IPv4 URLs for startup logging."""
     addresses = set()
     try:
         for result in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
             addresses.add(result[4][0])
     except OSError:
         pass
-
-    # UDP connect does not send application data; it asks the routing table which
-    # local address would be used and catches hosts whose hostname resolves only
-    # to 127.x.x.x.
     probe = None
     try:
         probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -102,7 +88,6 @@ def _network_web_urls(port: int) -> list[str]:
     finally:
         if probe is not None:
             probe.close()
-
     usable = []
     for value in addresses:
         try:
@@ -203,7 +188,6 @@ def _run_service(profile: str) -> None:
     watch_state_projector.project_all(watchlist_items.list_all())
 
     def queue_timestamp_backfill():
-        """Queue cached/due timestamp checks for catalogue episodes from older builds."""
         timestamp_mediator=getattr(tvshow_mediator,"timestamp_mediator",None)
         if timestamp_mediator is None:
             return {"items":0,"episodes":0}
@@ -235,7 +219,11 @@ def _run_service(profile: str) -> None:
             artwork_store=artwork_store,
             network_timeout=BACKGROUND_NETWORK_TIMEOUT,
         )
-        attach_timestamp_api(server, catalog)
+        attach_timestamp_api(
+            server,
+            catalog,
+            on_age_policy_changed=prime_physical.reconcile_age_policy,
+        )
     except OSError as exc:
         log(
             "WARNING",
@@ -261,8 +249,6 @@ def _run_service(profile: str) -> None:
         daemon=True,
     )
     server_thread.start()
-    # Bind the admin UI first, then backfill physical TV/movie files and timestamp
-    # metadata for catalogue rows created before those runtime layers existed.
     prime_physical.project_all()
     queue_timestamp_backfill()
     watchlist_watchdog.start()
@@ -291,9 +277,6 @@ def _run_service(profile: str) -> None:
 
     monitor.waitForAbort()
 
-    # Kodi gives addon services only a short shutdown window during repository
-    # updates. Halt every producer before closing the listener, and detach the
-    # SQLite app-log sink so a late network response cannot reopen the database.
     xbmc.log("OTAKU PRIME: pausing background work for addon shutdown", xbmc.LOGINFO)
     configure_logging(None,kodi_log)
     shutdown=stop_service_components(
