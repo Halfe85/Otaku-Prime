@@ -9,10 +9,37 @@ from resources.lib.services.runtime_prime_physical import RuntimePrimePhysicalSe
 
 
 class RuntimePrimePhysicalMoviesService(RuntimePrimePhysicalService):
-    """Use the movie runtime that enables recursive folder-per-movie scanning."""
+    """Use the movie runtime and create playable episode STRMs from Prime IDs."""
 
     def __init__(self, *args, artwork_store=None, **kwargs):
         super().__init__(*args, artwork_store=artwork_store, **kwargs)
         self._movies = RuntimePrimeMoviePhysicalSupport(
             self, artwork_store=artwork_store
         )
+
+    def project_series(self, series_id, _log_result=True):
+        """Write local-ID playback URLs before the base physical projection runs.
+
+        The legacy base projector still has a compatibility path that creates a
+        missing STRM as an empty placeholder. The active runtime must never expose
+        those placeholders to Kodi. PrimeStrmWriter therefore creates or repairs
+        every released episode STRM first, using the episode's opaque local_id as
+        the only playback target. The normal runtime projection then writes NFOs,
+        requests the Kodi scan, and leaves the already-playable STRM untouched.
+        """
+        directory = self._series_directory(series_id)
+        preprojected = None
+        if directory:
+            preprojected = self._strm_writer.write_series(
+                series_id,
+                directory,
+                now_epoch=int(self._now()),
+            )
+
+        result = super().project_series(series_id, _log_result=_log_result)
+        if preprojected is not None and not result.get("missing"):
+            # Report the meaningful first pass. The inherited runtime performs a
+            # second idempotent write after base projection, which should normally
+            # report these files as unchanged.
+            result["strm"] = preprojected
+        return result
