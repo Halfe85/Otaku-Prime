@@ -6,6 +6,7 @@ from urllib.parse import urlsplit
 
 from resources.lib.logging_config import get_logger
 from resources.lib.services.age_content_policy import AgeContentPolicyStore
+from resources.lib.services.age_watchlist_store import AgePolicyWatchlistWatchdogStore
 
 
 LOGGER = get_logger(__name__)
@@ -13,16 +14,19 @@ PREFIX = "/api/library/episodes/"
 SUFFIX = "/segments"
 AGE_POLICY_PATH = "/api/preferences/age-policy"
 MATURE_PATH = "/api/preferences/mature"
+WATCHLIST_ITEMS_PATH = "/api/watchlist/items"
 
 
 def attach_timestamp_api(server, catalog_store):
-    """Attach timestamp metadata and the administrator age-policy endpoints."""
+    """Attach timestamp, age-policy, and age-visible watchlist endpoints."""
     handler = getattr(server, "RequestHandlerClass", None)
     if handler is None or getattr(handler, "_prime_timestamp_api_attached", False):
         return server
 
     age_policy = AgeContentPolicyStore(catalog_store.db_path)
     age_policy.initialize()
+    age_visible_watchlist = AgePolicyWatchlistWatchdogStore(catalog_store.db_path)
+    age_visible_watchlist.initialize()
     original_get = handler.do_GET
     original_post = handler.do_POST
 
@@ -33,6 +37,16 @@ def attach_timestamp_api(server, catalog_store):
                 self._send_json(401, {"ok": False, "message": "Sign in again."})
                 return
             self._send_json(200, {"ok": True, "policy": age_policy.state()})
+            return
+        if path == WATCHLIST_ITEMS_PATH:
+            if not self._current_user():
+                self._send_json(401, {"ok": False, "message": "Sign in again."})
+                return
+            # Restricted/Rx rows remain visible in Prime. Age policy only decides
+            # whether their completed catalogue entries may be projected to Kodi.
+            self._send_json(
+                200, {"ok": True, "entries": age_visible_watchlist.list_ui_items()}
+            )
             return
         if path.startswith(PREFIX) and path.endswith(SUFFIX):
             if not self._current_user():
@@ -81,11 +95,8 @@ def attach_timestamp_api(server, catalog_store):
         except ValueError as exc:
             self._send_json(400, {"ok": False, "message": str(exc)})
             return
-        # Preserve the old endpoint's provider/watchdog wakeup semantics so a
-        # policy change is noticed immediately by any connected runtime workers.
-        callback = getattr(self, "_watchlist_changed", None)
-        if callback:
-            callback("preferences")
+        # Prime Physical watches the persisted policy directly. Do not perform a
+        # remote provider refresh just because the local age policy changed.
         self._send_json(200, {"ok": True, "policy": policy, "preferences": policy})
 
     handler.do_GET = do_GET
