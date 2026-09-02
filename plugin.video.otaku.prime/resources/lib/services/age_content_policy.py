@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime
 import json
 import sqlite3
+import threading
 from contextlib import contextmanager
 
 
@@ -160,6 +161,8 @@ class AgeContentPolicyStore:
 
     def __init__(self, db_path):
         self.db_path = str(db_path)
+        self._initialized = False
+        self._initialize_lock = threading.RLock()
 
     @contextmanager
     def _connection(self):
@@ -173,32 +176,38 @@ class AgeContentPolicyStore:
             db.close()
 
     def initialize(self):
-        with self._connection() as db:
-            db.execute("""CREATE TABLE IF NOT EXISTS prime_age_preferences(
-              singleton INTEGER PRIMARY KEY CHECK(singleton=1),
-              birth_date TEXT,
-              updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )""")
-            db.execute("""INSERT OR IGNORE INTO prime_age_preferences(singleton,birth_date)
-              VALUES(1,NULL)""")
-            # Older databases already have this table. Keep the mature switch in
-            # its existing authoritative location but ensure it exists for clean DBs.
-            db.execute("""CREATE TABLE IF NOT EXISTS watchlist_preferences(
-              singleton INTEGER PRIMARY KEY CHECK(singleton=1),
-              mature INTEGER NOT NULL DEFAULT 0 CHECK(mature IN(0,1)),
-              updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )""")
-            db.execute("""INSERT OR IGNORE INTO watchlist_preferences(singleton,mature)
-              VALUES(1,0)""")
-            row = db.execute(
-                "SELECT birth_date FROM prime_age_preferences WHERE singleton=1"
-            ).fetchone()
-            age = age_years(row["birth_date"] if row else None)
-            if age is None or age < 18:
-                # Alpha migration safety: never carry an old enabled mature flag
-                # into the new DOB-gated policy when adult age is not established.
-                db.execute("""UPDATE watchlist_preferences SET mature=0,
-                  updated_at=CURRENT_TIMESTAMP WHERE singleton=1 AND mature<>0""")
+        if self._initialized:
+            return
+        with self._initialize_lock:
+            if self._initialized:
+                return
+            with self._connection() as db:
+                db.execute("""CREATE TABLE IF NOT EXISTS prime_age_preferences(
+                  singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+                  birth_date TEXT,
+                  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )""")
+                db.execute("""INSERT OR IGNORE INTO prime_age_preferences(singleton,birth_date)
+                  VALUES(1,NULL)""")
+                # Older databases already have this table. Keep the mature switch in
+                # its existing authoritative location but ensure it exists for clean DBs.
+                db.execute("""CREATE TABLE IF NOT EXISTS watchlist_preferences(
+                  singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+                  mature INTEGER NOT NULL DEFAULT 0 CHECK(mature IN(0,1)),
+                  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )""")
+                db.execute("""INSERT OR IGNORE INTO watchlist_preferences(singleton,mature)
+                  VALUES(1,0)""")
+                row = db.execute(
+                    "SELECT birth_date FROM prime_age_preferences WHERE singleton=1"
+                ).fetchone()
+                age = age_years(row["birth_date"] if row else None)
+                if age is None or age < 18:
+                    # Alpha migration safety: never carry an old enabled mature flag
+                    # into the new DOB-gated policy when adult age is not established.
+                    db.execute("""UPDATE watchlist_preferences SET mature=0,
+                      updated_at=CURRENT_TIMESTAMP WHERE singleton=1 AND mature<>0""")
+            self._initialized = True
 
     def state(self):
         self.initialize()
