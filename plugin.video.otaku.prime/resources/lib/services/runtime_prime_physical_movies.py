@@ -5,6 +5,10 @@ from __future__ import annotations
 from resources.lib.services.kodi_scan_reliable import (
     ReliableKodiVideoLibraryScanQueue,
 )
+from resources.lib.services.kodi_scan_verify_prime import (
+    verify_prime_movie,
+    verify_prime_series,
+)
 from resources.lib.services.runtime_prime_movie_physical import (
     RuntimePrimeMoviePhysicalSupport,
 )
@@ -22,7 +26,10 @@ class RuntimePrimePhysicalMoviesService(RuntimePrimePhysicalService):
         # driven queue before any physical projection can request a scan.
         if injected_scan_queue is None:
             self._scan_queue = ReliableKodiVideoLibraryScanQueue(
-                halt_requested=self._halt_requested
+                halt_requested=self._halt_requested,
+                verify_series=verify_prime_series,
+                verify_movie=verify_prime_movie,
+                start_timeout=10.0,
             )
         self._movies = RuntimePrimeMoviePhysicalSupport(
             self, artwork_store=artwork_store
