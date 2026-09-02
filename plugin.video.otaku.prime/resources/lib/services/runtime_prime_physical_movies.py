@@ -2,6 +2,9 @@
 """Final runtime composition for Prime TV and Movies physical libraries."""
 from __future__ import annotations
 
+from resources.lib.services.kodi_scan_reliable import (
+    ReliableKodiVideoLibraryScanQueue,
+)
 from resources.lib.services.runtime_prime_movie_physical import (
     RuntimePrimeMoviePhysicalSupport,
 )
@@ -9,10 +12,18 @@ from resources.lib.services.runtime_prime_physical import RuntimePrimePhysicalSe
 
 
 class RuntimePrimePhysicalMoviesService(RuntimePrimePhysicalService):
-    """Use the movie runtime and create playable episode STRMs from Prime IDs."""
+    """Use reliable Kodi scans and playable episode STRMs from Prime local IDs."""
 
     def __init__(self, *args, artwork_store=None, **kwargs):
+        injected_scan_queue = kwargs.get("scan_queue")
         super().__init__(*args, artwork_store=artwork_store, **kwargs)
+        # Unit/integration callers may inject their own queue. The real Kodi
+        # service replaces the legacy ACK/polling queue with the notification-
+        # driven queue before any physical projection can request a scan.
+        if injected_scan_queue is None:
+            self._scan_queue = ReliableKodiVideoLibraryScanQueue(
+                halt_requested=self._halt_requested
+            )
         self._movies = RuntimePrimeMoviePhysicalSupport(
             self, artwork_store=artwork_store
         )
