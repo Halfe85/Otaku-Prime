@@ -1,3 +1,17 @@
+Otaku Prime 0.1.2 Alpha11.13 Final
+==================================
+
+- Finalize Prime Physical TV-Series and Movies library projection using Local information only.
+- Write playable STRM targets from stable Prime local episode/movie IDs before Kodi scans the files.
+- Generate TV-show, episode, and movie NFO metadata with Prime artwork references.
+- Add AniSkip and TheIntroDB timestamp mediation with millisecond-normalized intro, recap, credits, and preview segments.
+- Replace the 0.5-second Kodi scan polling race with VideoLibrary.OnScanStarted / VideoLibrary.OnScanFinished lifecycle monitoring.
+- Keep Library.IsScanningVideo as a fallback when scan notifications are unavailable.
+- Verify mediator soft scans by Prime local IDs imported into Kodi, not by the JSON-RPC ACK alone.
+- Retry a scoped TV-show/movie scan once when Kodi acknowledges it but the requested Prime IDs are still missing.
+- Preserve directory-scoped hidden scans so mediator updates do not trigger a complete video-library rescan.
+- Log scan acceptance, lifecycle completion, verification counts, retries, and final failures.
+
 Otaku Prime 0.1.2 Alpha11
 =========================
 
