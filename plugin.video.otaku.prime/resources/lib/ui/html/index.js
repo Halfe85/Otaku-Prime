@@ -20,12 +20,15 @@ document.documentElement.classList.add("js");
     var hentai = terms(item.genres).some(function (value) {
       return value.toLowerCase() === "hentai";
     });
-    if (/^RX/.test(compact) || item.mature || hentai) return "RX";
+    // Provider rating is more specific than the generic mature flag. MAL marks
+    // both R+ and Rx as mature, so R+ must be recognized before the fallback.
+    if (/^RX/.test(compact)) return "RX";
     if (/^R\+/.test(compact)) return "R+";
     if (compact === "R" || /^R[-(]/.test(compact)) return "R";
     if (/^PG-?13/.test(compact)) return "PG-13";
     if (compact === "PG" || /^PG[-(]/.test(compact)) return "PG";
     if (compact === "G" || /^G[-(]/.test(compact)) return "G";
+    if (item.mature || hentai) return "RX";
     return raw || null;
   }
 
