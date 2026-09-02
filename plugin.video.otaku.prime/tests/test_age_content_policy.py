@@ -18,6 +18,9 @@ class AgeContentPolicyTests(unittest.TestCase):
     def test_rating_normalization_handles_anime_rating_labels(self):
         self.assertEqual("RX", normalize_rating({"age_rating": "Rx - Hentai"}))
         self.assertEqual("R+", normalize_rating({"age_rating": "R+ - Mild Nudity"}))
+        self.assertEqual(
+            "R+", normalize_rating({"age_rating": "R+ - Mild Nudity", "mature": True})
+        )
         self.assertEqual("R", normalize_rating({"age_rating": "R - 17+"}))
         self.assertEqual("PG-13", normalize_rating({"age_rating": "PG-13"}))
         self.assertEqual("RX", normalize_rating({"genres": ["Drama", "Hentai"]}))
@@ -83,7 +86,10 @@ class AgeContentPolicyTests(unittest.TestCase):
             store = AgeContentPolicyStore(path)
             store.initialize()
             today = datetime.date.today()
-            born = today.replace(year=today.year - 20)
+            try:
+                born = today.replace(year=today.year - 20)
+            except ValueError:
+                born = today.replace(month=2, day=28, year=today.year - 20)
             store.set_birth_date(born.strftime("%d/%m/%Y"))
             state = store.set_mature(1)
             self.assertGreaterEqual(state["age"], 18)
