@@ -28,12 +28,12 @@ def _int_or_none(value):
 class StructuralCatalogStore(RuntimeCatalogStore):
     """Runtime catalogue that treats Kodi/TVDB coordinates as immutable structure.
 
-    Provider relationships are many-to-one evidence.  They must never mutate an
+    Provider relationships are many-to-one evidence. They must never mutate an
     existing series owner, shared season identity, or already occupied structural
     episode coordinate.
     """
 
-    # RuntimeCatalogStore used to compact S00 by release date.  That destroys
+    # RuntimeCatalogStore used to compact S00 by release date. That destroys
     # real TVDB coordinates (for example Monogatari S00E02/S00E19/S00E33), so
     # structural Prime deliberately disables that policy everywhere, including
     # the startup migration path and the post-add_episode hook.
@@ -50,6 +50,9 @@ class StructuralCatalogStore(RuntimeCatalogStore):
         ).fetchone()
         return dict(row) if row else None
 
+    def _store_series(self, **kwargs):
+        return super().get_or_create_series(**kwargs)
+
     def get_or_create_series(self, english_name=None, romaji_name=None,
                              root_simkl_id=None, tvdb_id=None,
                              root_anilist_id=None, source_provider=None,
@@ -60,13 +63,17 @@ class StructuralCatalogStore(RuntimeCatalogStore):
                              age_rating=None, mature=False):
         """Resolve by structural TVDB identity without stealing provider IDs.
 
-        TVDB is the strongest persisted series-owner key available to Prime.  If
+        TVDB is the strongest persisted series-owner key available to Prime. If
         an incoming AniList/Simkl identity already belongs to a different TVDB
         series, the weak identity is ignored for this merge rather than reassigned.
+        A new TVDB owner is also never allowed to fall through to the base store's
+        fuzzy title matcher; it is created by structural identity first.
         """
         root_simkl_id = _clean_id(root_simkl_id)
         root_anilist_id = _clean_id(root_anilist_id)
         tvdb_id = _clean_id(tvdb_id)
+        requested_english = english_name
+        requested_romaji = romaji_name
 
         with self._connection() as db:
             by_tvdb = self._series_by(db, "tvdb_id", tvdb_id)
@@ -117,6 +124,75 @@ class StructuralCatalogStore(RuntimeCatalogStore):
                     by_tvdb.get("source_media_format") or source_media_format
                 )
                 publish_year = by_tvdb.get("publish_year") or publish_year
+            else:
+                # Re-evaluate provider owners after conflicting IDs were removed.
+                validated_provider_owners = []
+                if root_simkl_id and by_simkl:
+                    validated_provider_owners.append(by_simkl)
+                if root_anilist_id and by_anilist:
+                    validated_provider_owners.append(by_anilist)
+                validated_ids = {
+                    row["local_id"] for row in validated_provider_owners
+                    if not _clean_id(row.get("tvdb_id"))
+                    or _clean_id(row.get("tvdb_id")) == tvdb_id
+                }
+                if len(validated_ids) > 1:
+                    raise StructuralCatalogConflict(
+                        "provider identities disagree while assigning TVDB {}".format(tvdb_id)
+                    )
+                if not validated_ids:
+                    # The base CatalogStore has an intentionally broad fuzzy title
+                    # fallback for old data repair. That is unsafe for a new strong
+                    # structural owner (BanG Dream vs MyGO is the canonical case).
+                    # Create by TVDB/provider IDs with no title first, then perform
+                    # a second exact-ID update that applies metadata and names.
+                    created = self._store_series(
+                        english_name=None,
+                        romaji_name=None,
+                        root_simkl_id=root_simkl_id,
+                        tvdb_id=tvdb_id,
+                        root_anilist_id=root_anilist_id,
+                        source_provider=source_provider,
+                        source_media_format=source_media_format,
+                        publish_year=publish_year,
+                        overview=overview,
+                        runtime_minutes=runtime_minutes,
+                        air_status=air_status,
+                        poster_url=poster_url,
+                        fanart_url=fanart_url,
+                        clearlogo_url=clearlogo_url,
+                        banner_url=banner_url,
+                        genres=genres,
+                        themes=themes,
+                        age_rating=age_rating,
+                        mature=mature,
+                    )
+                    LOGGER.info(
+                        "Created structurally distinct Prime series %s for TVDB %s "
+                        "before applying fuzzy-matchable title metadata",
+                        created.get("local_id"), tvdb_id,
+                    )
+                    return self._store_series(
+                        english_name=requested_english,
+                        romaji_name=requested_romaji,
+                        root_simkl_id=root_simkl_id,
+                        tvdb_id=tvdb_id,
+                        root_anilist_id=root_anilist_id,
+                        source_provider=source_provider,
+                        source_media_format=source_media_format,
+                        publish_year=publish_year,
+                        overview=overview,
+                        runtime_minutes=runtime_minutes,
+                        air_status=air_status,
+                        poster_url=poster_url,
+                        fanart_url=fanart_url,
+                        clearlogo_url=clearlogo_url,
+                        banner_url=banner_url,
+                        genres=genres,
+                        themes=themes,
+                        age_rating=age_rating,
+                        mature=mature,
+                    )
         else:
             owners = [row for row in (by_simkl, by_anilist) if row]
             owner_ids = {row["local_id"] for row in owners}
@@ -126,7 +202,7 @@ class StructuralCatalogStore(RuntimeCatalogStore):
                     "without a structural TVDB owner"
                 )
 
-        return super().get_or_create_series(
+        return self._store_series(
             english_name=english_name,
             romaji_name=romaji_name,
             root_simkl_id=root_simkl_id,
@@ -158,8 +234,6 @@ class StructuralCatalogStore(RuntimeCatalogStore):
         series_id = str(series_id)
         watchlist_id = str(watchlist_item["local_id"])
         number = _int_or_none(season_number)
-        if season_number is not None and number is None:
-            number = 0 if int(season_number) == 0 else None
 
         if number is not None:
             with self._connection() as db:
@@ -221,7 +295,7 @@ class StructuralCatalogStore(RuntimeCatalogStore):
     def _runtime_episode_number(self, season_id, episode_number,
                                 source_episode_number=None,
                                 watchlist_local_id=None):
-        # Structural coordinates are never compacted or appended.  Collision
+        # Structural coordinates are never compacted or appended. Collision
         # handling happens in add_episode where provider identities are visible.
         return int(episode_number)
 
