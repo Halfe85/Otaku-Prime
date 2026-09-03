@@ -11,16 +11,9 @@ from resources.lib.services.kodi_age_gate import (
     remove_prime_directory,
     remove_tvshow_from_kodi,
 )
-from resources.lib.services.kodi_scan_reliable import (
-    ReliableKodiVideoLibraryScanQueue,
-)
-from resources.lib.services.kodi_scan_verify_prime import (
-    verify_prime_movie,
-    verify_prime_series,
-)
-from resources.lib.services.runtime_prime_movie_physical import (
-    RuntimePrimeMoviePhysicalSupport,
-)
+from resources.lib.services.kodi_scan_reliable import ReliableKodiVideoLibraryScanQueue
+from resources.lib.services.kodi_scan_verify_prime import verify_prime_movie, verify_prime_series
+from resources.lib.services.runtime_prime_movie_physical import RuntimePrimeMoviePhysicalSupport
 from resources.lib.services.runtime_prime_physical import RuntimePrimePhysicalService
 
 
@@ -28,8 +21,6 @@ LOGGER = get_logger(__name__)
 
 
 class PolicyAwarePrimeMoviePhysicalSupport(RuntimePrimeMoviePhysicalSupport):
-    """Apply the administrator age policy before any movie files are written."""
-
     def __init__(self, physical, age_policy, artwork_store=None):
         super().__init__(physical, artwork_store=artwork_store)
         self.age_policy = age_policy
@@ -72,8 +63,67 @@ class RuntimePrimePhysicalMoviesService(RuntimePrimePhysicalService):
         )
 
     def age_policy_state(self):
-        """Expose the current policy without a polling worker."""
         return self._age_policy.state() if self._age_policy is not None else None
+
+    def rebuild_structural_catalog_if_required(self):
+        """Remove old generated projection, then requeue sources for mediation."""
+        checker = getattr(self.catalog_store, "structural_rebuild_required", None)
+        resetter = getattr(self.catalog_store, "reset_structural_projection", None)
+        if not checker or not resetter or not checker():
+            return {"rebuilt": False, "required": False}
+
+        series_rows = list(self.catalog_store.list_series() or [])
+        movie_getter = getattr(self.catalog_store, "library_movies", None)
+        movie_rows = list(movie_getter() or []) if movie_getter else []
+        failures = []
+
+        for series in series_rows:
+            series_id = str(series.get("local_id") or "")
+            directory = self._series_directory(series_id)
+            try:
+                if directory:
+                    remove_tvshow_from_kodi(series_id, directory)
+                    remove_prime_directory(directory, os.path.join(self.root_path, "TV-Series"))
+            except Exception as exc:
+                failures.append("series {}: {}".format(series_id, exc))
+                LOGGER.exception(
+                    "Could not remove old Prime TV projection before structural rebuild: %s",
+                    series_id,
+                )
+
+        for movie in movie_rows:
+            movie_id = str(movie.get("local_id") or "")
+            directory = self._movies.movie_directory(movie_id)
+            try:
+                if directory:
+                    remove_movie_from_kodi(movie_id, directory)
+                    remove_prime_directory(directory, os.path.join(self.root_path, "Movies"))
+            except Exception as exc:
+                failures.append("movie {}: {}".format(movie_id, exc))
+                LOGGER.exception(
+                    "Could not remove old Prime movie projection before structural rebuild: %s",
+                    movie_id,
+                )
+
+        if failures:
+            LOGGER.error(
+                "Structural mediator rebuild postponed because generated library cleanup failed: %s",
+                "; ".join(failures),
+            )
+            return {
+                "rebuilt": False,
+                "required": True,
+                "cleanup_failed": True,
+                "failures": failures,
+            }
+
+        result = resetter()
+        result["required"] = True
+        LOGGER.warning(
+            "Prime generated library cleared for structural re-mediation: %s",
+            result,
+        )
+        return result
 
     def _series_policy(self, series_id):
         series = self._series_row(series_id)
@@ -99,10 +149,6 @@ class RuntimePrimePhysicalMoviesService(RuntimePrimePhysicalService):
                 LOGGER.exception("Prime age policy could not remove physical TV show %s", series_id)
         else:
             physical = {"removed": False, "reason": "directory_unknown"}
-        LOGGER.info(
-            "Prime TV show excluded from Kodi by age policy: prime=%s rating=%s age=%s reason=%s",
-            series_id, decision.get("rating"), decision.get("age"), decision.get("reason"),
-        )
         return {
             "series_id": series_id, "missing": False, "blocked": True,
             "age_policy": decision, "kodi_remove": kodi, "physical_remove": physical,
@@ -126,17 +172,12 @@ class RuntimePrimePhysicalMoviesService(RuntimePrimePhysicalService):
                 LOGGER.exception("Prime age policy could not remove physical movie %s", movie_id)
         else:
             physical = {"removed": False, "reason": "directory_unknown"}
-        LOGGER.info(
-            "Prime movie excluded from Kodi by age policy: prime=%s rating=%s age=%s reason=%s",
-            movie_id, decision.get("rating"), decision.get("age"), decision.get("reason"),
-        )
         return {
             "movie_id": movie_id, "missing": False, "blocked": True,
             "age_policy": decision, "kodi_remove": kodi, "physical_remove": physical,
         }
 
     def project_series(self, series_id, _log_result=True):
-        """Gate the show, then write local-ID playback URLs before Kodi sees it."""
         series, decision = self._series_policy(series_id)
         if series is not None and decision is not None and not decision["kodi_allowed"]:
             return self._exclude_series_from_kodi(series, decision)
@@ -156,7 +197,6 @@ class RuntimePrimePhysicalMoviesService(RuntimePrimePhysicalService):
         return result
 
     def project_movie(self, movie_id):
-        """Gate the standalone movie before delegating to the physical projector."""
         movie = self._movies._movie_row(movie_id)
         if movie is not None and self._age_policy is not None:
             decision = self._age_policy.evaluate(movie)
@@ -165,7 +205,6 @@ class RuntimePrimePhysicalMoviesService(RuntimePrimePhysicalService):
         return super().project_movie(movie_id)
 
     def _purge_blocked_before_startup_scan(self):
-        """Remove restricted leftovers before Kodi's startup source scan can see them."""
         if self._age_policy is None:
             return {"series": 0, "movies": 0}
         series_removed = movies_removed = 0
@@ -180,10 +219,6 @@ class RuntimePrimePhysicalMoviesService(RuntimePrimePhysicalService):
             if not decision["kodi_allowed"]:
                 self._exclude_movie_from_kodi(movie, decision)
                 movies_removed += 1
-        LOGGER.info(
-            "Prime age policy startup purge complete: series=%s movies=%s",
-            series_removed, movies_removed,
-        )
         return {"series": series_removed, "movies": movies_removed}
 
     def project_all(self):
@@ -193,15 +228,10 @@ class RuntimePrimePhysicalMoviesService(RuntimePrimePhysicalService):
         return result
 
     def reconcile_age_policy(self):
-        """Re-project allowed titles and remove newly restricted ones immediately."""
         if self._age_policy is None:
             return {"skipped": True, "series": 0, "movies": 0}
         state = self._age_policy.state()
         series_count = movie_count = blocked = failed = 0
-        LOGGER.info(
-            "Reconciling Prime Kodi age policy: age=%s mature=%s configured=%s",
-            state.get("age"), state.get("mature"), bool(state.get("birth_date")),
-        )
         for series in self.catalog_store.list_series():
             if self._halt_requested():
                 break
@@ -229,15 +259,10 @@ class RuntimePrimePhysicalMoviesService(RuntimePrimePhysicalService):
                     "Prime age policy reconciliation failed for movie %s",
                     movie.get("local_id"),
                 )
-        summary = {
+        return {
             "skipped": False, "series": series_count, "movies": movie_count,
             "blocked": blocked, "failed": failed, "policy": state,
         }
-        LOGGER.info(
-            "Prime Kodi age policy reconciled: series=%s movies=%s blocked=%s failed=%s",
-            series_count, movie_count, blocked, failed,
-        )
-        return summary
 
     def apply_mature_preference(self, mature=None):
         return self.reconcile_age_policy()
