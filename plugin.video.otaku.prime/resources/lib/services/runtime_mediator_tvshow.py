@@ -2,6 +2,9 @@
 """Runtime mediator additions for physical and timestamp projection."""
 from __future__ import annotations
 
+from copy import deepcopy
+
+from resources.lib.services.mediator_helper_simkl import MediatorMetadataPending
 from resources.lib.services.mediator_timestamp import MediatorTimestampService
 from resources.lib.services.mediator_tvshow import TVShowMediatorService
 
@@ -24,6 +27,18 @@ class RuntimeTVShowMediatorService(TVShowMediatorService):
                 or self._external_halt_requested()
             ),
         )
+
+    def _record_deferred(self, item, exc):
+        """Persist only ownership/season structure for incomplete provider work."""
+        partial = getattr(exc, "placement", None)
+        if not partial:
+            return super()._record_deferred(item, exc)
+        structural = deepcopy(partial)
+        structural["episodes"] = []
+        for component in structural.get("seasons") or []:
+            component["episodes"] = []
+        replacement = MediatorMetadataPending(str(exc), placement=structural)
+        return super()._record_deferred(item, replacement)
 
     def _persist_placement(self, item, placement, placement_state="COMPLETE"):
         stored, secondary = super()._persist_placement(
