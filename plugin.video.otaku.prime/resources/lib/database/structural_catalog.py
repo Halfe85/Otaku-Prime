@@ -7,6 +7,7 @@ from resources.lib.logging_config import get_logger
 
 
 LOGGER = get_logger(__name__)
+STRUCTURAL_MEDIATOR_REVISION = "structural-owner-coordinates-1"
 
 
 class StructuralCatalogConflict(RuntimeError):
@@ -26,19 +27,80 @@ def _int_or_none(value):
 
 
 class StructuralCatalogStore(RuntimeCatalogStore):
-    """Runtime catalogue that treats Kodi/TVDB coordinates as immutable structure.
+    """Runtime catalogue that treats Kodi/TVDB coordinates as immutable structure."""
 
-    Provider relationships are many-to-one evidence. They must never mutate an
-    existing series owner, shared season identity, or already occupied structural
-    episode coordinate.
-    """
-
-    # RuntimeCatalogStore used to compact S00 by release date. That destroys
-    # real TVDB coordinates (for example Monogatari S00E02/S00E19/S00E33), so
-    # structural Prime deliberately disables that policy everywhere, including
-    # the startup migration path and the post-add_episode hook.
     def _resequence_specials(self, season_id):
+        """Never compact sparse S00 TVDB coordinates by release order."""
         return 0
+
+    def structural_rebuild_required(self):
+        """Return whether generated catalogue rows predate structural mediation."""
+        with self._connection() as db:
+            row = db.execute(
+                "SELECT value FROM prime_catalog_state WHERE key='structural_mediator_revision'"
+            ).fetchone()
+        return not row or str(row["value"] or "") != STRUCTURAL_MEDIATOR_REVISION
+
+    def reset_structural_projection(self):
+        """Drop generated catalogue only and requeue its watchlist sources once.
+
+        Watchlist/provider/account/profile state is preserved. The physical layer
+        removes generated Kodi files before calling this method so the same source
+        items can be mediated again through the new structural rules.
+        """
+        with self._connection() as db:
+            current = db.execute(
+                "SELECT value FROM prime_catalog_state WHERE key='structural_mediator_revision'"
+            ).fetchone()
+            if current and str(current["value"] or "") == STRUCTURAL_MEDIATOR_REVISION:
+                return {"rebuilt": False, "watchlist_items": 0, "series": 0, "movies": 0}
+
+            series_count = int(db.execute("SELECT COUNT(*) FROM tv_series").fetchone()[0])
+            movie_count = int(db.execute("SELECT COUNT(*) FROM movies").fetchone()[0])
+            watchlist_exists = bool(db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='watchlist_items'"
+            ).fetchone())
+            linked = []
+            if watchlist_exists:
+                linked = [str(row[0]) for row in db.execute("""
+                  SELECT watchlist_local_id FROM season_watchlist_links
+                    WHERE watchlist_local_id IS NOT NULL
+                  UNION
+                  SELECT watchlist_local_id FROM seasons
+                    WHERE watchlist_local_id IS NOT NULL
+                  UNION
+                  SELECT watchlist_local_id FROM movies
+                    WHERE watchlist_local_id IS NOT NULL
+                """).fetchall()]
+                if linked:
+                    placeholders = ",".join("?" for _ in linked)
+                    db.execute("""UPDATE watchlist_items SET
+                      added_to_library=0,library_added_at=NULL,mediator_ready=1,
+                      mediator_status='PARTIAL',mediator_provider=NULL,
+                      mediator_error='Structural mediator rebuild required',
+                      mediator_checked_at=NULL,updated_at=CURRENT_TIMESTAMP
+                      WHERE local_id IN ({})""".format(placeholders), linked)
+
+            # Generated catalogue only. Cascades remove seasons, episodes and
+            # media-credit links while watchlist/provider source state survives.
+            db.execute("DELETE FROM movies")
+            db.execute("DELETE FROM tv_series")
+            db.execute("""INSERT INTO prime_catalog_state(key,value)
+              VALUES('structural_mediator_revision',?)
+              ON CONFLICT(key) DO UPDATE SET value=excluded.value,
+              updated_at=CURRENT_TIMESTAMP""", (STRUCTURAL_MEDIATOR_REVISION,))
+
+        LOGGER.warning(
+            "Reset Prime structural catalogue for mediator revision %s: "
+            "series=%s movies=%s watchlist_items=%s",
+            STRUCTURAL_MEDIATOR_REVISION, series_count, movie_count, len(linked),
+        )
+        return {
+            "rebuilt": True,
+            "watchlist_items": len(linked),
+            "series": series_count,
+            "movies": movie_count,
+        }
 
     @staticmethod
     def _series_by(db, column, value):
@@ -61,14 +123,7 @@ class StructuralCatalogStore(RuntimeCatalogStore):
                              poster_url=None, fanart_url=None, clearlogo_url=None,
                              banner_url=None, genres=None, themes=None,
                              age_rating=None, mature=False):
-        """Resolve by structural TVDB identity without stealing provider IDs.
-
-        TVDB is the strongest persisted series-owner key available to Prime. If
-        an incoming AniList/Simkl identity already belongs to a different TVDB
-        series, the weak identity is ignored for this merge rather than reassigned.
-        A new TVDB owner is also never allowed to fall through to the base store's
-        fuzzy title matcher; it is created by structural identity first.
-        """
+        """Resolve by structural TVDB identity without stealing provider IDs."""
         root_simkl_id = _clean_id(root_simkl_id)
         root_anilist_id = _clean_id(root_anilist_id)
         tvdb_id = _clean_id(tvdb_id)
@@ -98,34 +153,17 @@ class StructuralCatalogStore(RuntimeCatalogStore):
                         root_anilist_id = None
 
             if by_tvdb:
-                # Once a TVDB series exists, a later related season/special may
-                # link to it but may not replace the canonical provider roots.
                 existing_simkl = _clean_id(by_tvdb.get("root_simkl_id"))
                 existing_anilist = _clean_id(by_tvdb.get("root_anilist_id"))
                 if existing_simkl and root_simkl_id and existing_simkl != root_simkl_id:
-                    LOGGER.info(
-                        "Preserved canonical Simkl series identity for TVDB %s: %s; "
-                        "ignored related identity %s",
-                        tvdb_id, existing_simkl, root_simkl_id,
-                    )
                     root_simkl_id = None
                 if existing_anilist and root_anilist_id and existing_anilist != root_anilist_id:
-                    LOGGER.info(
-                        "Preserved canonical AniList series identity for TVDB %s: %s; "
-                        "ignored related identity %s",
-                        tvdb_id, existing_anilist, root_anilist_id,
-                    )
                     root_anilist_id = None
-                # Canonical structural naming must not drift to the most recently
-                # mediated season/special.
                 english_name = by_tvdb.get("english_name") or english_name
                 romaji_name = by_tvdb.get("romaji_name") or romaji_name
-                source_media_format = (
-                    by_tvdb.get("source_media_format") or source_media_format
-                )
+                source_media_format = by_tvdb.get("source_media_format") or source_media_format
                 publish_year = by_tvdb.get("publish_year") or publish_year
             else:
-                # Re-evaluate provider owners after conflicting IDs were removed.
                 validated_provider_owners = []
                 if root_simkl_id and by_simkl:
                     validated_provider_owners.append(by_simkl)
@@ -141,30 +179,17 @@ class StructuralCatalogStore(RuntimeCatalogStore):
                         "provider identities disagree while assigning TVDB {}".format(tvdb_id)
                     )
                 if not validated_ids:
-                    # The base CatalogStore has an intentionally broad fuzzy title
-                    # fallback for old data repair. That is unsafe for a new strong
-                    # structural owner (BanG Dream vs MyGO is the canonical case).
-                    # Create by TVDB/provider IDs with no title first, then perform
-                    # a second exact-ID update that applies metadata and names.
                     created = self._store_series(
-                        english_name=None,
-                        romaji_name=None,
-                        root_simkl_id=root_simkl_id,
-                        tvdb_id=tvdb_id,
+                        english_name=None, romaji_name=None,
+                        root_simkl_id=root_simkl_id, tvdb_id=tvdb_id,
                         root_anilist_id=root_anilist_id,
                         source_provider=source_provider,
                         source_media_format=source_media_format,
-                        publish_year=publish_year,
-                        overview=overview,
-                        runtime_minutes=runtime_minutes,
-                        air_status=air_status,
-                        poster_url=poster_url,
-                        fanart_url=fanart_url,
-                        clearlogo_url=clearlogo_url,
-                        banner_url=banner_url,
-                        genres=genres,
-                        themes=themes,
-                        age_rating=age_rating,
+                        publish_year=publish_year, overview=overview,
+                        runtime_minutes=runtime_minutes, air_status=air_status,
+                        poster_url=poster_url, fanart_url=fanart_url,
+                        clearlogo_url=clearlogo_url, banner_url=banner_url,
+                        genres=genres, themes=themes, age_rating=age_rating,
                         mature=mature,
                     )
                     LOGGER.info(
@@ -173,24 +198,16 @@ class StructuralCatalogStore(RuntimeCatalogStore):
                         created.get("local_id"), tvdb_id,
                     )
                     return self._store_series(
-                        english_name=requested_english,
-                        romaji_name=requested_romaji,
-                        root_simkl_id=root_simkl_id,
-                        tvdb_id=tvdb_id,
+                        english_name=requested_english, romaji_name=requested_romaji,
+                        root_simkl_id=root_simkl_id, tvdb_id=tvdb_id,
                         root_anilist_id=root_anilist_id,
                         source_provider=source_provider,
                         source_media_format=source_media_format,
-                        publish_year=publish_year,
-                        overview=overview,
-                        runtime_minutes=runtime_minutes,
-                        air_status=air_status,
-                        poster_url=poster_url,
-                        fanart_url=fanart_url,
-                        clearlogo_url=clearlogo_url,
-                        banner_url=banner_url,
-                        genres=genres,
-                        themes=themes,
-                        age_rating=age_rating,
+                        publish_year=publish_year, overview=overview,
+                        runtime_minutes=runtime_minutes, air_status=air_status,
+                        poster_url=poster_url, fanart_url=fanart_url,
+                        clearlogo_url=clearlogo_url, banner_url=banner_url,
+                        genres=genres, themes=themes, age_rating=age_rating,
                         mature=mature,
                     )
         else:
@@ -203,25 +220,14 @@ class StructuralCatalogStore(RuntimeCatalogStore):
                 )
 
         return self._store_series(
-            english_name=english_name,
-            romaji_name=romaji_name,
-            root_simkl_id=root_simkl_id,
-            tvdb_id=tvdb_id,
-            root_anilist_id=root_anilist_id,
-            source_provider=source_provider,
-            source_media_format=source_media_format,
-            publish_year=publish_year,
-            overview=overview,
-            runtime_minutes=runtime_minutes,
-            air_status=air_status,
-            poster_url=poster_url,
-            fanart_url=fanart_url,
-            clearlogo_url=clearlogo_url,
-            banner_url=banner_url,
-            genres=genres,
-            themes=themes,
-            age_rating=age_rating,
-            mature=mature,
+            english_name=english_name, romaji_name=romaji_name,
+            root_simkl_id=root_simkl_id, tvdb_id=tvdb_id,
+            root_anilist_id=root_anilist_id, source_provider=source_provider,
+            source_media_format=source_media_format, publish_year=publish_year,
+            overview=overview, runtime_minutes=runtime_minutes,
+            air_status=air_status, poster_url=poster_url, fanart_url=fanart_url,
+            clearlogo_url=clearlogo_url, banner_url=banner_url,
+            genres=genres, themes=themes, age_rating=age_rating, mature=mature,
         )
 
     def add_watchlist_season(self, series_id, watchlist_item, season_number=None,
@@ -230,7 +236,7 @@ class StructuralCatalogStore(RuntimeCatalogStore):
                              english_name=None, romaji_name=None,
                              release_date=None, release_status=None,
                              placement_state="COMPLETE"):
-        """Link another source item without mutating a shared structural season."""
+        """Link source media to one immutable structural season."""
         series_id = str(series_id)
         watchlist_id = str(watchlist_item["local_id"])
         number = _int_or_none(season_number)
@@ -252,51 +258,48 @@ class StructuralCatalogStore(RuntimeCatalogStore):
                     current_last = _int_or_none(row.get("last_episode"))
                     incoming_first = _int_or_none(first_episode)
                     incoming_last = _int_or_none(last_episode)
-                    values_first = [value for value in (current_first, incoming_first)
-                                    if value is not None]
-                    values_last = [value for value in (current_last, incoming_last)
-                                   if value is not None]
-                    merged_first = min(values_first) if values_first else None
-                    merged_last = max(values_last) if values_last else None
+                    values_first = [v for v in (current_first, incoming_first) if v is not None]
+                    values_last = [v for v in (current_last, incoming_last) if v is not None]
                     state = (
-                        "COMPLETE"
-                        if placement_state == "COMPLETE" or row.get("placement_state") == "COMPLETE"
+                        "COMPLETE" if placement_state == "COMPLETE"
+                        or row.get("placement_state") == "COMPLETE"
                         else "STRUCTURE_ONLY"
                     )
                     db.execute(
                         "UPDATE seasons SET first_episode=?,last_episode=?,"
                         "placement_state=?,updated_at=CURRENT_TIMESTAMP WHERE local_id=?",
-                        (merged_first, merged_last, state, row["local_id"]),
+                        (min(values_first) if values_first else None,
+                         max(values_last) if values_last else None,
+                         state, row["local_id"]),
                     )
-                    refreshed = db.execute(
+                    return dict(db.execute(
                         "SELECT * FROM seasons WHERE local_id=?", (row["local_id"],)
-                    ).fetchone()
-                    LOGGER.info(
-                        "Linked watchlist item %s to immutable shared Prime season %s S%02d",
-                        watchlist_id, row["local_id"], number,
-                    )
-                    return dict(refreshed)
+                    ).fetchone())
+
+        source_item = watchlist_item
+        if number == 0:
+            # S00 is a structural container shared by many unrelated provider
+            # media entries. Provider IDs live on watchlist links/episodes, not
+            # on the Specials season row itself.
+            source_item = dict(watchlist_item)
+            for provider in ("anilist", "mal", "kitsu", "simkl"):
+                source_item[provider + "_id"] = None
+            source_item["media_format"] = "SPECIAL"
+            english_name = "Specials"
+            romaji_name = None
 
         return super().add_watchlist_season(
-            series_id,
-            watchlist_item,
-            season_number=season_number,
-            provider_path=provider_path,
-            placement_source=placement_source,
-            first_episode=first_episode,
-            last_episode=last_episode,
-            english_name=english_name,
-            romaji_name=romaji_name,
-            release_date=release_date,
-            release_status=release_status,
+            series_id, source_item, season_number=season_number,
+            provider_path=provider_path, placement_source=placement_source,
+            first_episode=first_episode, last_episode=last_episode,
+            english_name=english_name, romaji_name=romaji_name,
+            release_date=release_date, release_status=release_status,
             placement_state=placement_state,
         )
 
     def _runtime_episode_number(self, season_id, episode_number,
                                 source_episode_number=None,
                                 watchlist_local_id=None):
-        # Structural coordinates are never compacted or appended. Collision
-        # handling happens in add_episode where provider identities are visible.
         return int(episode_number)
 
     @staticmethod
@@ -318,10 +321,8 @@ class StructuralCatalogStore(RuntimeCatalogStore):
         number = int(episode_number)
         source_number = int(source_episode_number or number)
         incoming = {
-            "mal_id": mal_id,
-            "simkl_id": simkl_id,
-            "anilist_id": anilist_id,
-            "kitsu_id": kitsu_id,
+            "mal_id": mal_id, "simkl_id": simkl_id,
+            "anilist_id": anilist_id, "kitsu_id": kitsu_id,
         }
         with self._connection() as db:
             row = db.execute(
@@ -339,11 +340,6 @@ class StructuralCatalogStore(RuntimeCatalogStore):
             )
             if not same_source:
                 if self._same_episode_identity(existing, incoming):
-                    LOGGER.info(
-                        "Reused structural Prime episode %s for related watchlist item %s "
-                        "at exact coordinate E%02d",
-                        existing["local_id"], incoming_watchlist, number,
-                    )
                     return existing
                 raise StructuralCatalogConflict(
                     "structural episode coordinate collision at {} E{}: existing "
@@ -356,17 +352,10 @@ class StructuralCatalogStore(RuntimeCatalogStore):
                 )
 
         return super().add_episode(
-            season_id,
-            number,
-            source_episode_number=source_number,
-            mal_id=mal_id,
-            simkl_id=simkl_id,
-            anilist_id=anilist_id,
-            kitsu_id=kitsu_id,
-            watch_status=watch_status,
-            release_date=release_date,
-            title=title,
-            overview=overview,
+            season_id, number, source_episode_number=source_number,
+            mal_id=mal_id, simkl_id=simkl_id, anilist_id=anilist_id,
+            kitsu_id=kitsu_id, watch_status=watch_status,
+            release_date=release_date, title=title, overview=overview,
             runtime_minutes=runtime_minutes,
             watchlist_local_id=watchlist_local_id,
         )
