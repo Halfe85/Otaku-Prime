@@ -94,6 +94,17 @@ class Alpha11WatchlistUITests(unittest.TestCase):
         self.assertIn(".watchlist-pagination { position:fixed",watchlist_html)
         self.assertIn("padding: 12px clamp(12px, 1.5vw, 22px) 14px",container_css)
 
+    def test_settings_shell_is_confined_to_a_fixed_viewport_column(self):
+        container_css=read_static_asset(
+            "components/main-container/main-container.css")[1].decode("utf-8")
+        index_css=read_static_asset("index.css")[1].decode("utf-8")
+        self.assertIn("position:fixed; inset:0",container_css)
+        self.assertIn("display:flex; flex-direction:column",container_css)
+        self.assertIn(".topbar, .bottombar { flex:0 0 auto",container_css)
+        self.assertIn(".main-content { flex:1 1 0",container_css)
+        self.assertIn("overflow-y:auto",container_css)
+        self.assertIn("html, body { width: 100%; height: 100%",index_css)
+
     def test_bundled_provider_icons_are_served_as_png(self):
         for provider in ("anilist","mal","kitsu","simkl"):
             asset=read_static_asset(
