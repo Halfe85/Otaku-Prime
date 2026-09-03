@@ -99,6 +99,7 @@ class Alpha11WatchlistUITests(unittest.TestCase):
             "components/main-container/main-container.css")[1].decode("utf-8")
         index_css=read_static_asset("index.css")[1].decode("utf-8")
         self.assertIn("position:fixed; inset:0",container_css)
+        self.assertIn("inset:0; width:auto; height:auto",container_css)
         self.assertIn("display:flex; flex-direction:column",container_css)
         self.assertIn(".topbar, .bottombar { flex:0 0 auto",container_css)
         self.assertIn(".main-content { flex:1 1 0",container_css)
