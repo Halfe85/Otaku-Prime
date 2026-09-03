@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """Structural ownership and coverage policy for Prime mediation.
 
-Relationship graphs are deliberately transient.  They may help a provider find
+Relationship graphs are deliberately transient. They may help a provider find
 candidate ownership, but Prime persists only the resolved series/season/episode
-structure.  This module keeps structural identity separate from source metadata
+structure. This module keeps structural identity separate from source metadata
 and prevents incomplete provider responses from becoming final placements.
 """
 from __future__ import annotations
@@ -16,10 +16,6 @@ from resources.lib.services.mediator_endpoint_simkl import SimklMediatorEndpoint
 
 LOGGER = get_logger(__name__)
 TV_FORMATS = {"TV", "TV_SHORT"}
-SPECIAL_FORMATS = {
-    "MOVIE", "OVA", "OAV", "OAD", "ONA", "SPECIAL", "TV_SPECIAL",
-    "MUSIC", "MUSIC_VIDEO",
-}
 
 
 def _integer(value):
@@ -105,9 +101,9 @@ def _item_title(item, *keys):
 def safe_target_series_fallback(item, placement):
     """Fail safe for TV items when no structural cross-map is available.
 
-    A PREQUEL/SEQUEL chain proves continuity, not same-series ownership.  If the
+    A PREQUEL/SEQUEL chain proves continuity, not same-series ownership. If the
     selected provider has no TVDB-backed structural owner, a TV/TV_SHORT item is
-    kept as its own series rather than being folded into a relation root.  This
+    kept as its own series rather than being folded into a relation root. This
     can under-merge during an outage, but cannot corrupt another Prime series.
     """
     result = deepcopy(placement or {})
@@ -122,6 +118,9 @@ def safe_target_series_fallback(item, placement):
         show["name"] = english
     if romaji:
         show["romaji_name"] = romaji
+    show["simkl_id"] = (
+        str(item.get("simkl_id")) if item.get("simkl_id") not in (None, "") else None
+    )
     show["anilist_id"] = (
         str(item.get("anilist_id")) if item.get("anilist_id") not in (None, "") else None
     )
@@ -138,11 +137,12 @@ def safe_target_series_fallback(item, placement):
     season["number_source"] = "target_series_safe_fallback"
     components = result.get("seasons") or []
     if components:
+        rows = placement_rows(result)
         # Without a structural cross-map we cannot safely preserve a provider's
-        # inferred multi-season split.  Collapse only the requested TV item into
+        # inferred multi-season split. Collapse only the requested TV item into
         # its own S01; source episode identity is retained on every row.
         result.pop("seasons", None)
-        result["episodes"] = placement_rows(result)
+        result["episodes"] = rows
         for row in result["episodes"]:
             row["season_number"] = 1
     return result
@@ -153,8 +153,8 @@ def apply_structural_hint(item, placement, structural_hint):
 
     This is the important Bakemonogatari/Owarimonogatari case: Simkl may know the
     correct TVDB series and season but expose fewer source units than AniList or
-    MAL.  The complete source placement may borrow that structural owner when the
-    hint points to exactly one season.  A partial hint spanning multiple seasons
+    MAL. The complete source placement may borrow that structural owner when the
+    hint points to exactly one season. A partial hint spanning multiple seasons
     is not safe to synthesize and is therefore rejected.
     """
     if not structural_hint:
@@ -164,6 +164,7 @@ def apply_structural_hint(item, placement, structural_hint):
         return None
 
     result = deepcopy(placement or {})
+    rows = placement_rows(result)
     hint_show = (structural_hint or {}).get("tv_show") or {}
     show = result.setdefault("tv_show", {})
     for key in ("name", "romaji_name", "simkl_id", "tvdb_id", "source_format"):
@@ -179,7 +180,6 @@ def apply_structural_hint(item, placement, structural_hint):
     season["number"] = season_number
     season["number_source"] = "partial_structural_hint"
     result.pop("seasons", None)
-    rows = placement_rows(result)
     result["episodes"] = rows
     for row in rows:
         row["season_number"] = season_number
