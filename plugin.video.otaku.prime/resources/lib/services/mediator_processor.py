@@ -105,7 +105,7 @@ def _merge_placements(anilist, mal):
 class MediatorProcessor:
     """Resolve one Watchlist row while separating relations from structure.
 
-    Prime uses provider relation graphs only while resolving an item.  A final
+    Prime uses provider relation graphs only while resolving an item. A final
     placement must represent one structural series owner and exact Kodi
     coordinates; relation-root identities are never written back over that owner.
     """
@@ -199,13 +199,13 @@ class MediatorProcessor:
 
     @staticmethod
     def _structural_hint(partial_placements):
+        """Only a TVDB-backed Simkl partial is strong enough to own structure."""
         for provider, placement, coverage in partial_placements or []:
             if provider == "simkl" and (
                 ((placement or {}).get("tv_show") or {}).get("tvdb_id") not in (None, "")
             ):
                 return placement, coverage
-        return (partial_placements[0][1], partial_placements[0][2]) \
-            if partial_placements else (None, None)
+        return None, None
 
     def _finish(self, item, placement, attempts, partial_placements=None):
         """Finalize structure and discard transient relation traversal state."""
