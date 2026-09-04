@@ -65,10 +65,29 @@ class RuntimeTVShowMediatorService(TVShowMediatorService):
                 reason="{}: {}".format(type(exc).__name__, exc),
             )
             raise
+
+        if (
+            self.physical is not None
+            and placement.get("library_type") != "movie"
+            and placement.get("_prime_owner_id")
+        ):
+            trace.info(
+                "PHYSICAL", "TV_SERIES_PROJECTED",
+                {
+                    "watchlist_local_id": item.get("local_id"),
+                    "prime_series_id": placement.get("_prime_owner_id"),
+                    "tvdb_id": (placement.get("structural_owner") or {}).get("tvdb_id"),
+                },
+                reason="Prime Physical returned without error",
+            )
+
         trace.info(
             "END", "COMPLETE", placement_facts(placement),
             reason="catalogue commit and required physical handoff completed",
         )
+        placement.pop("_prime_owner_id", None)
+        placement.pop("_prime_season_id", None)
+        placement.pop("_prime_multiseason_ids", None)
         return placement
 
     def _record_deferred(self, item, exc):
@@ -110,16 +129,23 @@ class RuntimeTVShowMediatorService(TVShowMediatorService):
         is_movie = placement.get("library_type") == "movie"
         is_multiseason_wrapper = bool(placement.get("seasons"))
 
+        if isinstance(stored, dict):
+            placement["_prime_owner_id"] = stored.get("local_id")
+        if isinstance(secondary, dict):
+            placement["_prime_season_id"] = secondary.get("local_id")
+        elif isinstance(secondary, list):
+            placement["_prime_multiseason_ids"] = [
+                row.get("local_id") for row in secondary if isinstance(row, dict)
+            ]
+
         trace.info(
             "CATALOGUE", "WRITE_COMPLETE",
             {
                 "placement_state": placement_state,
                 "library_type": placement.get("library_type"),
-                "prime_owner_id": (stored or {}).get("local_id") if isinstance(stored, dict) else None,
-                "prime_season_id": (secondary or {}).get("local_id") if isinstance(secondary, dict) else None,
-                "multi_season_ids": [
-                    row.get("local_id") for row in secondary if isinstance(row, dict)
-                ] if isinstance(secondary, list) else None,
+                "prime_owner_id": placement.get("_prime_owner_id"),
+                "prime_season_id": placement.get("_prime_season_id"),
+                "multi_season_ids": placement.get("_prime_multiseason_ids"),
                 "tvdb_owner": (placement.get("structural_owner") or {}).get("tvdb_id"),
                 "season_number": (placement.get("season") or {}).get("number"),
             },
@@ -146,7 +172,7 @@ class RuntimeTVShowMediatorService(TVShowMediatorService):
                 trace.info(
                     "TVDB_STRUCTURE", "EVIDENCE_COMMITTED",
                     {
-                        "prime_series_id": (stored or {}).get("local_id"),
+                        "prime_series_id": placement.get("_prime_owner_id"),
                         "prime_season_id": secondary.get("local_id"),
                         "watchlist_local_id": item.get("local_id"),
                         "structural_owner": owner,
@@ -155,25 +181,6 @@ class RuntimeTVShowMediatorService(TVShowMediatorService):
                         ),
                     },
                 )
-
-        # The base TV mediator projects completed TV-series before returning
-        # from super()._persist_placement().  Record that completed handoff here
-        # using the same watchlist trace key.
-        if (
-            self.physical is not None
-            and placement_state == "COMPLETE"
-            and not is_movie
-            and stored
-        ):
-            trace.info(
-                "PHYSICAL", "TV_SERIES_PROJECTED",
-                {
-                    "watchlist_local_id": item.get("local_id"),
-                    "prime_series_id": stored.get("local_id"),
-                    "tvdb_id": (placement.get("structural_owner") or {}).get("tvdb_id"),
-                },
-                reason="Prime Physical returned without error",
-            )
 
         if (
             self.physical is not None
