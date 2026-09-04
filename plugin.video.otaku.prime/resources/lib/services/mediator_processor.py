@@ -14,8 +14,10 @@ from resources.lib.services.mediator_helper_simkl import (
     MediatorMetadataPending,
     MediatorPlacementError,
 )
+from resources.lib.services.mediator_simkl_strict import (
+    StrictStructuralSimklMediatorEndpoint,
+)
 from resources.lib.services.mediator_structure import (
-    StructuralSimklMediatorEndpoint,
     coverage_state,
     placement_rows,
 )
@@ -47,11 +49,8 @@ class MediatorProcessor:
         supplied = endpoints or {}
         simkl_endpoint = supplied.get("simkl")
         if simkl_endpoint is None:
-            simkl_endpoint = StructuralSimklMediatorEndpoint(client=simkl_client)
+            simkl_endpoint = StrictStructuralSimklMediatorEndpoint(client=simkl_client)
             if simkl_endpoint.client is None:
-                # Let the endpoint construct its normal client when resolve() is
-                # called.  network_timeout is applied when the normal production
-                # processor receives no explicit client below.
                 from resources.lib.services.mediator_helper_simkl import SimklMediatorClient
                 simkl_endpoint.client = SimklMediatorClient(
                     timeout=network_timeout,
@@ -119,9 +118,6 @@ class MediatorProcessor:
         if owner.get("name"):
             show["name"] = owner.get("name")
         show["tvdb_id"] = str(owner.get("tvdb_id"))
-        # Do not store an anime relation-root ID or a Simkl TV ID as the Prime
-        # series' root_simkl_id.  The source anime Simkl ID remains on the
-        # watchlist and contributing season/episode instead.
         show["simkl_id"] = None
         show["anilist_id"] = None
         show["mal_id"] = None
@@ -206,8 +202,6 @@ class MediatorProcessor:
             reason="TVDB structural owner and all source episode coordinates are explicit",
         )
 
-        # Relation traversal is evidence we want in the trace, but not state we
-        # want the new catalogue owner to depend on or persist.
         normalized.pop("relation_path", None)
         normalized.pop("franchise_relation_path", None)
         normalized["provider_attempts"] = [{
