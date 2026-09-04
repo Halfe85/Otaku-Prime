@@ -5,10 +5,8 @@ import sqlite3
 import tempfile
 import unittest
 
-from resources.lib.database.structural_catalog import (
-    StructuralCatalogConflict,
-    StructuralCatalogStore,
-)
+from resources.lib.database.franchise_catalog import FranchiseCatalogStore
+from resources.lib.database.structural_catalog import StructuralCatalogConflict
 from resources.lib.database.watchlist_items import WatchlistItemStore
 
 
@@ -22,7 +20,7 @@ class StructuralCatalogTests(unittest.TestCase):
                 "INSERT INTO watchlist_items(local_id,mediator_ready) VALUES(?,1)",
                 [("aaaaaa",), ("bbbbbb",), ("cccccc",)],
             )
-        store = StructuralCatalogStore(path)
+        store = FranchiseCatalogStore(path)
         store.initialize()
         return path, store
 
@@ -37,33 +35,90 @@ class StructuralCatalogTests(unittest.TestCase):
             "media_format": media_format,
         }
 
-    def test_conflicting_provider_roots_cannot_cross_tvdb_series(self):
+    def test_parent_identity_is_immutable_when_target_tvdb_changes(self):
         with tempfile.TemporaryDirectory() as root:
             path, store = self._store(root)
             first = store.get_or_create_series(
-                english_name="BanG Dream!", root_simkl_id="111",
-                root_anilist_id="87435", tvdb_id="320002")
-            second = store.get_or_create_series(
-                english_name="BanG Dream! It's MyGO!!!!!", root_simkl_id="222",
-                root_anilist_id="163571", tvdb_id="433560")
+                english_name="BanG Dream!", romaji_name="BanG Dream!",
+                root_simkl_id="111", root_anilist_id="87435",
+                tvdb_id="320002", publish_year=2017, source_media_format="TV")
             resolved = store.get_or_create_series(
-                english_name="Wrong relation-root title", root_simkl_id="222",
-                root_anilist_id="163571", tvdb_id="320002")
+                english_name="BanG Dream! Ave Mujica", romaji_name="Ave Mujica",
+                root_simkl_id="111", root_anilist_id="87435",
+                tvdb_id="433560", publish_year=2025, source_media_format="TV")
 
             self.assertEqual(first["local_id"], resolved["local_id"])
-            self.assertNotEqual(first["local_id"], second["local_id"])
             with sqlite3.connect(path) as db:
                 db.row_factory = sqlite3.Row
-                first_row = db.execute("SELECT * FROM tv_series WHERE local_id=?",
-                                       (first["local_id"],)).fetchone()
-                second_row = db.execute("SELECT * FROM tv_series WHERE local_id=?",
-                                        (second["local_id"],)).fetchone()
-            self.assertEqual("111", first_row["root_simkl_id"])
-            self.assertEqual("87435", first_row["root_anilist_id"])
-            self.assertEqual("320002", first_row["tvdb_id"])
-            self.assertEqual("222", second_row["root_simkl_id"])
-            self.assertEqual("163571", second_row["root_anilist_id"])
-            self.assertEqual("433560", second_row["tvdb_id"])
+                row = db.execute(
+                    "SELECT * FROM tv_series WHERE local_id=?", (first["local_id"],)
+                ).fetchone()
+            self.assertEqual("BanG Dream!", row["english_name"])
+            self.assertEqual("BanG Dream!", row["romaji_name"])
+            self.assertEqual("111", row["root_simkl_id"])
+            self.assertEqual("87435", row["root_anilist_id"])
+            self.assertEqual("320002", row["tvdb_id"])
+            self.assertEqual(2017, row["publish_year"])
+
+    def test_structural_tvdb_owner_is_stored_below_franchise(self):
+        with tempfile.TemporaryDirectory() as root:
+            path, store = self._store(root)
+            series = store.get_or_create_series(
+                english_name="BanG Dream!", root_simkl_id="111",
+                root_anilist_id="87435", tvdb_id="320002", publish_year=2017)
+            item = self._item("aaaaaa", anilist_id="163571", simkl_id="222", media_format="TV")
+            season = store.add_watchlist_season(
+                series["local_id"], item, season_number=4,
+                provider_path="simkl", placement_source="mapped_tvdb_seasons",
+                first_episode=1, last_episode=13, english_name="It's MyGO!!!!!")
+            stored = store.set_watchlist_structural_owner(
+                season["local_id"], item["local_id"],
+                {"name": "BanG Dream! It's MyGO!!!!!",
+                 "simkl_id": "2138098", "tvdb_id": "433560"},
+                structural_season_number=1, source_provider="simkl")
+
+            self.assertEqual("433560", stored["structural_tvdb_id"])
+            self.assertEqual(1, stored["structural_season_number"])
+            with sqlite3.connect(path) as db:
+                db.row_factory = sqlite3.Row
+                parent = db.execute(
+                    "SELECT * FROM tv_series WHERE local_id=?", (series["local_id"],)
+                ).fetchone()
+                mapping = db.execute("""SELECT * FROM season_structural_sources
+                  WHERE season_local_id=? AND watchlist_local_id=?""",
+                    (season["local_id"], item["local_id"]),).fetchone()
+            self.assertEqual("BanG Dream!", parent["english_name"])
+            self.assertEqual("320002", parent["tvdb_id"])
+            self.assertEqual("433560", mapping["structural_tvdb_id"])
+            self.assertEqual("2138098", mapping["structural_simkl_id"])
+
+    def test_non_tvdb_special_cannot_fuzzy_merge_and_rename_parent(self):
+        with tempfile.TemporaryDirectory() as root:
+            path, store = self._store(root)
+            parent = store.get_or_create_series(
+                english_name="Bakemonogatari", romaji_name="Bakemonogatari",
+                root_simkl_id="45006", root_anilist_id="5081",
+                tvdb_id="102261", publish_year=2009)
+            pv = store.get_or_create_series(
+                english_name="Bakemonogatari PV", romaji_name="Bakemonogatari PV",
+                root_simkl_id="999999", root_anilist_id="143663",
+                tvdb_id=None, publish_year=2022, source_media_format="SPECIAL")
+
+            self.assertNotEqual(parent["local_id"], pv["local_id"])
+            with sqlite3.connect(path) as db:
+                db.row_factory = sqlite3.Row
+                parent_row = db.execute(
+                    "SELECT * FROM tv_series WHERE local_id=?", (parent["local_id"],)
+                ).fetchone()
+                pv_row = db.execute(
+                    "SELECT * FROM tv_series WHERE local_id=?", (pv["local_id"],)
+                ).fetchone()
+            self.assertEqual("Bakemonogatari", parent_row["english_name"])
+            self.assertEqual("5081", parent_row["root_anilist_id"])
+            self.assertEqual(2009, parent_row["publish_year"])
+            self.assertEqual("Bakemonogatari PV", pv_row["english_name"])
+            self.assertEqual("143663", pv_row["root_anilist_id"])
+            self.assertEqual(2022, pv_row["publish_year"])
 
     def test_shared_special_season_has_no_single_provider_identity(self):
         with tempfile.TemporaryDirectory() as root:
@@ -157,32 +212,25 @@ class StructuralCatalogTests(unittest.TestCase):
                     (season["local_id"],))]
             self.assertEqual([1], numbers)
 
-    def test_structural_reset_requeues_sources_and_preserves_watchlist_rows(self):
+    def test_rebuild_requeues_added_watchlist_even_when_catalogue_is_empty(self):
         with tempfile.TemporaryDirectory() as root:
             path, store = self._store(root)
-            series = store.get_or_create_series(
-                english_name="Old Projection", root_simkl_id="999", tvdb_id="12345")
-            item = self._item("aaaaaa", anilist_id="1", simkl_id="100", media_format="TV")
-            season = store.add_watchlist_season(
-                series["local_id"], item, season_number=1,
-                provider_path="simkl", placement_source="mapped_tvdb_seasons",
-                first_episode=1, last_episode=1)
-            store.add_episode(
-                season["local_id"], 1, source_episode_number=1,
-                simkl_id="episode-a", watchlist_local_id="aaaaaa")
             with sqlite3.connect(path) as db:
-                db.execute("UPDATE watchlist_items SET added_to_library=1,mediator_ready=0 "
-                           "WHERE local_id='aaaaaa'")
+                db.execute("""UPDATE watchlist_items SET added_to_library=1,
+                  mediator_ready=0,mediator_status='RESOLVED'
+                  WHERE local_id='aaaaaa'""")
+                db.execute("DELETE FROM tv_series")
 
             self.assertTrue(store.structural_rebuild_required())
             result = store.reset_structural_projection()
             self.assertTrue(result["rebuilt"])
             self.assertFalse(store.structural_rebuild_required())
+            self.assertEqual(1, result["watchlist_items"])
             with sqlite3.connect(path) as db:
                 db.row_factory = sqlite3.Row
-                row = db.execute("SELECT * FROM watchlist_items WHERE local_id='aaaaaa'").fetchone()
-                self.assertEqual(0, db.execute("SELECT COUNT(*) FROM tv_series").fetchone()[0])
-                self.assertEqual(0, db.execute("SELECT COUNT(*) FROM episodes").fetchone()[0])
+                row = db.execute(
+                    "SELECT * FROM watchlist_items WHERE local_id='aaaaaa'"
+                ).fetchone()
             self.assertEqual(0, row["added_to_library"])
             self.assertEqual(1, row["mediator_ready"])
             self.assertEqual("PARTIAL", row["mediator_status"])
