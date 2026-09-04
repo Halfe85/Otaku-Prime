@@ -50,6 +50,25 @@ class StrictStructuralSimklMediatorEndpoint(SimklMediatorEndpoint):
             )
 
     @staticmethod
+    def _target_evidence(target, structural_owner, coordinate_source):
+        ids = dict((target or {}).get("ids") or {})
+        return {
+            "simkl_target": {
+                "title": (target or {}).get("title"),
+                "english_title": (target or {}).get("en_title"),
+                "anime_type": (target or {}).get("anime_type"),
+                "year": (target or {}).get("year"),
+                "status": (target or {}).get("status") or (target or {}).get("release_status"),
+                "ids": ids,
+                "mapped_tvdb_seasons": list((target or {}).get("mapped_tvdb_seasons") or []),
+            },
+            "structural_owner": dict(structural_owner or {}),
+            "coordinate_source": coordinate_source,
+            "relation_traversal_used_for_ownership": False,
+            "relation_traversal_used_for_season_number": False,
+        }
+
+    @staticmethod
     def _validate_rows(candidates):
         missing = []
         for row in candidates:
@@ -123,6 +142,9 @@ class StrictStructuralSimklMediatorEndpoint(SimklMediatorEndpoint):
                 },
                 "episodes": [],
                 "relation_path": [simkl_id],
+                "mediation_evidence": self._target_evidence(
+                    target, None, "standalone_simkl_movie"
+                ),
             }
 
         if structural_owner.get("tvdb_id") in (None, ""):
@@ -166,6 +188,9 @@ class StrictStructuralSimklMediatorEndpoint(SimklMediatorEndpoint):
             "season": components[0]["season"],
             "episodes": components[0]["episodes"],
             "relation_path": [simkl_id],
+            "mediation_evidence": self._target_evidence(
+                target, structural_owner, "explicit_tvdb_coordinates"
+            ),
         }
         if len(components) > 1:
             result["seasons"] = components
@@ -227,6 +252,9 @@ class StrictStructuralSimklMediatorEndpoint(SimklMediatorEndpoint):
             "episodes": selected,
             "relation_path": [reference],
             "special_locator": item.get("special_locator"),
+            "mediation_evidence": self._target_evidence(
+                target, structural_owner, "watchlist_special_locator"
+            ),
         }
 
     def resolve(self, item, client=None):
