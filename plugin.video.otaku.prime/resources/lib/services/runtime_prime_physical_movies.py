@@ -121,7 +121,7 @@ class RuntimePrimePhysicalMoviesService(IdentityRuntimePrimePhysicalService):
         return self._age_policy.state() if self._age_policy is not None else None
 
     def rebuild_structural_catalog_if_required(self):
-        """Perform one ID-based physical/Kodi cleanup before catalogue re-mediation."""
+        """Perform one ID/path-based cleanup before catalogue re-mediation."""
         checker = getattr(self.catalog_store, "structural_rebuild_required", None)
         resetter = getattr(self.catalog_store, "reset_structural_projection", None)
         if not checker or not resetter or not checker():
@@ -130,15 +130,34 @@ class RuntimePrimePhysicalMoviesService(IdentityRuntimePrimePhysicalService):
         failures = []
         tv_directories = list(self.physical_identity.discover(MEDIA_SERIES))
         movie_directories = list(self.physical_identity.discover(MEDIA_MOVIE))
+        tv_paths = [row["directory"] for row in tv_directories]
+        movie_paths = [row["directory"] for row in movie_directories]
 
-        # Remove every Kodi row that advertises a Prime unique ID. This also
-        # catches historical paths whose physical directory has already vanished.
+        # First remove every Kodi row advertising any Prime unique ID. This
+        # catches dead historical paths even when their physical directories are
+        # already gone. Then remove rows by the NFO-discovered paths as a second
+        # generation-independent cleanup for stale/missing show-level IDs.
         try:
             kodi = remove_all_prime_video()
         except Exception as exc:
-            failures.append("Kodi Prime cleanup: {}".format(exc))
+            failures.append("Kodi Prime-ID cleanup: {}".format(exc))
             kodi = {"removed": 0, "error": str(exc)}
             LOGGER.exception("Could not remove old Prime rows from Kodi before rebuild")
+
+        if tv_paths:
+            try:
+                by_path = remove_prime_tvshows(directories=tv_paths)
+                kodi["tv_path_cleanup"] = by_path
+            except Exception as exc:
+                failures.append("Kodi TV path cleanup: {}".format(exc))
+                LOGGER.exception("Could not remove stale Prime TV paths from Kodi")
+        if movie_paths:
+            try:
+                by_path = remove_prime_movies(directories=movie_paths)
+                kodi["movie_path_cleanup"] = by_path
+            except Exception as exc:
+                failures.append("Kodi movie path cleanup: {}".format(exc))
+                LOGGER.exception("Could not remove stale Prime movie paths from Kodi")
 
         for entry in tv_directories:
             try:
