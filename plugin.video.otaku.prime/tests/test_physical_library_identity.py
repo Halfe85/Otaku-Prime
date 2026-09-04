@@ -66,13 +66,14 @@ class PhysicalLibraryIdentityTests(unittest.TestCase):
             self.assertFalse(os.path.exists(old))
             self.assertTrue(os.path.isdir(desired))
             self.assertEqual([os.path.abspath(old)], result["duplicates_removed"])
+            self.assertEqual([os.path.abspath(old)], result["stale_directories"])
             self.assertTrue(result["kodi_cleanup_pending"])
             self.assertEqual(
                 [os.path.abspath(desired)],
                 [row["directory"] for row in registry.discover(MEDIA_SERIES, "b59120")],
             )
 
-    def test_title_change_migrates_existing_prime_owned_directory(self):
+    def test_title_change_persists_stale_kodi_path_across_restart(self):
         with tempfile.TemporaryDirectory() as root:
             library, registry = self._registry(root)
             old = os.path.join(library, "TV-Series", "Bakemonogatari 2009")
@@ -86,11 +87,22 @@ class PhysicalLibraryIdentityTests(unittest.TestCase):
 
             self.assertEqual(os.path.abspath(desired), result["directory"])
             self.assertEqual([os.path.abspath(old)], result["migrated_from"])
+            self.assertEqual([os.path.abspath(old)], result["stale_directories"])
             self.assertFalse(os.path.exists(old))
             self.assertTrue(os.path.isfile(os.path.join(desired, "tvshow.nfo")))
             mapped = registry.mapped(MEDIA_SERIES, "385a56")
             self.assertEqual(os.path.abspath(desired), mapped["directory"])
             self.assertEqual(1, mapped["kodi_cleanup_pending"])
+
+            restarted = PhysicalLibraryIdentityRegistry(registry.db_path, library)
+            restarted.initialize()
+            retry = restarted.resolve(MEDIA_SERIES, "385a56", desired)
+            self.assertEqual([os.path.abspath(old)], retry["stale_directories"])
+            self.assertTrue(retry["kodi_cleanup_pending"])
+
+            restarted.mark_cleanup_complete(MEDIA_SERIES, "385a56")
+            self.assertEqual([], restarted.pending_cleanup_directories(MEDIA_SERIES, "385a56"))
+            self.assertEqual(0, restarted.mapped(MEDIA_SERIES, "385a56")["kodi_cleanup_pending"])
 
     def test_discovery_works_without_catalogue_rows(self):
         with tempfile.TemporaryDirectory() as root:
@@ -159,6 +171,7 @@ class PhysicalLibraryIdentityTests(unittest.TestCase):
             self.assertEqual(os.path.abspath(desired), result["directory"])
             self.assertFalse(os.path.exists(old))
             self.assertTrue(os.path.isdir(desired))
+            self.assertEqual([os.path.abspath(old)], result["stale_directories"])
             self.assertTrue(result["kodi_cleanup_pending"])
 
 
