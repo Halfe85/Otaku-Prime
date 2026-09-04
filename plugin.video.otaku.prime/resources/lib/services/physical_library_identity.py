@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Persistent physical-library identity for Prime generated media.
 
-Physical folder names are display metadata.  Prime ownership is the opaque Prime
+Physical folder names are display metadata. Prime ownership is the opaque Prime
 ID written into Local Information NFO files and persisted in this registry.
 """
 from __future__ import annotations
@@ -10,6 +10,7 @@ import os
 import shutil
 import sqlite3
 import xml.etree.ElementTree as ElementTree
+from contextlib import contextmanager
 
 from resources.lib.logging_config import get_logger
 
@@ -35,11 +36,16 @@ class PhysicalLibraryIdentityRegistry:
         self.db_path = str(db_path)
         self.root_path = os.path.abspath(str(root_path))
 
+    @contextmanager
     def _connection(self):
         db = sqlite3.connect(self.db_path, timeout=5)
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA busy_timeout=5000")
-        return db
+        try:
+            with db:
+                yield db
+        finally:
+            db.close()
 
     def initialize(self):
         with self._connection() as db:
