@@ -11,7 +11,7 @@ from resources.lib.logging_config import get_logger
 
 
 LOGGER = get_logger(__name__)
-FRANCHISE_MEDIATOR_REVISION = "franchise-owner-physical-identity-2"
+FRANCHISE_MEDIATOR_REVISION = "franchise-owner-direct-season-evidence-3"
 
 
 def _clean(value):

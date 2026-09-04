@@ -14,6 +14,7 @@ from resources.lib.services.kodi_scan_verify_prime import (
     verify_prime_movie,
     verify_prime_series,
 )
+from resources.lib.services.runtime_prime_physical import RuntimePrimePhysicalService
 
 
 class FakeNotifications:
@@ -31,6 +32,49 @@ class FakeNotifications:
 
 
 class ReliableKodiScanTests(unittest.TestCase):
+    def test_physical_scan_refreshes_parent_and_target_through_kodi_vfs(self):
+        opened = []
+        deleted = []
+
+        class File:
+            def __init__(self, path, mode):
+                opened.append((path, mode))
+
+            def write(self, value):
+                return len(value)
+
+            def close(self):
+                return None
+
+        fake_vfs = types.SimpleNamespace(
+            File=File,
+            delete=lambda path: deleted.append(path) or True,
+        )
+
+        class Queue:
+            def request(self, directory, reason):
+                return {"queued": True, "path": directory, "reason": reason}
+
+        with tempfile.TemporaryDirectory() as root:
+            target = os.path.join(root, "TV-Series", "Bleach 2004")
+            os.makedirs(target)
+            service = object.__new__(RuntimePrimePhysicalService)
+            service._scan_queue = Queue()
+            previous = sys.modules.get("xbmcvfs")
+            sys.modules["xbmcvfs"] = fake_vfs
+            try:
+                result = service.request_kodi_scan(target, reason="mediator_series")
+            finally:
+                if previous is None:
+                    sys.modules.pop("xbmcvfs", None)
+                else:
+                    sys.modules["xbmcvfs"] = previous
+
+        self.assertTrue(result["queued"])
+        self.assertEqual(2, len(opened))
+        self.assertEqual(2, len(deleted))
+        self.assertTrue(all(path.endswith(".otaku-prime-vfs-refresh") for path, _ in opened))
+
     def test_notification_lifecycle_and_verified_series_use_one_scan(self):
         calls = []
         notifications = FakeNotifications()

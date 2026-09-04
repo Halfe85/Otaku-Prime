@@ -9,13 +9,14 @@ from resources.lib.service_lifecycle import ServiceWorkHalted
 
 
 class Endpoint:
-    def __init__(self, result=None, error=None):
+    def __init__(self, result=None, error=None, provider="simkl"):
         self.result = result
         self.error = error
         self.calls = 0
+        self.provider = provider
 
     def available(self, item):
-        return item.get("simkl_id") is not None
+        return item.get(self.provider + "_id") is not None
 
     def resolve(self, item):
         self.calls += 1
@@ -73,12 +74,12 @@ class MediatorProcessorTests(unittest.TestCase):
             "episode_count": 2,
         }
 
-    def test_production_processor_constructs_only_simkl_endpoint(self):
+    def test_production_processor_constructs_provider_priority_endpoints(self):
         processor = MediatorProcessor(network_timeout=3)
-        self.assertEqual({"simkl"}, set(processor.endpoints))
+        self.assertEqual({"simkl", "anilist", "mal", "kitsu"}, set(processor.endpoints))
         self.assertEqual(3, processor.endpoints["simkl"].client.timeout)
 
-    def test_simkl_is_the_only_live_provider_path(self):
+    def test_simkl_success_remains_first_priority(self):
         simkl = Endpoint(result=placement())
         ignored = Endpoint(result=placement())
         processor = MediatorProcessor(endpoints={"simkl": simkl, "anilist": ignored})
@@ -89,29 +90,30 @@ class MediatorProcessorTests(unittest.TestCase):
         self.assertEqual(0, ignored.calls)
         self.assertEqual("simkl", result["provider_path"])
 
-    def test_simkl_failure_is_terminal_and_keeps_reason(self):
+    def test_simkl_failure_falls_back_to_native_anilist(self):
         simkl = Endpoint(error=RuntimeError("HTTP 503"))
-        ignored = Endpoint(result=placement())
-        processor = MediatorProcessor(endpoints={"simkl": simkl, "anilist": ignored})
+        native_value = placement()
+        native_value["provider_path"] = "anilist"
+        native = Endpoint(result=native_value, provider="anilist")
+        processor = MediatorProcessor(endpoints={"simkl": simkl, "anilist": native})
 
-        with self.assertRaises(MediatorPlacementError) as caught:
-            processor.resolve(self.item())
+        result = processor.resolve(self.item())
 
-        self.assertIn("Simkl mediation failed", str(caught.exception))
-        self.assertIn("HTTP 503", str(caught.exception))
+        self.assertEqual("anilist", result["provider_path"])
         self.assertEqual(1, simkl.calls)
-        self.assertEqual(0, ignored.calls)
+        self.assertEqual(1, native.calls)
 
-    def test_missing_simkl_identity_is_terminal(self):
+    def test_missing_simkl_identity_uses_native_provider(self):
         item = self.item()
         item["simkl_id"] = None
-        endpoint = Endpoint(result=placement())
+        native_value = placement()
+        native_value["provider_path"] = "anilist"
+        endpoint = Endpoint(result=native_value, provider="anilist")
 
-        with self.assertRaises(MediatorPlacementError) as caught:
-            MediatorProcessor(endpoints={"simkl": endpoint}).resolve(item)
+        result = MediatorProcessor(endpoints={"anilist": endpoint}).resolve(item)
 
-        self.assertIn("no usable Simkl identity", str(caught.exception))
-        self.assertEqual(0, endpoint.calls)
+        self.assertEqual("anilist", result["provider_path"])
+        self.assertEqual(1, endpoint.calls)
 
     def test_conflicted_exact_identity_is_not_bypassed(self):
         item = self.item()
@@ -168,6 +170,26 @@ class MediatorProcessorTests(unittest.TestCase):
         self.assertIsNone(show["kitsu_id"])
         self.assertEqual("simkl_tvdb_structural_owner", show["source"])
         self.assertNotIn("relation_path", result)
+
+    def test_verified_franchise_root_ids_are_kept_with_tvdb_owner(self):
+        value = placement()
+        value["tv_show"].update({
+            "name": "Bleach", "simkl_id": "41066",
+            "anilist_id": "269", "mal_id": "269",
+        })
+        value["mediation_evidence"] = {
+            "root_identity_verified": True,
+            "structural_owner_source": "direct_mapped_season_relation",
+        }
+
+        result = MediatorProcessor(
+            endpoints={"simkl": Endpoint(result=value)}
+        ).resolve(self.item())
+
+        self.assertEqual("TVDB Owner", result["tv_show"]["name"])
+        self.assertEqual("74796", result["tv_show"]["tvdb_id"])
+        self.assertEqual("41066", result["tv_show"]["simkl_id"])
+        self.assertEqual("269", result["tv_show"]["anilist_id"])
 
     def test_trace_records_relation_path_before_it_is_discarded(self):
         with self.assertLogs("otaku_prime.services-mediator_trace", level="INFO") as logs:

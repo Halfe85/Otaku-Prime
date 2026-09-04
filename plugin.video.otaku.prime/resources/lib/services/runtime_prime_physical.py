@@ -162,6 +162,45 @@ def _kodi_video_scan_active():
         return False
 
 
+def _refresh_kodi_vfs_directory_cache(directory):
+    """Make Kodi invalidate a directory cached as missing before a scan.
+
+    Prime creates its generated library with Python filesystem calls. Kodi's
+    VFS therefore may retain an earlier negative directory lookup. Creating
+    and deleting a marker through xbmcvfs makes Kodi observe the directory
+    without changing any media content.
+    """
+    path = str(directory or "").strip()
+    if not path or not os.path.isdir(path):
+        return False
+    try:
+        import xbmcvfs
+    except (ImportError, RuntimeError):
+        return False
+    marker = os.path.join(path, ".otaku-prime-vfs-refresh")
+    handle = None
+    try:
+        handle = xbmcvfs.File(marker, "w")
+        handle.write("prime-vfs-refresh")
+        handle.close()
+        handle = None
+        if not xbmcvfs.delete(marker):
+            try:
+                os.remove(marker)
+            except FileNotFoundError:
+                pass
+        return True
+    except Exception:
+        LOGGER.exception("Kodi VFS directory-cache refresh failed: path=%s", path)
+        return False
+    finally:
+        if handle is not None:
+            try:
+                handle.close()
+            except Exception:
+                pass
+
+
 class KodiVideoLibraryScanQueue:
     """Serialize scoped scans and refresh existing Prime local-NFO titles."""
 
@@ -334,6 +373,15 @@ class RuntimePrimePhysicalService(PrimePhysicalService):
         path = str(directory or "")
         if not path:
             return {"queued": False, "path": path, "reason": "empty_directory"}
+        refreshed = []
+        for candidate in (_parent_directory(path), path):
+            if candidate and _refresh_kodi_vfs_directory_cache(candidate):
+                refreshed.append(_normalized_directory(candidate))
+        if refreshed:
+            LOGGER.info(
+                "Refreshed Kodi VFS directory cache before scan: path=%s refreshed=%s",
+                path, refreshed,
+            )
         return self._scan_queue.request(path, reason=reason)
 
     def project_series(self, series_id, _log_result=True):

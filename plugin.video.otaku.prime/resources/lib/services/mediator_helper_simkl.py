@@ -303,7 +303,8 @@ def _find_root(client,target):
         for relation in _relations(current):
             relation_type=str(relation.get("relation_type") or "").lower().replace("_"," ")
             candidate_id=(relation.get("ids") or {}).get("simkl")
-            if relation_type!="prequel" or candidate_id in (None,"") or str(candidate_id) in seen: continue
+            if (relation_type!="prequel" or not _direct(relation.get("is_direct"))
+                    or candidate_id in (None,"") or str(candidate_id) in seen): continue
             detail=client.anime(candidate_id)
             if franchise_tvdb and str((detail.get("ids") or {}).get("tvdb") or "")==franchise_tvdb:
                 value=dict(relation); value["_detail"]=detail; candidates.append(value); continue

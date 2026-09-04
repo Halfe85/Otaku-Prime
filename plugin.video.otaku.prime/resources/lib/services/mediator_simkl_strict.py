@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
 """Strict Simkl -> TVDB placement endpoint for the mediator rebuild.
 
-The target Simkl media item is the only identity context used to resolve TVDB
-structure. PREQUEL/SEQUEL relation traversal is deliberately not consulted for
-catalogue ownership or season numbering in this phase.
+Explicit episode coordinates remain authoritative. Only a direct, validated
+``season N`` edge may provide their parent owner; generic relation traversal is
+never used for ownership or numbering.
 """
 from __future__ import annotations
+
+import re
 
 from resources.lib.services.mediator_endpoint_simkl import SimklMediatorEndpoint, _LOCATOR
 from resources.lib.services.mediator_helper_simkl import (
@@ -50,7 +52,9 @@ class StrictStructuralSimklMediatorEndpoint(SimklMediatorEndpoint):
             )
 
     @staticmethod
-    def _target_evidence(target, structural_owner, coordinate_source):
+    def _target_evidence(target, structural_owner, coordinate_source,
+                         root_identity_verified=False,
+                         structural_owner_source=None):
         ids = dict((target or {}).get("ids") or {})
         return {
             "simkl_target": {
@@ -64,9 +68,84 @@ class StrictStructuralSimklMediatorEndpoint(SimklMediatorEndpoint):
             },
             "structural_owner": dict(structural_owner or {}),
             "coordinate_source": coordinate_source,
-            "relation_traversal_used_for_ownership": False,
+            "root_identity_verified": bool(root_identity_verified),
+            "structural_owner_source": structural_owner_source,
+            "relation_traversal_used_for_ownership": (
+                structural_owner_source == "direct_mapped_season_relation"
+            ),
             "relation_traversal_used_for_season_number": False,
         }
+
+    @staticmethod
+    def _relations(detail):
+        relations = (detail or {}).get("relations") or []
+        if isinstance(relations, list):
+            return [dict(row) for row in relations if isinstance(row, dict)]
+        if not isinstance(relations, dict):
+            return []
+        result = []
+        for relation_type, rows in relations.items():
+            if isinstance(rows, dict):
+                rows = [rows]
+            for row in rows or []:
+                if not isinstance(row, dict):
+                    continue
+                value = dict(row)
+                value.setdefault("relation_type", relation_type)
+                result.append(value)
+        return result
+
+    @staticmethod
+    def _is_direct(value):
+        return value is True or str(value or "").strip().lower() in (
+            "1", "true", "yes"
+        )
+
+    def _direct_season_owner(self, client, target, coordinate_seasons):
+        """Resolve a target through one explicit Simkl season-owner edge.
+
+        Simkl can put a later cour on a separate anime TVDB identity even while
+        its episode rows explicitly place that cour in the original show's TVDB
+        season.  A direct ``season N`` relation is accepted only when the
+        related item owns N and its mapped range ends before the target range.
+        Generic/non-direct PREQUEL relations are never ownership evidence.
+        """
+        if not coordinate_seasons:
+            return None
+        target_first = min(coordinate_seasons)
+        for relation in self._relations(target):
+            relation_type = str(
+                relation.get("relation_type") or ""
+            ).strip().lower().replace("_", " ")
+            match = re.fullmatch(r"season\s+(\d+)", relation_type)
+            candidate_id = (relation.get("ids") or {}).get("simkl")
+            if (
+                not match
+                or not self._is_direct(relation.get("is_direct"))
+                or candidate_id in (None, "")
+            ):
+                continue
+            candidate = client.anime(str(candidate_id))
+            candidate_mapped = sorted({
+                int(value) for value in candidate.get("mapped_tvdb_seasons") or []
+            })
+            relation_season = int(match.group(1))
+            if (
+                relation_season not in candidate_mapped
+                or not candidate_mapped
+                or max(candidate_mapped) >= target_first
+            ):
+                continue
+            owner = self._structural_owner(client, candidate, candidate)
+            if owner.get("tvdb_id") in (None, ""):
+                continue
+            return {
+                "owner": owner,
+                "franchise": self._franchise_identity(candidate, candidate),
+                "root": candidate,
+                "relation": relation,
+            }
+        return None
 
     @staticmethod
     def _validate_rows(candidates):
@@ -143,11 +222,36 @@ class StrictStructuralSimklMediatorEndpoint(SimklMediatorEndpoint):
         target = client.anime(simkl_id)
         self._validate_exact_target(simkl_id, target)
 
-        # Relation roots are intentionally ignored. The target itself supplies
-        # identity context for Simkl's TV/TVDB cross-map.
-        franchise = self._franchise_identity(target, target)
-        structural_owner = self._structural_owner(client, target, target)
         target_type = str(target.get("anime_type") or "").lower()
+
+        # Episode coordinates are the primary structural fact.  They must be
+        # read before choosing the owning TV series.
+        candidates = _episodes(
+            client.episodes(simkl_id), target_type in SPECIAL_MEDIA_TYPES
+        )
+        coordinate_seasons = sorted({
+            int(row["season_number"])
+            for row in candidates if row.get("season_number") is not None
+        })
+        direct_owner = self._direct_season_owner(
+            client, target, coordinate_seasons
+        )
+        if direct_owner:
+            franchise = direct_owner["franchise"]
+            structural_owner = direct_owner["owner"]
+            owner_source = "direct_mapped_season_relation"
+            root_identity_verified = True
+        else:
+            franchise = self._franchise_identity(target, target)
+            structural_owner = self._structural_owner(client, target, target)
+            owner_source = "target_tvdb_crossmap"
+            target_tvdb = str((target.get("ids") or {}).get("tvdb") or "")
+            root_identity_verified = bool(
+                coordinate_seasons
+                and min(coordinate_seasons) == 1
+                and target_tvdb
+                and target_tvdb == str(structural_owner.get("tvdb_id") or "")
+            )
 
         if target_type == "movie" and structural_owner.get("tvdb_id") in (None, ""):
             return {
@@ -169,7 +273,9 @@ class StrictStructuralSimklMediatorEndpoint(SimklMediatorEndpoint):
                 "episodes": [],
                 "relation_path": [simkl_id],
                 "mediation_evidence": self._target_evidence(
-                    target, None, "standalone_simkl_movie"
+                    target, None, "standalone_simkl_movie",
+                    root_identity_verified=True,
+                    structural_owner_source="standalone_simkl_movie",
                 ),
             }
 
@@ -178,9 +284,6 @@ class StrictStructuralSimklMediatorEndpoint(SimklMediatorEndpoint):
                 "Simkl target {} has no TVDB structural series owner".format(simkl_id)
             )
 
-        candidates = _episodes(
-            client.episodes(simkl_id), target_type in SPECIAL_MEDIA_TYPES
-        )
         if not candidates:
             raise MediatorMetadataPending(
                 "Simkl returned no episode rows for target {}".format(simkl_id)
@@ -215,7 +318,9 @@ class StrictStructuralSimklMediatorEndpoint(SimklMediatorEndpoint):
             "episodes": components[0]["episodes"],
             "relation_path": [simkl_id],
             "mediation_evidence": self._target_evidence(
-                target, structural_owner, "explicit_tvdb_coordinates"
+                target, structural_owner, "explicit_tvdb_coordinates",
+                root_identity_verified=root_identity_verified,
+                structural_owner_source=owner_source,
             ),
         }
         if len(components) > 1:

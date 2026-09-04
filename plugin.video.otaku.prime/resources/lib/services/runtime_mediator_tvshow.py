@@ -44,7 +44,7 @@ class RuntimeTVShowMediatorService(TVShowMediatorService):
         trace.info(
             "SERVICE", "MEDIATION_BEGIN",
             watchlist_input_facts(item),
-            reason="watchdog handed item to Simkl-only mediator",
+            reason="watchdog handed item to provider-priority mediator",
         )
         try:
             placement = super().process_item(item)

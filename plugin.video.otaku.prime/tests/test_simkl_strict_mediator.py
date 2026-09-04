@@ -27,6 +27,29 @@ class FakeClient:
         return dict(self.owner) if self.owner else None
 
 
+class FranchiseClient(FakeClient):
+    def __init__(self, targets, episodes, owners):
+        self.targets = {str(key): dict(value) for key, value in targets.items()}
+        self.episode_rows = {str(key): list(value) for key, value in episodes.items()}
+        self.owners = {str(key): dict(value) for key, value in owners.items()}
+        self.anime_calls = []
+        self.tv_franchise_calls = []
+
+    def anime(self, simkl_id):
+        key = str(simkl_id)
+        self.anime_calls.append(key)
+        return dict(self.targets[key])
+
+    def episodes(self, simkl_id):
+        return [dict(row) for row in self.episode_rows[str(simkl_id)]]
+
+    def tv_franchise(self, target, root_detail=None):
+        key = str((target.get("ids") or {}).get("simkl"))
+        self.tv_franchise_calls.append((target, root_detail))
+        value = self.owners.get(key)
+        return dict(value) if value else None
+
+
 def target(simkl_id="100", anime_type="tv", **extra):
     value = {
         "title": "Target Anime",
@@ -63,6 +86,55 @@ def episode(source, season, number, ids=None):
 
 
 class StrictSimklMediatorTests(unittest.TestCase):
+    def test_direct_mapped_season_relation_owns_later_cour(self):
+        bleach = target(
+            simkl_id="41066", mapped_tvdb_seasons=list(range(1, 17)),
+            title="Bleach", en_title="Bleach",
+            ids={"simkl": "41066", "tvdb": "74796", "anilist": "269", "mal": "269"},
+            relations=[],
+        )
+        tybw = target(
+            simkl_id="1300367", mapped_tvdb_seasons=[17],
+            title="Bleach: Thousand-Year Blood War",
+            ids={"simkl": "1300367", "tvdb": "458864", "anilist": "116674"},
+            relations=[{
+                "relation_type": "season 1", "is_direct": True,
+                "ids": {"simkl": "41066"}, "title": "Bleach",
+            }],
+        )
+        client = FranchiseClient(
+            {"41066": bleach, "1300367": tybw},
+            {"1300367": [episode(value, 17, value) for value in range(1, 14)]},
+            {
+                "41066": {
+                    "name": "Bleach", "simkl_id": "41066",
+                    "tvdb_id": "74796", "source": "simkl_tvdb_crossmap_validated",
+                },
+                "1300367": {
+                    "name": "Bleach: Thousand-Year Blood War",
+                    "simkl_id": "1300367", "tvdb_id": "458864",
+                    "source": "simkl_tvdb_crossmap_validated",
+                },
+            },
+        )
+
+        result = StrictStructuralSimklMediatorEndpoint(client=client).resolve({
+            "local_id": "abcdef", "simkl_id": "1300367", "media_format": "TV"
+        })
+
+        self.assertEqual("Bleach", result["tv_show"]["name"])
+        self.assertEqual("41066", result["tv_show"]["simkl_id"])
+        self.assertEqual("74796", result["structural_owner"]["tvdb_id"])
+        self.assertEqual(17, result["season"]["number"])
+        self.assertEqual(list(range(1, 14)), [
+            row["episode_number"] for row in result["episodes"]
+        ])
+        self.assertTrue(result["mediation_evidence"]["root_identity_verified"])
+        self.assertEqual(
+            "direct_mapped_season_relation",
+            result["mediation_evidence"]["structural_owner_source"],
+        )
+
     def test_target_relation_graph_is_not_traversed_for_ownership(self):
         client = FakeClient(
             target(),
