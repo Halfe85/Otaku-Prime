@@ -54,13 +54,12 @@ class IdentityRuntimePrimePhysicalService(RuntimePrimePhysicalService):
     def _cleanup_series_kodi_identity(self, series_id, info):
         if not info or not info.get("kodi_cleanup_pending"):
             return {"required": False, "removed": 0}
-        stale = list(info.get("migrated_from") or []) + list(
-            info.get("duplicates_removed") or []
-        )
+        stale = list(info.get("stale_directories") or [])
         try:
             result = remove_prime_tvshows(series_id, directories=stale)
             self.physical_identity.mark_cleanup_complete(MEDIA_SERIES, series_id)
             result["required"] = True
+            result["stale_directories"] = stale
             return result
         except Exception as exc:
             self._identity_cleanup_failed = True
@@ -73,6 +72,7 @@ class IdentityRuntimePrimePhysicalService(RuntimePrimePhysicalService):
                 "removed": 0,
                 "failed": True,
                 "error": str(exc),
+                "stale_directories": stale,
             }
 
     def _series_projection_plan(self, series, seasons, directory, now_epoch):
@@ -172,11 +172,12 @@ class IdentityRuntimePrimePhysicalService(RuntimePrimePhysicalService):
         if _log_result:
             LOGGER.info(
                 "Prime Physical projected stable series %s: directory=%s written=%s "
-                "unchanged=%s pruned=%s migrated=%s duplicates=%s",
+                "unchanged=%s pruned=%s migrated=%s duplicates=%s stale=%s",
                 series["local_id"], directory,
                 strm.get("written"), strm.get("unchanged"), len(pruned),
                 len(info.get("migrated_from") or []),
                 len(info.get("duplicates_removed") or []),
+                len(info.get("stale_directories") or []),
             )
         return result
 
