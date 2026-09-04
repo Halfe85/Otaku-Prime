@@ -103,11 +103,11 @@ def _merge_placements(anilist, mal):
 
 
 class MediatorProcessor:
-    """Resolve one Watchlist row while separating relations from structure.
+    """Resolve one Watchlist row while keeping franchise and structure separate.
 
-    Prime uses provider relation graphs only while resolving an item. A final
-    placement must represent one structural series owner and exact Kodi
-    coordinates; relation-root identities are never written back over that owner.
+    Relation graphs may identify a franchise root. TVDB-backed structural owners
+    and episode coordinates are carried independently and never overwrite that
+    franchise identity.
     """
 
     def __init__(self, endpoints=None, simkl_client=None, halt_requested=None,
@@ -199,11 +199,12 @@ class MediatorProcessor:
 
     @staticmethod
     def _structural_hint(partial_placements):
-        """Only a TVDB-backed Simkl partial is strong enough to own structure."""
+        """Only a TVDB-backed Simkl structural owner may lend coordinates."""
         for provider, placement, coverage in partial_placements or []:
-            if provider == "simkl" and (
-                ((placement or {}).get("tv_show") or {}).get("tvdb_id") not in (None, "")
-            ):
+            if provider != "simkl":
+                continue
+            owner = (placement or {}).get("structural_owner") or {}
+            if owner.get("tvdb_id") not in (None, ""):
                 return placement, coverage
         return None, None
 
@@ -229,8 +230,6 @@ class MediatorProcessor:
         else:
             final = safe_target_series_fallback(item, placement)
 
-        # These paths are useful while a provider is resolving the item, but the
-        # final catalogue model stores only the chosen series/season/episodes.
         final.pop("relation_path", None)
         final.pop("franchise_relation_path", None)
         final["provider_attempts"] = attempts
@@ -248,8 +247,8 @@ class MediatorProcessor:
             pending_placements=pending_placements,
         )
         if simkl:
-            # A complete Simkl result is already structural: its TVDB cross-map
-            # owns the series and its episode rows carry the Kodi coordinates.
+            # Complete Simkl data already carries franchise identity and target
+            # structural ownership as separate values.
             simkl.pop("relation_path", None)
             simkl.pop("franchise_relation_path", None)
             simkl["provider_attempts"] = attempts
