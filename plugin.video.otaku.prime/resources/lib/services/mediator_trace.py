@@ -121,6 +121,8 @@ def placement_facts(placement):
         "provider_reference_id": placement.get("provider_reference_id"),
         "library_type": placement.get("library_type"),
         "simkl_relation_path_observed": placement.get("relation_path"),
+        "mediation_evidence": placement.get("mediation_evidence"),
+        "provider_attempts": placement.get("provider_attempts"),
         "structural_owner": owner,
         "catalogue_owner": {
             "name": show.get("name"),
