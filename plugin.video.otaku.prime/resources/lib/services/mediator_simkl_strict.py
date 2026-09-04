@@ -2,7 +2,7 @@
 """Strict Simkl -> TVDB placement endpoint for the mediator rebuild.
 
 The target Simkl media item is the only identity context used to resolve TVDB
-structure.  PREQUEL/SEQUEL relation traversal is deliberately not consulted for
+structure. PREQUEL/SEQUEL relation traversal is deliberately not consulted for
 catalogue ownership or season numbering in this phase.
 """
 from __future__ import annotations
@@ -112,12 +112,38 @@ class StrictStructuralSimklMediatorEndpoint(SimklMediatorEndpoint):
             "episodes": episodes,
         }
 
+    @staticmethod
+    def _special_exact_matches(item, raw_rows, season_number, first_episode, last_episode):
+        """Return exact external-ID evidence for the requested special range."""
+        matches = []
+        for row in raw_rows or []:
+            tvdb = row.get("tvdb") or {}
+            try:
+                season = int(tvdb.get("season"))
+                episode = int(tvdb.get("episode"))
+            except (TypeError, ValueError):
+                continue
+            if season != season_number or not first_episode <= episode <= last_episode:
+                continue
+            ids = row.get("ids") or {}
+            for provider in ("anilist", "mal", "kitsu"):
+                local = item.get(provider + "_id")
+                remote = ids.get(provider)
+                if local not in (None, "") and remote not in (None, "") and str(local) == str(remote):
+                    matches.append({
+                        "provider": provider,
+                        "provider_id": str(local),
+                        "tvdb_season": season,
+                        "tvdb_episode": episode,
+                    })
+        return matches
+
     def _exact(self, item, client):
         simkl_id = str(item["simkl_id"])
         target = client.anime(simkl_id)
         self._validate_exact_target(simkl_id, target)
 
-        # Relation roots are intentionally ignored.  The target itself supplies
+        # Relation roots are intentionally ignored. The target itself supplies
         # identity context for Simkl's TV/TVDB cross-map.
         franchise = self._franchise_identity(target, target)
         structural_owner = self._structural_owner(client, target, target)
@@ -217,7 +243,19 @@ class StrictStructuralSimklMediatorEndpoint(SimklMediatorEndpoint):
                 "Simkl special reference {} has no TVDB structural series owner".format(reference)
             )
 
-        candidates = _episodes(client.episodes(reference), True)
+        raw_rows = client.episodes(reference)
+        exact_matches = self._special_exact_matches(
+            item, raw_rows, season_number, first_episode, last_episode
+        )
+        if not exact_matches:
+            raise MediatorPlacementError(
+                "Simkl special reference {} {} has no exact AniList/MAL/Kitsu ID evidence; "
+                "fuzzy title/date locators are not accepted by the strict mediator".format(
+                    reference, item.get("special_locator")
+                )
+            )
+
+        candidates = _episodes(raw_rows, True)
         self._validate_rows(candidates)
         selected = [
             row for row in candidates
@@ -233,6 +271,10 @@ class StrictStructuralSimklMediatorEndpoint(SimklMediatorEndpoint):
                 )
             )
 
+        evidence = self._target_evidence(
+            target, structural_owner, "watchlist_special_locator_exact_id_verified"
+        )
+        evidence["special_exact_id_matches"] = exact_matches
         return {
             "provider_path": "simkl",
             "provider_id": None,
@@ -242,7 +284,7 @@ class StrictStructuralSimklMediatorEndpoint(SimklMediatorEndpoint):
             "structural_owner": structural_owner,
             "season": {
                 "number": season_number,
-                "number_source": "watchlist_special_locator",
+                "number_source": "watchlist_special_locator_exact_id_verified",
                 "name": item.get("english_name") or item.get("romaji_name"),
                 "media_type": str(item.get("media_format") or "SPECIAL").lower(),
                 "first_episode": first_episode,
@@ -252,9 +294,7 @@ class StrictStructuralSimklMediatorEndpoint(SimklMediatorEndpoint):
             "episodes": selected,
             "relation_path": [reference],
             "special_locator": item.get("special_locator"),
-            "mediation_evidence": self._target_evidence(
-                target, structural_owner, "watchlist_special_locator"
-            ),
+            "mediation_evidence": evidence,
         }
 
     def resolve(self, item, client=None):
