@@ -72,17 +72,18 @@ class MediatorProcessorTests(unittest.TestCase):
         self.assertEqual((1,0,0,0),tuple(
             endpoints[name].calls for name in ("simkl","anilist","mal","kitsu")))
 
-    def test_complete_simkl_owner_is_not_overwritten_by_relation_root(self):
+    def test_complete_simkl_keeps_franchise_and_structure_separate(self):
         simkl=placement("simkl",season=0)
-        simkl["tv_show"].update({"name":"Bleach the Movie","simkl_id":"41066",
-                                  "tvdb_id":"74796"})
+        simkl["tv_show"].update({
+            "name":"Bleach","romaji_name":"BLEACH","simkl_id":"1000",
+            "anilist_id":"269","publish_year":2004})
+        simkl["structural_owner"]={
+            "name":"Bleach the Movie","simkl_id":"41066","tvdb_id":"74796",
+            "source":"simkl_tvdb_crossmap_validated"}
         endpoints={
             "simkl":Endpoint("simkl",simkl),
             "anilist":FranchiseEndpoint("anilist",placement("anilist"),identity={
-                "name":"Bleach","romaji_name":"BLEACH","anilist_id":"269",
-                "mal_id":"269","source_format":"TV","publish_year":2004,
-                "source":"anilist_franchise_relation",
-                "franchise_relation_path":["1686","269"]}),
+                "name":"Other","anilist_id":"999"}),
             "mal":Endpoint("mal",placement("mal")),
             "kitsu":Endpoint("kitsu",placement("kitsu")),
         }
@@ -91,21 +92,31 @@ class MediatorProcessorTests(unittest.TestCase):
 
         self.assertEqual("simkl",result["provider_path"])
         self.assertEqual(0,result["season"]["number"])
-        self.assertEqual("Bleach the Movie",result["tv_show"]["name"])
-        self.assertEqual("41066",result["tv_show"]["simkl_id"])
-        self.assertEqual("74796",result["tv_show"]["tvdb_id"])
-        self.assertIsNone(result["tv_show"].get("anilist_id"))
+        self.assertEqual("Bleach",result["tv_show"]["name"])
+        self.assertEqual("1000",result["tv_show"]["simkl_id"])
+        self.assertEqual("269",result["tv_show"]["anilist_id"])
+        self.assertIsNone(result["tv_show"].get("tvdb_id"))
+        self.assertEqual("Bleach the Movie",result["structural_owner"]["name"])
+        self.assertEqual("41066",result["structural_owner"]["simkl_id"])
+        self.assertEqual("74796",result["structural_owner"]["tvdb_id"])
         self.assertEqual([],endpoints["anilist"].identity_calls)
         self.assertEqual(0,endpoints["anilist"].calls)
 
-    def test_partial_simkl_coverage_borrows_structure_for_complete_source(self):
+    def test_partial_simkl_coverage_borrows_only_structure_for_complete_source(self):
         item=self.item(); item.update({
             "episode_count":3,"media_format":"TV",
             "english_name":"Example","romaji_name":"Example"})
         simkl=placement("simkl",season=5)
-        simkl["tv_show"].update({"name":"Structural Show","simkl_id":"45006",
-                                  "tvdb_id":"102261"})
+        simkl["tv_show"].update({
+            "name":"Relation Root","romaji_name":"Relation Root",
+            "simkl_id":"45006","anilist_id":"5081","publish_year":2009})
+        simkl["structural_owner"]={
+            "name":"Structural Show","simkl_id":"tv-owner","tvdb_id":"102261",
+            "source":"simkl_tvdb_crossmap_validated"}
         anilist=placement("anilist",season=2)
+        anilist["tv_show"].update({
+            "name":"Complete Source Franchise","romaji_name":"Complete Source Franchise",
+            "anilist_id":"2","publish_year":2010})
         anilist["episodes"].append({
             "source_episode_number":3,"episode_number":3,"season_number":2})
         anilist["season"]["last_episode"]=3
@@ -119,13 +130,40 @@ class MediatorProcessorTests(unittest.TestCase):
         result=MediatorProcessor(endpoints=endpoints).resolve(item)
 
         self.assertEqual("anilist",result["provider_path"])
-        self.assertEqual("102261",result["tv_show"]["tvdb_id"])
-        self.assertEqual("45006",result["tv_show"]["simkl_id"])
-        self.assertEqual("Structural Show",result["tv_show"]["name"])
+        self.assertEqual("Complete Source Franchise",result["tv_show"]["name"])
+        self.assertEqual("2",result["tv_show"]["anilist_id"])
+        self.assertEqual(2010,result["tv_show"]["publish_year"])
+        self.assertIsNone(result["tv_show"].get("tvdb_id"))
+        self.assertEqual("102261",result["structural_owner"]["tvdb_id"])
+        self.assertEqual("tv-owner",result["structural_owner"]["simkl_id"])
+        self.assertEqual("Structural Show",result["structural_owner"]["name"])
         self.assertEqual(5,result["season"]["number"])
         self.assertEqual([1,2,3],[row["source_episode_number"] for row in result["episodes"]])
         self.assertEqual(2,result["structural_hint_coverage"]["covered"])
         self.assertEqual(3,result["structural_hint_coverage"]["expected"])
+
+    def test_partial_simkl_tvshow_id_without_structural_owner_is_not_a_hint(self):
+        item=self.item(); item.update({
+            "episode_count":3,"media_format":"TV",
+            "english_name":"Target","romaji_name":"Target"})
+        simkl=placement("simkl",season=5)
+        simkl["tv_show"].update({"tvdb_id":"102261","name":"Legacy Hybrid"})
+        anilist=placement("anilist",season=2)
+        anilist["episodes"].append({
+            "source_episode_number":3,"episode_number":3,"season_number":2})
+        anilist["season"]["last_episode"]=3
+        endpoints={
+            "simkl":Endpoint("simkl",simkl),
+            "anilist":Endpoint("anilist",anilist),
+            "mal":Endpoint("mal",error="unavailable"),
+            "kitsu":Endpoint("kitsu",error="unused"),
+        }
+
+        result=MediatorProcessor(endpoints=endpoints).resolve(item)
+
+        self.assertEqual(1,result["season"]["number"])
+        self.assertIsNone(result.get("structural_owner"))
+        self.assertEqual("Target",result["tv_show"]["name"])
 
     def test_conflicted_stored_simkl_id_is_bypassed(self):
         endpoints={name:Endpoint(name,placement(name)) for name in ("simkl","anilist","mal","kitsu")}
