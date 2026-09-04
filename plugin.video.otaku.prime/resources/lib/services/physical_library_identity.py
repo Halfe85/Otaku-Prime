@@ -49,7 +49,8 @@ class PhysicalLibraryIdentityRegistry:
 
     def initialize(self):
         with self._connection() as db:
-            db.execute("""CREATE TABLE IF NOT EXISTS prime_physical_directories(
+            db.executescript("""
+            CREATE TABLE IF NOT EXISTS prime_physical_directories(
               media_type TEXT NOT NULL CHECK(media_type IN('series','movie')),
               prime_id TEXT NOT NULL,
               directory TEXT NOT NULL,
@@ -59,7 +60,17 @@ class PhysicalLibraryIdentityRegistry:
               updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
               PRIMARY KEY(media_type,prime_id),
               UNIQUE(media_type,directory)
-            )""")
+            );
+            CREATE TABLE IF NOT EXISTS prime_physical_stale_directories(
+              media_type TEXT NOT NULL CHECK(media_type IN('series','movie')),
+              prime_id TEXT NOT NULL,
+              directory TEXT NOT NULL,
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY(media_type,prime_id,directory)
+            );
+            CREATE INDEX IF NOT EXISTS ix_prime_physical_stale_owner
+              ON prime_physical_stale_directories(media_type,prime_id);
+            """)
 
     def media_root(self, media_type):
         if media_type not in MEDIA_ROOTS:
@@ -170,6 +181,26 @@ class PhysicalLibraryIdentityRegistry:
                 (str(media_type), str(prime_id).lower()),).fetchone()
         return dict(row) if row else None
 
+    def pending_cleanup_directories(self, media_type, prime_id):
+        with self._connection() as db:
+            rows = db.execute("""SELECT directory
+              FROM prime_physical_stale_directories
+              WHERE media_type=? AND prime_id=? ORDER BY created_at,directory""",
+                (str(media_type), str(prime_id).lower()),).fetchall()
+        return [str(row["directory"]) for row in rows]
+
+    def _queue_stale(self, media_type, prime_id, directory):
+        path = self._safe_directory(media_type, directory)
+        with self._connection() as db:
+            db.execute("""INSERT OR IGNORE INTO prime_physical_stale_directories(
+              media_type,prime_id,directory) VALUES(?,?,?)""",
+                (str(media_type), str(prime_id).lower(), path))
+            db.execute("""UPDATE prime_physical_directories
+              SET kodi_cleanup_pending=1,updated_at=CURRENT_TIMESTAMP
+              WHERE media_type=? AND prime_id=?""",
+                (str(media_type), str(prime_id).lower()))
+        return path
+
     def _bind(self, media_type, prime_id, directory, cleanup_pending=False):
         path = self._safe_directory(media_type, directory)
         try:
@@ -193,6 +224,9 @@ class PhysicalLibraryIdentityRegistry:
 
     def mark_cleanup_complete(self, media_type, prime_id):
         with self._connection() as db:
+            db.execute("""DELETE FROM prime_physical_stale_directories
+              WHERE media_type=? AND prime_id=?""",
+                (str(media_type), str(prime_id).lower()))
             db.execute("""UPDATE prime_physical_directories
               SET kodi_cleanup_pending=0,updated_at=CURRENT_TIMESTAMP
               WHERE media_type=? AND prime_id=?""",
@@ -200,6 +234,7 @@ class PhysicalLibraryIdentityRegistry:
 
     def clear(self):
         with self._connection() as db:
+            db.execute("DELETE FROM prime_physical_stale_directories")
             db.execute("DELETE FROM prime_physical_directories")
 
     @staticmethod
@@ -219,7 +254,7 @@ class PhysicalLibraryIdentityRegistry:
         shutil.rmtree(source)
 
     def resolve(self, media_type, prime_id, desired_directory):
-        """Return the one canonical directory, migrating/merging stale names."""
+        """Return one canonical directory and persist every stale Kodi path."""
         prime_id = str(prime_id or "").strip().lower()
         if not prime_id:
             raise ValueError("Prime media ID is required for physical projection")
@@ -231,7 +266,10 @@ class PhysicalLibraryIdentityRegistry:
         if mapped_path and os.path.isdir(mapped_path) and mapped_path not in existing:
             existing.insert(0, mapped_path)
 
-        cleanup_pending = bool(mapped and mapped.get("kodi_cleanup_pending"))
+        pending_stale = self.pending_cleanup_directories(media_type, prime_id)
+        cleanup_pending = bool(
+            pending_stale or (mapped and mapped.get("kodi_cleanup_pending"))
+        )
         migrated_from = []
         duplicates_removed = []
 
@@ -247,11 +285,13 @@ class PhysicalLibraryIdentityRegistry:
         if os.path.isdir(canonical) and canonical != desired:
             desired_owner = self.directory_prime_id(media_type, desired) if os.path.isdir(desired) else None
             if not os.path.exists(desired):
+                self._queue_stale(media_type, prime_id, canonical)
                 os.replace(canonical, desired)
                 migrated_from.append(canonical)
                 canonical = desired
                 cleanup_pending = True
             elif desired_owner == prime_id:
+                self._queue_stale(media_type, prime_id, canonical)
                 self._merge_generated_directory(canonical, desired)
                 migrated_from.append(canonical)
                 canonical = desired
@@ -269,10 +309,13 @@ class PhysicalLibraryIdentityRegistry:
                 continue
             if self.directory_prime_id(media_type, duplicate) != prime_id:
                 continue
+            self._queue_stale(media_type, prime_id, duplicate)
             self._merge_generated_directory(duplicate, canonical)
             duplicates_removed.append(duplicate)
             cleanup_pending = True
 
+        stale_directories = self.pending_cleanup_directories(media_type, prime_id)
+        cleanup_pending = bool(cleanup_pending or stale_directories)
         self._bind(
             media_type, prime_id, canonical,
             cleanup_pending=cleanup_pending,
@@ -284,6 +327,7 @@ class PhysicalLibraryIdentityRegistry:
             "desired_directory": desired,
             "migrated_from": migrated_from,
             "duplicates_removed": duplicates_removed,
+            "stale_directories": stale_directories,
             "kodi_cleanup_pending": cleanup_pending,
         }
 
