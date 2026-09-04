@@ -1,44 +1,101 @@
 # -*- coding: utf-8 -*-
-"""Final runtime composition for Prime TV and Movies physical libraries."""
+"""Final runtime composition for stable Prime TV and Movies physical libraries."""
 from __future__ import annotations
 
 import os
 
 from resources.lib.logging_config import get_logger
 from resources.lib.services.age_content_policy import AgeContentPolicyStore
-from resources.lib.services.kodi_age_gate import (
-    remove_movie_from_kodi,
-    remove_prime_directory,
-    remove_tvshow_from_kodi,
+from resources.lib.services.kodi_age_gate import remove_prime_directory
+from resources.lib.services.kodi_prime_cleanup import (
+    remove_all_prime_video,
+    remove_prime_movies,
+    remove_prime_tvshows,
 )
 from resources.lib.services.kodi_scan_reliable import ReliableKodiVideoLibraryScanQueue
 from resources.lib.services.kodi_scan_verify_prime import verify_prime_movie, verify_prime_series
+from resources.lib.services.physical_library_identity import MEDIA_MOVIE, MEDIA_SERIES
+from resources.lib.services.prime_physical import safe_library_name
 from resources.lib.services.runtime_prime_movie_physical import RuntimePrimeMoviePhysicalSupport
-from resources.lib.services.runtime_prime_physical import RuntimePrimePhysicalService
+from resources.lib.services.runtime_prime_physical_identity import IdentityRuntimePrimePhysicalService
 
 
 LOGGER = get_logger(__name__)
 
 
 class PolicyAwarePrimeMoviePhysicalSupport(RuntimePrimeMoviePhysicalSupport):
+    """Movies projection with age policy and persistent Prime directory identity."""
+
     def __init__(self, physical, age_policy, artwork_store=None):
         super().__init__(physical, artwork_store=artwork_store)
         self.age_policy = age_policy
 
+    def _directory_info(self, movie_id):
+        desired = super().movie_directory(movie_id)
+        if not desired:
+            return None
+        return self.physical.resolve_movie_directory(movie_id, desired)
+
+    def movie_directory(self, movie_id):
+        info = self._directory_info(movie_id)
+        return info.get("directory") if info else None
+
+    def _cleanup_kodi_identity(self, movie_id, info):
+        if not info or not info.get("kodi_cleanup_pending"):
+            return {"required": False, "removed": 0}
+        stale = list(info.get("migrated_from") or []) + list(
+            info.get("duplicates_removed") or []
+        )
+        try:
+            result = remove_prime_movies(movie_id, directories=stale)
+            self.physical.physical_identity.mark_cleanup_complete(MEDIA_MOVIE, movie_id)
+            result["required"] = True
+            return result
+        except Exception as exc:
+            self.physical._identity_cleanup_failed = True
+            LOGGER.exception(
+                "Prime could not remove stale Kodi rows before re-projecting movie %s",
+                movie_id,
+            )
+            return {
+                "required": True, "removed": 0, "failed": True,
+                "error": str(exc),
+            }
+
     def project_movie(self, movie_id, now_epoch):
         movie = self._movie_row(movie_id)
-        if movie:
+        if movie and self.age_policy is not None:
             decision = self.age_policy.evaluate(movie)
             if not decision["kodi_allowed"]:
                 return self.physical._exclude_movie_from_kodi(movie, decision)
-        result = super().project_movie(movie_id, now_epoch)
-        if movie and not result.get("missing"):
+        if not movie:
+            return super().project_movie(movie_id, now_epoch)
+
+        info = self._directory_info(movie["local_id"])
+        directory = info["directory"]
+        cleanup = self._cleanup_kodi_identity(movie["local_id"], info)
+        os.makedirs(directory, exist_ok=True)
+        title = safe_library_name(
+            movie.get("english_name") or movie.get("romaji_name") or movie.get("title"),
+            fallback="Untitled {}".format(movie["local_id"]),
+        )
+        stem = "{} {}".format(title, self._movie_year(movie))
+        expected_strm = os.path.join(directory, stem + ".strm")
+        expected_nfo = os.path.join(directory, stem + ".nfo")
+        pruned = self.physical.physical_identity.prune_movie_files(
+            movie["local_id"], directory, expected_strm, expected_nfo
+        )
+        result = super().project_movie(movie["local_id"], now_epoch)
+        result["directory_identity"] = info
+        result["kodi_identity_cleanup"] = cleanup
+        result["pruned"] = pruned
+        if self.age_policy is not None and not result.get("missing"):
             result["age_policy"] = self.age_policy.evaluate(movie)
         return result
 
 
-class RuntimePrimePhysicalMoviesService(RuntimePrimePhysicalService):
-    """Reliable Kodi scans, local-ID STRMs, and administrator age admission policy."""
+class RuntimePrimePhysicalMoviesService(IdentityRuntimePrimePhysicalService):
+    """Stable physical identity, reliable Kodi scans, and age admission policy."""
 
     def __init__(self, *args, artwork_store=None, **kwargs):
         injected_scan_queue = kwargs.get("scan_queue")
@@ -58,69 +115,77 @@ class RuntimePrimePhysicalMoviesService(RuntimePrimePhysicalService):
             )
         self._movies = PolicyAwarePrimeMoviePhysicalSupport(
             self, self._age_policy, artwork_store=artwork_store
-        ) if self._age_policy is not None else RuntimePrimeMoviePhysicalSupport(
-            self, artwork_store=artwork_store
         )
 
     def age_policy_state(self):
         return self._age_policy.state() if self._age_policy is not None else None
 
     def rebuild_structural_catalog_if_required(self):
-        """Remove old generated projection, then requeue sources for mediation."""
+        """Perform one ID-based physical/Kodi cleanup before catalogue re-mediation."""
         checker = getattr(self.catalog_store, "structural_rebuild_required", None)
         resetter = getattr(self.catalog_store, "reset_structural_projection", None)
         if not checker or not resetter or not checker():
             return {"rebuilt": False, "required": False}
 
-        series_rows = list(self.catalog_store.list_series() or [])
-        movie_getter = getattr(self.catalog_store, "library_movies", None)
-        movie_rows = list(movie_getter() or []) if movie_getter else []
         failures = []
+        tv_directories = list(self.physical_identity.discover(MEDIA_SERIES))
+        movie_directories = list(self.physical_identity.discover(MEDIA_MOVIE))
 
-        for series in series_rows:
-            series_id = str(series.get("local_id") or "")
-            directory = self._series_directory(series_id)
+        # Remove every Kodi row that advertises a Prime unique ID. This also
+        # catches historical paths whose physical directory has already vanished.
+        try:
+            kodi = remove_all_prime_video()
+        except Exception as exc:
+            failures.append("Kodi Prime cleanup: {}".format(exc))
+            kodi = {"removed": 0, "error": str(exc)}
+            LOGGER.exception("Could not remove old Prime rows from Kodi before rebuild")
+
+        for entry in tv_directories:
             try:
-                if directory:
-                    remove_tvshow_from_kodi(series_id, directory)
-                    remove_prime_directory(directory, os.path.join(self.root_path, "TV-Series"))
+                remove_prime_directory(
+                    entry["directory"], os.path.join(self.root_path, "TV-Series")
+                )
             except Exception as exc:
-                failures.append("series {}: {}".format(series_id, exc))
+                failures.append("TV {}: {}".format(entry["directory"], exc))
                 LOGGER.exception(
-                    "Could not remove old Prime TV projection before structural rebuild: %s",
-                    series_id,
+                    "Could not remove Prime-owned TV directory before rebuild: %s",
+                    entry["directory"],
                 )
 
-        for movie in movie_rows:
-            movie_id = str(movie.get("local_id") or "")
-            directory = self._movies.movie_directory(movie_id)
+        for entry in movie_directories:
             try:
-                if directory:
-                    remove_movie_from_kodi(movie_id, directory)
-                    remove_prime_directory(directory, os.path.join(self.root_path, "Movies"))
+                remove_prime_directory(
+                    entry["directory"], os.path.join(self.root_path, "Movies")
+                )
             except Exception as exc:
-                failures.append("movie {}: {}".format(movie_id, exc))
+                failures.append("Movie {}: {}".format(entry["directory"], exc))
                 LOGGER.exception(
-                    "Could not remove old Prime movie projection before structural rebuild: %s",
-                    movie_id,
+                    "Could not remove Prime-owned movie directory before rebuild: %s",
+                    entry["directory"],
                 )
 
         if failures:
             LOGGER.error(
-                "Structural mediator rebuild postponed because generated library cleanup failed: %s",
+                "Prime identity rebuild postponed because cleanup failed: %s",
                 "; ".join(failures),
             )
             return {
-                "rebuilt": False,
-                "required": True,
-                "cleanup_failed": True,
-                "failures": failures,
+                "rebuilt": False, "required": True, "cleanup_failed": True,
+                "failures": failures, "kodi": kodi,
+                "physical_tv": len(tv_directories),
+                "physical_movies": len(movie_directories),
             }
 
+        self.physical_identity.clear()
         result = resetter()
-        result["required"] = True
+        result.update({
+            "required": True,
+            "kodi": kodi,
+            "physical_tv": len(tv_directories),
+            "physical_movies": len(movie_directories),
+        })
         LOGGER.warning(
-            "Prime generated library cleared for structural re-mediation: %s",
+            "Prime generated library removed by NFO/Prime identity for controlled rebuild: %s",
             result,
         )
         return result
@@ -131,78 +196,109 @@ class RuntimePrimePhysicalMoviesService(RuntimePrimePhysicalService):
             return series, None
         return series, self._age_policy.evaluate(series)
 
+    def _known_series_directories(self, series_id):
+        rows = self.physical_identity.discover(MEDIA_SERIES, prime_id=series_id)
+        mapped = self.physical_identity.mapped(MEDIA_SERIES, series_id)
+        result = [row["directory"] for row in rows]
+        if mapped and mapped.get("directory") not in result:
+            result.append(mapped["directory"])
+        return result
+
+    def _known_movie_directories(self, movie_id):
+        rows = self.physical_identity.discover(MEDIA_MOVIE, prime_id=movie_id)
+        mapped = self.physical_identity.mapped(MEDIA_MOVIE, movie_id)
+        result = [row["directory"] for row in rows]
+        if mapped and mapped.get("directory") not in result:
+            result.append(mapped["directory"])
+        return result
+
     def _exclude_series_from_kodi(self, series, decision):
         series_id = str(series.get("local_id") or "")
-        directory = self._series_directory(series_id)
-        kodi = {"removed": False, "reason": "not_checked"}
-        if directory:
+        directories = self._known_series_directories(series_id)
+        try:
+            kodi = remove_prime_tvshows(series_id, directories=directories)
+        except Exception as exc:
+            kodi = {"removed": 0, "error": str(exc)}
+            LOGGER.exception("Kodi age policy could not remove Prime TV show %s", series_id)
+        removed = []
+        for directory in directories:
             try:
-                kodi = remove_tvshow_from_kodi(series_id, directory)
-            except Exception:
-                LOGGER.exception("Kodi age policy could not remove Prime TV show %s", series_id)
-            try:
-                physical = remove_prime_directory(
+                result = remove_prime_directory(
                     directory, os.path.join(self.root_path, "TV-Series")
                 )
-            except Exception as exc:
-                physical = {"removed": False, "error": str(exc)}
-                LOGGER.exception("Prime age policy could not remove physical TV show %s", series_id)
-        else:
-            physical = {"removed": False, "reason": "directory_unknown"}
+                if result.get("removed"):
+                    removed.append(directory)
+            except Exception:
+                LOGGER.exception(
+                    "Prime age policy could not remove physical TV show %s at %s",
+                    series_id, directory,
+                )
         return {
             "series_id": series_id, "missing": False, "blocked": True,
-            "age_policy": decision, "kodi_remove": kodi, "physical_remove": physical,
+            "age_policy": decision, "kodi_remove": kodi,
+            "physical_remove": {"removed": len(removed), "directories": removed},
         }
 
     def _exclude_movie_from_kodi(self, movie, decision):
         movie_id = str(movie.get("local_id") or "")
-        directory = self._movies.movie_directory(movie_id) if hasattr(self, "_movies") else None
-        kodi = {"removed": False, "reason": "not_checked"}
-        if directory:
+        directories = self._known_movie_directories(movie_id)
+        try:
+            kodi = remove_prime_movies(movie_id, directories=directories)
+        except Exception as exc:
+            kodi = {"removed": 0, "error": str(exc)}
+            LOGGER.exception("Kodi age policy could not remove Prime movie %s", movie_id)
+        removed = []
+        for directory in directories:
             try:
-                kodi = remove_movie_from_kodi(movie_id, directory)
-            except Exception:
-                LOGGER.exception("Kodi age policy could not remove Prime movie %s", movie_id)
-            try:
-                physical = remove_prime_directory(
+                result = remove_prime_directory(
                     directory, os.path.join(self.root_path, "Movies")
                 )
-            except Exception as exc:
-                physical = {"removed": False, "error": str(exc)}
-                LOGGER.exception("Prime age policy could not remove physical movie %s", movie_id)
-        else:
-            physical = {"removed": False, "reason": "directory_unknown"}
+                if result.get("removed"):
+                    removed.append(directory)
+            except Exception:
+                LOGGER.exception(
+                    "Prime age policy could not remove physical movie %s at %s",
+                    movie_id, directory,
+                )
         return {
             "movie_id": movie_id, "missing": False, "blocked": True,
-            "age_policy": decision, "kodi_remove": kodi, "physical_remove": physical,
+            "age_policy": decision, "kodi_remove": kodi,
+            "physical_remove": {"removed": len(removed), "directories": removed},
         }
 
     def project_series(self, series_id, _log_result=True):
         series, decision = self._series_policy(series_id)
         if series is not None and decision is not None and not decision["kodi_allowed"]:
             return self._exclude_series_from_kodi(series, decision)
-
-        directory = self._series_directory(series_id)
-        preprojected = None
-        if directory:
-            preprojected = self._strm_writer.write_series(
-                series_id, directory, now_epoch=int(self._now())
-            )
-
         result = super().project_series(series_id, _log_result=_log_result)
-        if preprojected is not None and not result.get("missing"):
-            result["strm"] = preprojected
         if decision is not None and not result.get("missing"):
             result["age_policy"] = decision
         return result
 
     def project_movie(self, movie_id):
-        movie = self._movies._movie_row(movie_id)
-        if movie is not None and self._age_policy is not None:
-            decision = self._age_policy.evaluate(movie)
-            if not decision["kodi_allowed"]:
-                return self._exclude_movie_from_kodi(movie, decision)
-        return super().project_movie(movie_id)
+        # Avoid RuntimePrimePhysicalService.project_movie because it queues a
+        # scan before we can inspect identity-cleanup status.
+        result = self._movies.project_movie(movie_id, now_epoch=int(self._now()))
+        directory = result.get("directory")
+        cleanup = result.get("kodi_identity_cleanup") or {}
+        if (
+            not self._bulk_projection
+            and not result.get("missing")
+            and not result.get("future")
+            and not result.get("blocked")
+            and directory
+            and os.path.isdir(directory)
+        ):
+            if cleanup.get("failed"):
+                result["scan"] = {
+                    "queued": False, "path": directory,
+                    "reason": "prime_identity_cleanup_pending",
+                }
+            else:
+                result["scan"] = self.request_kodi_scan(
+                    directory, reason="mediator_movie"
+                )
+        return result
 
     def _purge_blocked_before_startup_scan(self):
         if self._age_policy is None:
