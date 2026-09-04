@@ -8,12 +8,15 @@ commit, physical projection, or a terminal failure.
 from __future__ import annotations
 
 import json
+import threading
 
 from resources.lib.logging_config import get_logger
 
 
 LOGGER = get_logger(__name__)
 _SENSITIVE_MARKERS = ("token", "password", "secret", "cookie", "authorization", "credential")
+_SEQUENCE_LOCK = threading.Lock()
+_SEQUENCES = {}
 
 
 def _redact(value, key=None):
@@ -39,15 +42,23 @@ def _json(value):
 class MediatorTrace:
     """Emit one stable trace stream for a single Prime watchlist item."""
 
-    def __init__(self, watchlist_local_id):
+    def __init__(self, watchlist_local_id, reset=False):
         self.watchlist_local_id = str(watchlist_local_id or "UNKNOWN")
-        self.sequence = 0
+        if reset:
+            with _SEQUENCE_LOCK:
+                _SEQUENCES[self.watchlist_local_id] = 0
+
+    def _next_sequence(self):
+        with _SEQUENCE_LOCK:
+            value = int(_SEQUENCES.get(self.watchlist_local_id, 0)) + 1
+            _SEQUENCES[self.watchlist_local_id] = value
+            return value
 
     def _emit(self, level, stage, event, facts=None, reason=None):
-        self.sequence += 1
+        sequence = self._next_sequence()
         parts = [
             "MEDIATOR[{}]".format(self.watchlist_local_id),
-            "seq={:03d}".format(self.sequence),
+            "seq={:03d}".format(sequence),
             "stage={}".format(str(stage or "unknown")),
             "event={}".format(str(event or "unknown")),
         ]
