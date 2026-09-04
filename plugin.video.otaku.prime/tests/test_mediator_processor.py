@@ -1,291 +1,202 @@
 import unittest
 
 from resources.lib.services.mediator_processor import MediatorProcessor
-from resources.lib.services.mediator_helper_simkl import MediatorMetadataPending
-from resources.lib.services.mediator_helper_simkl import SimklMediatorClient
+from resources.lib.services.mediator_helper_simkl import (
+    MediatorMetadataPending,
+    MediatorPlacementError,
+)
 from resources.lib.service_lifecycle import ServiceWorkHalted
 
 
 class Endpoint:
-    def __init__(self,name,result=None,error=None): self.name=name; self.result=result; self.error=error; self.calls=0
-    def available(self,item): return item.get(self.name+"_id") is not None
-    def resolve(self,item):
-        self.calls+=1
-        if self.error: raise RuntimeError(self.error)
+    def __init__(self, result=None, error=None):
+        self.result = result
+        self.error = error
+        self.calls = 0
+
+    def available(self, item):
+        return item.get("simkl_id") is not None
+
+    def resolve(self, item):
+        self.calls += 1
+        if self.error:
+            raise self.error
         return dict(self.result)
 
 
-class PendingEndpoint(Endpoint):
-    def resolve(self,item):
-        self.calls+=1
-        raise MediatorMetadataPending(
-            self.error or self.name+" episode metadata pending",
-            placement=self.result)
-
-
-class FranchiseEndpoint(Endpoint):
-    def __init__(self,name,result=None,error=None,identity=None):
-        super().__init__(name,result,error); self.identity=identity; self.identity_calls=[]
-    def franchise_identity(self,provider_id):
-        self.identity_calls.append(str(provider_id)); return dict(self.identity)
-
-
-def placement(provider,season=1):
-    return {"provider_path":provider,"provider_id":provider,"tv_show":{"name":"Show","romaji_name":"Show"},
-      "season":{"number":season,"number_source":provider,"name":"Show","first_episode":1,"last_episode":2},
-      "episodes":[{"source_episode_number":1,"episode_number":1,"season_number":season},
-                  {"source_episode_number":2,"episode_number":2,"season_number":season}]}
+def placement():
+    return {
+        "provider_path": "simkl",
+        "provider_id": "100",
+        "provider_reference_id": None,
+        "library_type": "series",
+        "tv_show": {
+            "name": "Old relation root",
+            "romaji_name": "Old relation root",
+            "simkl_id": "11",
+            "anilist_id": "22",
+            "mal_id": "33",
+            "kitsu_id": "44",
+            "source": "simkl_relation_root",
+        },
+        "structural_owner": {
+            "name": "TVDB Owner",
+            "simkl_id": "900",
+            "tvdb_id": "74796",
+            "source": "simkl_tvdb_crossmap_validated",
+        },
+        "season": {
+            "number": 17,
+            "number_source": "mapped_tvdb_seasons",
+            "name": "Part",
+            "first_episode": 1,
+            "last_episode": 2,
+            "structural_season_number": 17,
+        },
+        "episodes": [
+            {"source_episode_number": 1, "season_number": 17, "episode_number": 1},
+            {"source_episode_number": 2, "season_number": 17, "episode_number": 2},
+        ],
+        "relation_path": ["11", "100"],
+    }
 
 
 class MediatorProcessorTests(unittest.TestCase):
-    def item(self): return {"local_id":"x","simkl_id":"1","anilist_id":"2","mal_id":"3","kitsu_id":"4"}
+    def item(self):
+        return {
+            "local_id": "abcdef",
+            "simkl_id": "100",
+            "anilist_id": "22",
+            "mal_id": "33",
+            "kitsu_id": "44",
+            "media_format": "TV",
+            "episode_count": 2,
+        }
 
-    def test_production_network_timeout_reaches_every_native_endpoint(self):
-        processor=MediatorProcessor(
-            simkl_client=SimklMediatorClient(timeout=3),network_timeout=3)
-        self.assertEqual(3,processor.endpoints["simkl"].client.timeout)
-        self.assertEqual(3,processor.endpoints["anilist"].client.timeout)
-        self.assertEqual(3,processor.endpoints["mal"].client.timeout)
-        self.assertEqual(3,processor.endpoints["kitsu"].client.timeout)
+    def test_production_processor_constructs_only_simkl_endpoint(self):
+        processor = MediatorProcessor(network_timeout=3)
+        self.assertEqual({"simkl"}, set(processor.endpoints))
+        self.assertEqual(3, processor.endpoints["simkl"].client.timeout)
 
-    def test_simkl_wins_without_calling_other_endpoints(self):
-        endpoints={name:Endpoint(name,placement(name)) for name in ("simkl","anilist","mal","kitsu")}
-        result=MediatorProcessor(endpoints=endpoints).resolve(self.item())
-        self.assertEqual("simkl",result["provider_path"])
-        self.assertEqual((1,0,0,0),tuple(endpoints[name].calls for name in ("simkl","anilist","mal","kitsu")))
+    def test_simkl_is_the_only_live_provider_path(self):
+        simkl = Endpoint(result=placement())
+        ignored = Endpoint(result=placement())
+        processor = MediatorProcessor(endpoints={"simkl": simkl, "anilist": ignored})
 
-    def test_halt_after_provider_response_prevents_fallback_requests(self):
-        halted=[False]
-        class HaltingEndpoint(Endpoint):
-            def resolve(self,item):
-                self.calls+=1; halted[0]=True
-                raise RuntimeError("request ended during shutdown")
-        endpoints={name:Endpoint(name,placement(name))
-                   for name in ("simkl","anilist","mal","kitsu")}
-        endpoints["simkl"]=HaltingEndpoint("simkl")
+        result = processor.resolve(self.item())
 
-        with self.assertRaises(ServiceWorkHalted):
+        self.assertEqual(1, simkl.calls)
+        self.assertEqual(0, ignored.calls)
+        self.assertEqual("simkl", result["provider_path"])
+
+    def test_simkl_failure_is_terminal_and_keeps_reason(self):
+        simkl = Endpoint(error=RuntimeError("HTTP 503"))
+        ignored = Endpoint(result=placement())
+        processor = MediatorProcessor(endpoints={"simkl": simkl, "anilist": ignored})
+
+        with self.assertRaises(MediatorPlacementError) as caught:
+            processor.resolve(self.item())
+
+        self.assertIn("Simkl mediation failed", str(caught.exception))
+        self.assertIn("HTTP 503", str(caught.exception))
+        self.assertEqual(1, simkl.calls)
+        self.assertEqual(0, ignored.calls)
+
+    def test_missing_simkl_identity_is_terminal(self):
+        item = self.item()
+        item["simkl_id"] = None
+        endpoint = Endpoint(result=placement())
+
+        with self.assertRaises(MediatorPlacementError) as caught:
+            MediatorProcessor(endpoints={"simkl": endpoint}).resolve(item)
+
+        self.assertIn("no usable Simkl identity", str(caught.exception))
+        self.assertEqual(0, endpoint.calls)
+
+    def test_conflicted_exact_identity_is_not_bypassed(self):
+        item = self.item()
+        item["identity_resolution_status"] = "CONFLICT_EXACT"
+        endpoint = Endpoint(result=placement())
+
+        with self.assertRaises(MediatorPlacementError) as caught:
+            MediatorProcessor(endpoints={"simkl": endpoint}).resolve(item)
+
+        self.assertIn("conflicted", str(caught.exception))
+        self.assertEqual(0, endpoint.calls)
+
+    def test_incomplete_simkl_coverage_is_deferred_without_fallback(self):
+        item = self.item()
+        item["episode_count"] = 3
+        endpoint = Endpoint(result=placement())
+
+        with self.assertRaises(MediatorMetadataPending) as caught:
+            MediatorProcessor(endpoints={"simkl": endpoint}).resolve(item)
+
+        self.assertIn("covered 2 of 3", str(caught.exception))
+        self.assertEqual("simkl", caught.exception.placement["provider_path"])
+
+    def test_tv_series_requires_tvdb_structural_owner(self):
+        value = placement()
+        value["structural_owner"] = {"name": "Unknown", "tvdb_id": None}
+
+        with self.assertRaises(MediatorPlacementError) as caught:
+            MediatorProcessor(endpoints={"simkl": Endpoint(result=value)}).resolve(self.item())
+
+        self.assertIn("TVDB structural series owner", str(caught.exception))
+
+    def test_every_source_episode_requires_explicit_tvdb_coordinate(self):
+        value = placement()
+        value["episodes"][1]["episode_number"] = None
+
+        with self.assertRaises(MediatorPlacementError) as caught:
+            MediatorProcessor(endpoints={"simkl": Endpoint(result=value)}).resolve(self.item())
+
+        self.assertIn("explicit TVDB coordinates", str(caught.exception))
+        self.assertIn("2", str(caught.exception))
+
+    def test_tvdb_owner_replaces_relation_root_as_catalogue_owner(self):
+        result = MediatorProcessor(
+            endpoints={"simkl": Endpoint(result=placement())}
+        ).resolve(self.item())
+
+        show = result["tv_show"]
+        self.assertEqual("TVDB Owner", show["name"])
+        self.assertEqual("74796", show["tvdb_id"])
+        self.assertIsNone(show["simkl_id"])
+        self.assertIsNone(show["anilist_id"])
+        self.assertIsNone(show["mal_id"])
+        self.assertIsNone(show["kitsu_id"])
+        self.assertEqual("simkl_tvdb_structural_owner", show["source"])
+        self.assertNotIn("relation_path", result)
+
+    def test_trace_records_relation_path_before_it_is_discarded(self):
+        with self.assertLogs("otaku_prime.services-mediator_trace", level="INFO") as logs:
             MediatorProcessor(
-                endpoints=endpoints,halt_requested=lambda:halted[0]
+                endpoints={"simkl": Endpoint(result=placement())}
             ).resolve(self.item())
 
-        self.assertEqual((1,0,0,0),tuple(
-            endpoints[name].calls for name in ("simkl","anilist","mal","kitsu")))
+        combined = "\n".join(logs.output)
+        self.assertIn("MEDIATOR[abcdef]", combined)
+        self.assertIn("PLACEMENT_DISCOVERED", combined)
+        self.assertIn("simkl_relation_path_observed", combined)
+        self.assertIn("74796", combined)
 
-    def test_complete_simkl_keeps_franchise_and_structure_separate(self):
-        simkl=placement("simkl",season=0)
-        simkl["tv_show"].update({
-            "name":"Bleach","romaji_name":"BLEACH","simkl_id":"1000",
-            "anilist_id":"269","publish_year":2004})
-        simkl["structural_owner"]={
-            "name":"Bleach the Movie","simkl_id":"41066","tvdb_id":"74796",
-            "source":"simkl_tvdb_crossmap_validated"}
-        endpoints={
-            "simkl":Endpoint("simkl",simkl),
-            "anilist":FranchiseEndpoint("anilist",placement("anilist"),identity={
-                "name":"Other","anilist_id":"999"}),
-            "mal":Endpoint("mal",placement("mal")),
-            "kitsu":Endpoint("kitsu",placement("kitsu")),
-        }
+    def test_shutdown_checkpoint_remains_terminal(self):
+        halted = [False]
 
-        result=MediatorProcessor(endpoints=endpoints).resolve(self.item())
+        class HaltingEndpoint(Endpoint):
+            def resolve(self, item):
+                self.calls += 1
+                halted[0] = True
+                return dict(self.result)
 
-        self.assertEqual("simkl",result["provider_path"])
-        self.assertEqual(0,result["season"]["number"])
-        self.assertEqual("Bleach",result["tv_show"]["name"])
-        self.assertEqual("1000",result["tv_show"]["simkl_id"])
-        self.assertEqual("269",result["tv_show"]["anilist_id"])
-        self.assertIsNone(result["tv_show"].get("tvdb_id"))
-        self.assertEqual("Bleach the Movie",result["structural_owner"]["name"])
-        self.assertEqual("41066",result["structural_owner"]["simkl_id"])
-        self.assertEqual("74796",result["structural_owner"]["tvdb_id"])
-        self.assertEqual([],endpoints["anilist"].identity_calls)
-        self.assertEqual(0,endpoints["anilist"].calls)
-
-    def test_partial_simkl_coverage_borrows_only_structure_for_complete_source(self):
-        item=self.item(); item.update({
-            "episode_count":3,"media_format":"TV",
-            "english_name":"Example","romaji_name":"Example"})
-        simkl=placement("simkl",season=5)
-        simkl["tv_show"].update({
-            "name":"Relation Root","romaji_name":"Relation Root",
-            "simkl_id":"45006","anilist_id":"5081","publish_year":2009})
-        simkl["structural_owner"]={
-            "name":"Structural Show","simkl_id":"tv-owner","tvdb_id":"102261",
-            "source":"simkl_tvdb_crossmap_validated"}
-        anilist=placement("anilist",season=2)
-        anilist["tv_show"].update({
-            "name":"Complete Source Franchise","romaji_name":"Complete Source Franchise",
-            "anilist_id":"2","publish_year":2010})
-        anilist["episodes"].append({
-            "source_episode_number":3,"episode_number":3,"season_number":2})
-        anilist["season"]["last_episode"]=3
-        endpoints={
-            "simkl":Endpoint("simkl",simkl),
-            "anilist":Endpoint("anilist",anilist),
-            "mal":Endpoint("mal",error="unavailable"),
-            "kitsu":Endpoint("kitsu",error="unused"),
-        }
-
-        result=MediatorProcessor(endpoints=endpoints).resolve(item)
-
-        self.assertEqual("anilist",result["provider_path"])
-        self.assertEqual("Complete Source Franchise",result["tv_show"]["name"])
-        self.assertEqual("2",result["tv_show"]["anilist_id"])
-        self.assertEqual(2010,result["tv_show"]["publish_year"])
-        self.assertIsNone(result["tv_show"].get("tvdb_id"))
-        self.assertEqual("102261",result["structural_owner"]["tvdb_id"])
-        self.assertEqual("tv-owner",result["structural_owner"]["simkl_id"])
-        self.assertEqual("Structural Show",result["structural_owner"]["name"])
-        self.assertEqual(5,result["season"]["number"])
-        self.assertEqual([1,2,3],[row["source_episode_number"] for row in result["episodes"]])
-        self.assertEqual(2,result["structural_hint_coverage"]["covered"])
-        self.assertEqual(3,result["structural_hint_coverage"]["expected"])
-
-    def test_partial_simkl_tvshow_id_without_structural_owner_is_not_a_hint(self):
-        item=self.item(); item.update({
-            "episode_count":3,"media_format":"TV",
-            "english_name":"Target","romaji_name":"Target"})
-        simkl=placement("simkl",season=5)
-        simkl["tv_show"].update({"tvdb_id":"102261","name":"Legacy Hybrid"})
-        anilist=placement("anilist",season=2)
-        anilist["episodes"].append({
-            "source_episode_number":3,"episode_number":3,"season_number":2})
-        anilist["season"]["last_episode"]=3
-        endpoints={
-            "simkl":Endpoint("simkl",simkl),
-            "anilist":Endpoint("anilist",anilist),
-            "mal":Endpoint("mal",error="unavailable"),
-            "kitsu":Endpoint("kitsu",error="unused"),
-        }
-
-        result=MediatorProcessor(endpoints=endpoints).resolve(item)
-
-        self.assertEqual(1,result["season"]["number"])
-        self.assertIsNone(result.get("structural_owner"))
-        self.assertEqual("Target",result["tv_show"]["name"])
-
-    def test_conflicted_stored_simkl_id_is_bypassed(self):
-        endpoints={name:Endpoint(name,placement(name)) for name in ("simkl","anilist","mal","kitsu")}
-        item=self.item(); item["identity_resolution_status"]="CONFLICT_EXACT"
-        result=MediatorProcessor(endpoints=endpoints).resolve(item)
-        self.assertEqual("anilist+mal",result["provider_path"]); self.assertEqual(0,endpoints["simkl"].calls)
-
-    def test_anilist_and_mal_are_combined_when_simkl_fails(self):
-        endpoints={"simkl":Endpoint("simkl",error="down"),"anilist":Endpoint("anilist",placement("anilist")),
-                   "mal":Endpoint("mal",placement("mal")),"kitsu":Endpoint("kitsu",placement("kitsu"))}
-        result=MediatorProcessor(endpoints=endpoints).resolve(self.item())
-        self.assertEqual("anilist+mal",result["provider_path"]); self.assertEqual(["anilist","mal"],result["provider_consensus"])
-        self.assertEqual(0,endpoints["kitsu"].calls)
-
-    def test_anilist_and_mal_metadata_lists_are_combined_and_mature_is_orred(self):
-        anilist=placement("anilist"); mal=placement("mal")
-        anilist["tv_show"].update({"genres":["Action"],"themes":["Isekai"],
-                                    "mature":False})
-        mal["tv_show"].update({"genres":["Action","Fantasy"],"themes":[],
-                                "age_rating":"R+","mature":True})
-        endpoints={"simkl":Endpoint("simkl",error="down"),
-                   "anilist":Endpoint("anilist",anilist),"mal":Endpoint("mal",mal),
-                   "kitsu":Endpoint("kitsu",error="unused")}
-
-        show=MediatorProcessor(endpoints=endpoints).resolve(self.item())["tv_show"]
-
-        self.assertEqual(["Action","Fantasy"],show["genres"])
-        self.assertEqual(["Isekai"],show["themes"])
-        self.assertEqual("R+",show["age_rating"])
-        self.assertTrue(show["mature"])
-
-    def test_anilist_composite_accepts_partial_mal_episode_coverage(self):
-        anilist=placement("anilist",season=0)
-        mal=placement("mal",season=0); mal["episodes"]=mal["episodes"][:1]
-        mal["season"]["last_episode"]=1
-        endpoints={"simkl":Endpoint("simkl",error="not listed"),
-                   "anilist":Endpoint("anilist",anilist),"mal":Endpoint("mal",mal),
-                   "kitsu":Endpoint("kitsu",error="not listed")}
-        result=MediatorProcessor(endpoints=endpoints).resolve(self.item())
-        self.assertEqual("anilist+mal",result["provider_path"])
-        self.assertEqual([1,2],[row["episode_number"] for row in result["episodes"]])
-        self.assertEqual("partial_episode_coverage",result["provider_consensus_scope"])
-        self.assertEqual({"anilist":[1,2],"mal":[1]},result["provider_coverage"])
-        self.assertEqual(0,endpoints["kitsu"].calls)
-
-    def test_anilist_remains_authoritative_when_mal_numbers_specials_differently(self):
-        anilist=placement("anilist",season=0)
-        mal=placement("mal",season=0)
-        for row in mal["episodes"]: row["episode_number"]+=1
-        endpoints={"simkl":Endpoint("simkl",error="not listed"),
-                   "anilist":Endpoint("anilist",anilist),"mal":Endpoint("mal",mal),
-                   "kitsu":Endpoint("kitsu",placement("kitsu",season=0))}
-        with self.assertLogs("otaku_prime.services-mediator_processor",level="INFO") as logs:
-            result=MediatorProcessor(endpoints=endpoints).resolve(self.item())
-        self.assertEqual("anilist",result["provider_path"])
-        self.assertIn("different",result["provider_disagreement"]["error"])
-        self.assertTrue(any(
-            "INFO:otaku_prime.services-mediator_processor:MAL alternate coordinates ignored"
-            in message for message in logs.output))
-        self.assertEqual(0,endpoints["kitsu"].calls)
-
-    def test_anilist_remains_authoritative_when_mal_classifies_season_zero_differently(self):
-        anilist=placement("anilist",season=0); mal=placement("mal",season=2)
-        endpoints={"simkl":Endpoint("simkl",error="not listed"),
-                   "anilist":Endpoint("anilist",anilist),"mal":Endpoint("mal",mal),
-                   "kitsu":Endpoint("kitsu",placement("kitsu",season=2))}
-        result=MediatorProcessor(endpoints=endpoints).resolve(self.item())
-        self.assertEqual("anilist",result["provider_path"])
-        self.assertEqual(0,result["season"]["number"])
-        self.assertEqual(0,endpoints["kitsu"].calls)
-
-    def test_kitsu_is_last_after_simkl_and_anilist_mal_fail(self):
-        endpoints={name:Endpoint(name,error="no") for name in ("simkl","anilist","mal")}; endpoints["kitsu"]=Endpoint("kitsu",placement("kitsu"))
-        result=MediatorProcessor(endpoints=endpoints).resolve(self.item())
-        self.assertEqual("kitsu",result["provider_path"]); self.assertEqual(1,endpoints["kitsu"].calls)
-
-    def test_all_unknown_episode_counts_are_deferred_not_failed(self):
-        endpoints={name:PendingEndpoint(name,error="no episode count")
-                   for name in ("simkl","anilist","mal","kitsu")}
-        with self.assertRaises(MediatorMetadataPending) as caught:
-            MediatorProcessor(endpoints=endpoints).resolve(self.item())
-        self.assertIn("not been published",str(caught.exception))
-        self.assertEqual((1,1,1,1),tuple(
-            endpoints[name].calls for name in ("simkl","anilist","mal","kitsu")))
-
-    def test_anilist_structural_position_survives_other_pending_providers(self):
-        structural=placement("anilist",season=3)
-        structural["episodes"]=[]
-        structural["season"].update({"first_episode":None,"last_episode":None,
-                                     "release_status":"NOT_YET_RELEASED"})
-        endpoints={
-            "simkl":PendingEndpoint("simkl",error="no episodes"),
-            "anilist":PendingEndpoint("anilist",result=structural,error="no episode count"),
-            "mal":PendingEndpoint("mal",error="no episode count"),
-            "kitsu":PendingEndpoint("kitsu",error="no episode count"),
-        }
-
-        with self.assertRaises(MediatorMetadataPending) as caught:
-            MediatorProcessor(endpoints=endpoints).resolve(self.item())
-
-        self.assertEqual(3,caught.exception.placement["season"]["number"])
-        self.assertEqual("anilist",caught.exception.placement["provider_path"])
-
-    def test_mal_structure_survives_when_simkl_and_anilist_cannot_resolve(self):
-        structural=placement("mal",season=2)
-        structural["episodes"]=[]
-        structural["season"].update({"first_episode":None,"last_episode":None,
-                                     "release_date":"2027-10-01"})
-        endpoints={
-            "simkl":Endpoint("simkl",error="franchise not found"),
-            "anilist":Endpoint("anilist",error="relation graph unavailable"),
-            "mal":PendingEndpoint("mal",result=structural,error="no episode count"),
-            "kitsu":PendingEndpoint("kitsu",error="no episode count"),
-        }
-
-        with self.assertRaises(MediatorMetadataPending) as caught:
-            MediatorProcessor(endpoints=endpoints).resolve(self.item())
-
-        self.assertEqual("mal",caught.exception.placement["provider_path"])
-        self.assertEqual(2,caught.exception.placement["season"]["number"])
-        self.assertEqual("2027-10-01",
-                         caught.exception.placement["season"]["release_date"])
+        endpoint = HaltingEndpoint(result=placement())
+        with self.assertRaises(ServiceWorkHalted):
+            MediatorProcessor(
+                endpoints={"simkl": endpoint},
+                halt_requested=lambda: halted[0],
+            ).resolve(self.item())
 
 
-if __name__=="__main__": unittest.main()
+if __name__ == "__main__":
+    unittest.main()
