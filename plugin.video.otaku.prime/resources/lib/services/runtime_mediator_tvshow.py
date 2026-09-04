@@ -35,12 +35,12 @@ class RuntimeTVShowMediatorService(TVShowMediatorService):
         )
 
     @staticmethod
-    def _trace(item):
-        return MediatorTrace((item or {}).get("local_id"))
+    def _trace(item, reset=False):
+        return MediatorTrace((item or {}).get("local_id"), reset=reset)
 
     def process_item(self, item):
         """Trace the complete live path around the existing service boundary."""
-        trace = self._trace(item)
+        trace = self._trace(item, reset=True)
         trace.info(
             "SERVICE", "MEDIATION_BEGIN",
             watchlist_input_facts(item),
