@@ -43,13 +43,12 @@ class PolicyAwarePrimeMoviePhysicalSupport(RuntimePrimeMoviePhysicalSupport):
     def _cleanup_kodi_identity(self, movie_id, info):
         if not info or not info.get("kodi_cleanup_pending"):
             return {"required": False, "removed": 0}
-        stale = list(info.get("migrated_from") or []) + list(
-            info.get("duplicates_removed") or []
-        )
+        stale = list(info.get("stale_directories") or [])
         try:
             result = remove_prime_movies(movie_id, directories=stale)
             self.physical.physical_identity.mark_cleanup_complete(MEDIA_MOVIE, movie_id)
             result["required"] = True
+            result["stale_directories"] = stale
             return result
         except Exception as exc:
             self.physical._identity_cleanup_failed = True
@@ -59,7 +58,7 @@ class PolicyAwarePrimeMoviePhysicalSupport(RuntimePrimeMoviePhysicalSupport):
             )
             return {
                 "required": True, "removed": 0, "failed": True,
-                "error": str(exc),
+                "error": str(exc), "stale_directories": stale,
             }
 
     def project_movie(self, movie_id, now_epoch):
@@ -120,6 +119,15 @@ class RuntimePrimePhysicalMoviesService(IdentityRuntimePrimePhysicalService):
     def age_policy_state(self):
         return self._age_policy.state() if self._age_policy is not None else None
 
+    @staticmethod
+    def _cleanup_failure_result(failures, kodi, tv_directories, movie_directories):
+        return {
+            "rebuilt": False, "required": True, "cleanup_failed": True,
+            "failures": list(failures), "kodi": kodi,
+            "physical_tv": len(tv_directories),
+            "physical_movies": len(movie_directories),
+        }
+
     def rebuild_structural_catalog_if_required(self):
         """Perform one ID/path-based cleanup before catalogue re-mediation."""
         checker = getattr(self.catalog_store, "structural_rebuild_required", None)
@@ -133,10 +141,8 @@ class RuntimePrimePhysicalMoviesService(IdentityRuntimePrimePhysicalService):
         tv_paths = [row["directory"] for row in tv_directories]
         movie_paths = [row["directory"] for row in movie_directories]
 
-        # First remove every Kodi row advertising any Prime unique ID. This
-        # catches dead historical paths even when their physical directories are
-        # already gone. Then remove rows by the NFO-discovered paths as a second
-        # generation-independent cleanup for stale/missing show-level IDs.
+        # Stage 1: Kodi cleanup. Do not touch physical files unless both Prime-ID
+        # and NFO-discovered path cleanup have completed successfully.
         try:
             kodi = remove_all_prime_video()
         except Exception as exc:
@@ -146,19 +152,27 @@ class RuntimePrimePhysicalMoviesService(IdentityRuntimePrimePhysicalService):
 
         if tv_paths:
             try:
-                by_path = remove_prime_tvshows(directories=tv_paths)
-                kodi["tv_path_cleanup"] = by_path
+                kodi["tv_path_cleanup"] = remove_prime_tvshows(directories=tv_paths)
             except Exception as exc:
                 failures.append("Kodi TV path cleanup: {}".format(exc))
                 LOGGER.exception("Could not remove stale Prime TV paths from Kodi")
         if movie_paths:
             try:
-                by_path = remove_prime_movies(directories=movie_paths)
-                kodi["movie_path_cleanup"] = by_path
+                kodi["movie_path_cleanup"] = remove_prime_movies(directories=movie_paths)
             except Exception as exc:
                 failures.append("Kodi movie path cleanup: {}".format(exc))
                 LOGGER.exception("Could not remove stale Prime movie paths from Kodi")
 
+        if failures:
+            LOGGER.error(
+                "Prime identity rebuild stopped before physical deletion because Kodi cleanup failed: %s",
+                "; ".join(failures),
+            )
+            return self._cleanup_failure_result(
+                failures, kodi, tv_directories, movie_directories
+            )
+
+        # Stage 2: remove only directories proven to be Prime-owned by NFO/STRM.
         for entry in tv_directories:
             try:
                 remove_prime_directory(
@@ -185,16 +199,15 @@ class RuntimePrimePhysicalMoviesService(IdentityRuntimePrimePhysicalService):
 
         if failures:
             LOGGER.error(
-                "Prime identity rebuild postponed because cleanup failed: %s",
+                "Prime identity rebuild postponed after physical cleanup failure: %s",
                 "; ".join(failures),
             )
-            return {
-                "rebuilt": False, "required": True, "cleanup_failed": True,
-                "failures": failures, "kodi": kodi,
-                "physical_tv": len(tv_directories),
-                "physical_movies": len(movie_directories),
-            }
+            return self._cleanup_failure_result(
+                failures, kodi, tv_directories, movie_directories
+            )
 
+        # Stage 3: only after Kodi and physical cleanup are complete may the
+        # generated catalogue be reset/requeued.
         self.physical_identity.clear()
         result = resetter()
         result.update({
