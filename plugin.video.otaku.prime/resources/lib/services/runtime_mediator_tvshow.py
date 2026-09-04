@@ -47,6 +47,25 @@ class RuntimeTVShowMediatorService(TVShowMediatorService):
         is_movie = placement.get("library_type") == "movie"
         is_multiseason_wrapper = bool(placement.get("seasons"))
 
+        # Simkl's TVDB owner belongs to this watchlist -> season mapping, not to
+        # the parent franchise.  The base mediator has already persisted the
+        # franchise and season by this point, so record the structural evidence
+        # separately without allowing it to rename/re-root the parent.
+        if not is_movie and not is_multiseason_wrapper and secondary:
+            setter = getattr(self.catalog_store, "set_watchlist_structural_owner", None)
+            owner = placement.get("structural_owner") or None
+            if setter and owner:
+                season_data = placement.get("season") or {}
+                setter(
+                    secondary["local_id"],
+                    item["local_id"],
+                    owner,
+                    structural_season_number=season_data.get(
+                        "structural_season_number", season_data.get("number")
+                    ),
+                    source_provider=placement.get("provider_path"),
+                )
+
         if (
             self.physical is not None
             and placement_state == "COMPLETE"
