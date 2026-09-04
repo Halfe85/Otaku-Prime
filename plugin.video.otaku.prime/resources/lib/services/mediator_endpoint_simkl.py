@@ -49,6 +49,11 @@ def _mature(age_rating,*payloads):
         for payload in payloads)
 
 
+def _id(ids,name):
+    value=(ids or {}).get(name)
+    return str(value) if value not in (None,"") else None
+
+
 class SimklMediatorEndpoint:
     provider="simkl"
 
@@ -82,33 +87,54 @@ class SimklMediatorEndpoint:
                 "age_rating":age_rating,"mature":_mature(age_rating,payload)}
 
     @staticmethod
-    def _franchise(client,target,root):
-        franchise=client.tv_franchise(target,root_detail=root) or {
-            "name":_remote_title(root),
-            "simkl_id":str((root.get("ids") or {}).get("simkl")),
-            "tvdb_id":None,
-            "source":"relation_fallback_unmapped",
-        }
+    def _franchise_identity(root,target):
+        """Return relation-root identity only; never inject target TV structure."""
         root_ids=root.get("ids") or {}
-        terms=_terms(root,target); age_rating=_age_rating(target,root)
-        franchise.update({
+        target_ids=target.get("ids") or {}
+        terms=_terms(root,target); age_rating=_age_rating(root,target)
+        root_cast=_cast_entries(root)
+        target_cast=_cast_entries(target)
+        return {
+            "name":_remote_title(root) or _remote_title(target),
             "romaji_name":_remote_title({"title":root.get("title") or target.get("title")}),
-            "anilist_id":str(root_ids.get("anilist")) if root_ids.get("anilist") not in (None,"") else None,
-            "mal_id":str(root_ids.get("mal")) if root_ids.get("mal") not in (None,"") else None,
-            "kitsu_id":str(root_ids.get("kitsu")) if root_ids.get("kitsu") not in (None,"") else None,
+            "simkl_id":_id(root_ids,"simkl") or _id(target_ids,"simkl"),
+            "tvdb_id":_id(root_ids,"tvdb"),
+            "anilist_id":_id(root_ids,"anilist"),
+            "mal_id":_id(root_ids,"mal"),
+            "kitsu_id":_id(root_ids,"kitsu"),
             "source_format":str(root.get("anime_type") or target.get("anime_type") or "").upper() or None,
             "publish_year":_int_or_none(root.get("year") or target.get("year")),
             "overview":_overview(root) or _overview(target),
-            "runtime_minutes":_int_or_none(target.get("runtime") or root.get("runtime") or
-                                            target.get("runtime_minutes") or root.get("runtime_minutes")),
-            "air_status":target.get("status") or target.get("release_status") or
-                         root.get("status") or root.get("release_status"),
-            "cast":_cast_entries(target) if _cast_entries(target) is not None else _cast_entries(root),
+            "runtime_minutes":_int_or_none(
+                root.get("runtime") or target.get("runtime") or
+                root.get("runtime_minutes") or target.get("runtime_minutes")),
+            "air_status":root.get("status") or root.get("release_status") or
+                         target.get("status") or target.get("release_status"),
+            "cast":root_cast if root_cast is not None else target_cast,
             "cast_source":"simkl",
             "genres":terms["genres"],"themes":terms["themes"],
             "age_rating":age_rating,"mature":_mature(age_rating,root,target),
-        })
-        return franchise
+            "source":"simkl_relation_root",
+        }
+
+    @staticmethod
+    def _structural_owner(client,target,root):
+        """Resolve the target's TVDB owner separately from franchise identity."""
+        owner=client.tv_franchise(target,root_detail=root)
+        if owner:
+            return {
+                "name":owner.get("name"),
+                "simkl_id":str(owner.get("simkl_id")) if owner.get("simkl_id") not in (None,"") else None,
+                "tvdb_id":str(owner.get("tvdb_id")) if owner.get("tvdb_id") not in (None,"") else None,
+                "source":owner.get("source") or "simkl_structural_owner",
+            }
+        target_ids=target.get("ids") or {}
+        return {
+            "name":_remote_title(target),
+            "simkl_id":None,
+            "tvdb_id":_id(target_ids,"tvdb"),
+            "source":"simkl_target_structure_unresolved",
+        }
 
     def _exact(self,item,client):
         simkl_id=str(item["simkl_id"])
@@ -117,10 +143,11 @@ class SimklMediatorEndpoint:
         if returned!=simkl_id:
             raise MediatorPlacementError("Simkl returned a different identity for {}".format(simkl_id))
         root,path=_find_root(client,target)
-        franchise=self._franchise(client,target,root)
+        franchise=self._franchise_identity(root,target)
+        structural_owner=self._structural_owner(client,target,root)
         target_type=str(target.get("anime_type") or "").lower()
         library_type=("movie" if target_type=="movie" and
-                      not franchise.get("tvdb_id") else "series")
+                      not structural_owner.get("tvdb_id") else "series")
         candidates=_episodes(client.episodes(simkl_id),target_type in SPECIAL_MEDIA_TYPES)
         mapped=sorted({int(value) for value in target.get("mapped_tvdb_seasons") or []})
         coordinate_seasons=sorted({int(row["season_number"]) for row in candidates
@@ -142,7 +169,8 @@ class SimklMediatorEndpoint:
                     raise MediatorPlacementError(
                         "Simkl episodes lack TVDB coordinates: {}".format(unmapped))
                 numbers=[row["episode_number"] for row in episodes]
-                if len(numbers)>1 and numbers!=list(range(numbers[0],numbers[-1]+1)):
+                if (season_number!=0 and len(numbers)>1 and
+                        numbers!=list(range(numbers[0],numbers[-1]+1))):
                     raise MediatorPlacementError(
                         "Simkl season {} coordinates contain gaps".format(season_number))
                 components.append({
@@ -151,13 +179,15 @@ class SimklMediatorEndpoint:
                               "name":"{} season {}".format(
                                   _remote_title(target),season_number),
                               "media_type":target_type,
-                              "first_episode":numbers[0],"last_episode":numbers[-1]},
+                              "first_episode":numbers[0],"last_episode":numbers[-1],
+                              "structural_season_number":season_number},
                     "episodes":episodes,
                 })
             return {
                 "provider_path":"simkl","provider_id":simkl_id,
                 "provider_reference_id":None,"library_type":library_type,
-                "tv_show":franchise,"season":components[0]["season"],
+                "tv_show":franchise,"structural_owner":structural_owner,
+                "season":components[0]["season"],
                 "episodes":components[0]["episodes"],"seasons":components,
                 "relation_path":[str((node.get("ids") or {}).get("simkl")) for node in path],
             }
@@ -170,15 +200,17 @@ class SimklMediatorEndpoint:
         if unmapped:
             raise MediatorPlacementError("Simkl episodes lack TVDB coordinates: {}".format(unmapped))
         numbers=sorted(row["episode_number"] for row in episodes)
-        if len(numbers)>1 and numbers!=list(range(numbers[0],numbers[-1]+1)):
+        if (season_number!=0 and len(numbers)>1 and
+                numbers!=list(range(numbers[0],numbers[-1]+1))):
             raise MediatorPlacementError("Simkl franchise episode coordinates contain gaps")
         return {
             "provider_path":"simkl","provider_id":simkl_id,"provider_reference_id":None,
             "library_type":library_type,
-            "tv_show":franchise,
+            "tv_show":franchise,"structural_owner":structural_owner,
             "season":{"number":season_number,"number_source":number_source,
                       "name":_remote_title(target),
-                      "media_type":target_type,"first_episode":numbers[0],"last_episode":numbers[-1]},
+                      "media_type":target_type,"first_episode":numbers[0],"last_episode":numbers[-1],
+                      "structural_season_number":season_number},
             "episodes":episodes,
             "relation_path":[str((node.get("ids") or {}).get("simkl")) for node in path],
         }
@@ -194,7 +226,8 @@ class SimklMediatorEndpoint:
             raise MediatorPlacementError("Simkl special reference range is reversed")
         target=client.anime(reference)
         root,path=_find_root(client,target)
-        franchise=self._franchise(client,target,root)
+        franchise=self._franchise_identity(root,target)
+        structural_owner=self._structural_owner(client,target,root)
         candidates=_episodes(client.episodes(reference),True)
         selected=[row for row in candidates
                   if row.get("season_number")==season_number and
@@ -207,11 +240,12 @@ class SimklMediatorEndpoint:
         return {
             "provider_path":"simkl","provider_id":None,"provider_reference_id":reference,
             "library_type":"series",
-            "tv_show":franchise,
+            "tv_show":franchise,"structural_owner":structural_owner,
             "season":{"number":season_number,"number_source":"watchlist_special_locator",
                       "name":item.get("english_name") or item.get("romaji_name"),
                       "media_type":str(item.get("media_format") or "SPECIAL").lower(),
-                      "first_episode":first_episode,"last_episode":last_episode},
+                      "first_episode":first_episode,"last_episode":last_episode,
+                      "structural_season_number":season_number},
             "episodes":selected,
             "relation_path":[str((node.get("ids") or {}).get("simkl")) for node in path],
             "special_locator":item.get("special_locator"),
