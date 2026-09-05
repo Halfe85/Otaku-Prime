@@ -16,7 +16,7 @@ from resources.lib.users import UserStore
 from resources.lib.database.watchlist_accounts import WatchlistAccountStore
 from resources.lib.database.app_logs import AppLogStore
 from resources.lib.database.franchise_catalog import FranchiseCatalogStore as CatalogStore
-from resources.lib.services.watchlist_identity import WatchlistIdentityEnrichmentService
+from resources.lib.services.watchlist_identity_simkl import SimklFirstWatchlistIdentityEnrichmentService as WatchlistIdentityEnrichmentService
 from resources.lib.services.age_watchlist_store import AgePolicyWatchlistWatchdogStore
 from resources.lib.services.watchlist_watchdog_release import ReleaseAwareWatchlistWatchdogService
 from resources.lib.services.watchlist_provider_writer import WatchlistProviderWriter
