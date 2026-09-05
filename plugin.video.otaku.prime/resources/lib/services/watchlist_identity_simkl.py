@@ -1,16 +1,15 @@
 # -*- coding: utf-8 -*-
 """Simkl-first identity watchdog used before Prime mediation.
 
-The watchdog owns provider-ID acquisition.  The mediator never searches for or
-repairs identities.  A row is mediator-ready only when the watchdog has either
-an exact Simkl anime identity or an exact Simkl special reference + locator.
+The watchdog owns provider-ID acquisition. The mediator never searches for or
+repairs identities. A row becomes mediator-ready only after the watchdog has an
+exact Simkl anime identity or an exact Simkl special reference + locator.
 """
 from __future__ import annotations
 
 import json
 
 from resources.lib.logging_config import get_logger
-from resources.lib.service_lifecycle import ServiceWorkHalted
 from resources.lib.services.watchlist_identity import (
     IdentityMappingConflict,
     KitsuIdentityClient,
@@ -34,7 +33,8 @@ def _trace(local_id, stage, event, facts=None, reason=None, level="info"):
         parts.append("reason={}".format(json.dumps(str(reason), ensure_ascii=False)))
     if facts is not None:
         parts.append("facts={}".format(json.dumps(
-            facts, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str
+            facts, ensure_ascii=False, sort_keys=True,
+            separators=(",", ":"), default=str,
         )))
     getattr(LOGGER, level)(" ".join(parts))
 
@@ -48,16 +48,24 @@ class SimklFirstIdentityClient(SimklIdentityClient):
         value = ids.get("simkl") or ids.get("simkl_id")
         return str(value) if value not in (None, "") else None
 
+    @staticmethod
+    def _unique(values):
+        result = []
+        for value in values or []:
+            value = str(value) if value not in (None, "") else None
+            if value and value not in result:
+                result.append(value)
+        return result
+
     def _search_candidate_ids(self, known):
         values = []
         evidence = []
         for provider in ("anilist", "mal", "kitsu"):
-            value = known.get(provider)
-            if value in (None, ""):
+            provider_id = known.get(provider)
+            if provider_id in (None, ""):
                 continue
-            rows = self._search(provider, value)
             matches = []
-            for row in rows or []:
+            for row in self._search(provider, provider_id) or []:
                 if str(row.get("type") or "").lower() != "anime":
                     continue
                 simkl_id = self._candidate_id(row)
@@ -68,10 +76,52 @@ class SimklFirstIdentityClient(SimklIdentityClient):
                     values.append(simkl_id)
             evidence.append({
                 "provider": provider,
-                "provider_id": str(value),
+                "provider_id": str(provider_id),
                 "simkl_candidates": matches,
             })
         return values, evidence
+
+    def _evaluate_candidates(self, known, candidate_ids):
+        exact = []
+        rejected = []
+        for simkl_id in self._unique(candidate_ids):
+            detail = self._detail(simkl_id)
+            resolved = self._resolved_ids(detail, simkl_id)
+            disagreements = self._disagreements(known, resolved)
+            if disagreements:
+                rejected.append({
+                    "simkl_id": simkl_id,
+                    "resolved_ids": resolved,
+                    "disagreements": disagreements,
+                })
+            else:
+                exact.append((simkl_id, resolved))
+        return exact, rejected
+
+    @staticmethod
+    def _one_exact(exact):
+        if not exact:
+            return None
+        unique = {simkl_id for simkl_id, _ in exact}
+        if len(unique) > 1:
+            raise IdentityMappingConflict(
+                "Simkl exact tracker mappings resolve to multiple anime IDs: {}".format(
+                    ", ".join(sorted(unique))
+                )
+            )
+        return dict(exact[0][1])
+
+    @staticmethod
+    def _conflict_reason(rejected):
+        details = []
+        for row in rejected or []:
+            for provider, values in sorted((row.get("disagreements") or {}).items()):
+                details.append(
+                    "Simkl {} {} {} != {}".format(
+                        row.get("simkl_id"), provider, values[0], values[1]
+                    )
+                )
+        return "; ".join(details)
 
     def _special_reference(self, item, simkl_reference_id):
         """Accept only exact external-ID evidence for a referenced special."""
@@ -129,54 +179,39 @@ class SimklFirstIdentityClient(SimklIdentityClient):
             "media_format": item.get("media_format"),
         })
 
-        redirect_ids = self._simkl_ids(known)
-        search_ids, search_evidence = self._search_candidate_ids(known)
-        candidate_ids = []
-        for value in list(redirect_ids) + list(search_ids):
-            if value and value not in candidate_ids:
-                candidate_ids.append(value)
-        _trace(local_id, "SIMKL_DISCOVERY", "CANDIDATES", {
-            "redirect_candidates": list(redirect_ids),
-            "search_id": search_evidence,
-            "candidate_ids": candidate_ids,
+        redirect_ids = self._unique(self._simkl_ids(known))
+        _trace(local_id, "SIMKL_REDIRECT", "CANDIDATES", {
+            "candidate_ids": redirect_ids,
         })
-
-        if not candidate_ids:
-            _trace(local_id, "SIMKL_DISCOVERY", "NOT_FOUND",
-                   reason="redirect and exact search/id returned no Simkl candidates")
-            return {}
-
-        exact = []
-        rejected = []
-        parent_candidates = []
-        for simkl_id in candidate_ids:
-            detail = self._detail(simkl_id)
-            resolved = self._resolved_ids(detail, simkl_id)
-            disagreements = self._disagreements(known, resolved)
-            if disagreements:
-                parent_candidates.append(simkl_id)
-                rejected.append({
-                    "simkl_id": simkl_id,
-                    "resolved_ids": resolved,
-                    "disagreements": disagreements,
-                })
-                continue
-            exact.append((simkl_id, resolved))
-
-        if exact:
-            unique = {simkl_id for simkl_id, _ in exact}
-            if len(unique) > 1:
-                raise IdentityMappingConflict(
-                    "Simkl exact tracker mappings resolve to multiple anime IDs: {}".format(
-                        ", ".join(sorted(unique))
-                    )
-                )
-            result = dict(exact[0][1])
-            _trace(local_id, "SIMKL_IDENTITY", "RESOLVED", result)
+        exact, rejected = self._evaluate_candidates(known, redirect_ids)
+        result = self._one_exact(exact)
+        if result:
+            _trace(local_id, "SIMKL_IDENTITY", "RESOLVED", result,
+                   reason="stored/redirect candidate validated by exact tracker IDs")
             return result
 
+        # Redirect is only the cheap first path. If it misses or points at a
+        # parent/different item, exact search/id must still get a chance.
+        search_ids, search_evidence = self._search_candidate_ids(known)
+        search_ids = [value for value in self._unique(search_ids) if value not in redirect_ids]
+        _trace(local_id, "SIMKL_SEARCH_ID", "CANDIDATES", {
+            "queries": search_evidence,
+            "candidate_ids": search_ids,
+        })
+        search_exact, search_rejected = self._evaluate_candidates(known, search_ids)
+        rejected.extend(search_rejected)
+        result = self._one_exact(search_exact)
+        if result:
+            _trace(local_id, "SIMKL_IDENTITY", "RESOLVED", result,
+                   reason="exact search/id recovered identity after redirect miss/conflict")
+            return result
+
+        # Some tracker specials are not standalone Simkl anime records. A
+        # disagreeing Simkl candidate may be the parent anime whose episode row
+        # carries the exact tracker IDs and TVDB S00 coordinate for this item.
         if self._special_capable(item):
-            for reference in parent_candidates:
+            references = self._unique(row.get("simkl_id") for row in rejected)
+            for reference in references:
                 special = self._special_reference(item, reference)
                 if special:
                     _trace(local_id, "SIMKL_SPECIAL", "REFERENCE_RESOLVED", {
@@ -187,21 +222,13 @@ class SimklFirstIdentityClient(SimklIdentityClient):
                     return special
 
         if rejected:
-            details = []
-            for row in rejected:
-                for provider, values in sorted(row["disagreements"].items()):
-                    details.append(
-                        "Simkl {} {} {} != {}".format(
-                            row["simkl_id"], provider, values[0], values[1]
-                        )
-                    )
-            reason = "; ".join(details)
-            _trace(local_id, "SIMKL_IDENTITY", "CONFLICT", rejected, reason=reason,
-                   level="warning")
+            reason = self._conflict_reason(rejected)
+            _trace(local_id, "SIMKL_IDENTITY", "CONFLICT", rejected,
+                   reason=reason, level="warning")
             raise IdentityMappingConflict(reason)
 
         _trace(local_id, "SIMKL_IDENTITY", "NOT_FOUND",
-               reason="no candidate survived exact tracker-ID validation")
+               reason="redirect and exact search/id returned no validated Simkl identity")
         return {}
 
 
@@ -212,22 +239,19 @@ class SimklFirstWatchlistIdentityEnrichmentService(WatchlistIdentityEnrichmentSe
                  on_progress=None, network_timeout=30, halt_requested=None):
         self._external_halt_requested = halt_requested or (lambda: False)
         if client is None:
+            # The halt callbacks are evaluated only after the base constructor
+            # has created _stop/_stopping.
+            halt = lambda: (
+                self._stop.is_set()
+                or self._stopping.is_set()
+                or self._external_halt_requested()
+            )
             client = ProviderIdentityClient(
                 simkl=SimklFirstIdentityClient(
-                    timeout=network_timeout,
-                    halt_requested=lambda: (
-                        self._stop.is_set()
-                        or self._stopping.is_set()
-                        or self._external_halt_requested()
-                    ),
+                    timeout=network_timeout, halt_requested=halt
                 ),
                 kitsu=KitsuIdentityClient(
-                    timeout=network_timeout,
-                    halt_requested=lambda: (
-                        self._stop.is_set()
-                        or self._stopping.is_set()
-                        or self._external_halt_requested()
-                    ),
+                    timeout=network_timeout, halt_requested=halt
                 ),
             )
         super().__init__(
