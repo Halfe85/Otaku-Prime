@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 
 from resources.lib.logging_config import get_logger
+from resources.lib.services.mediator_trace import MediatorTrace
 from resources.lib.services.mediator_helper_simkl import (
     MediatorMetadataPending,
     SimklMediatorClient,
@@ -386,6 +387,7 @@ class TVShowMediatorService:
         ).upper().replace(" ","_").replace("-","_")
         special_episode=(int(season_data.get("number") or 0)==0 or
                          media_format in SPECIAL_EPISODE_FORMATS)
+        written_episodes=[]
         for episode in placement_episodes:
             self._ensure_current(item["local_id"])
             provider_ids={
@@ -407,6 +409,17 @@ class TVShowMediatorService:
             self.catalog_store.replace_media_credits(
                 episode.get("cast"),episode_id=stored_episode["local_id"],
                 source_provider=episode.get("cast_source") or provider)
+            written_episodes.append({
+                "prime_episode_id": stored_episode["local_id"],
+                "source_episode": episode["source_episode_number"],
+                "requested_episode": episode["episode_number"],
+                "stored_episode": stored_episode.get("episode_number"),
+                "release_date": stored_episode.get("release_date"),
+            })
+        MediatorTrace(item.get("local_id")).info("CATALOGUE", "EPISODES_WRITTEN", {
+            "prime_series_id": series["local_id"], "prime_season_id": season["local_id"],
+            "season_number": season_data.get("number"), "episodes": written_episodes,
+        })
         return series,season
 
     def process_item(self,item):
@@ -430,6 +443,8 @@ class TVShowMediatorService:
         if self.physical is not None and placement.get("library_type")!="movie":
             # The handoff contains only Prime's opaque series ID. Prime Physical
             # owns every catalogue lookup and all filesystem decisions.
+            MediatorTrace(item.get("local_id")).info("PHYSICAL", "TV_SERIES_PROJECT_BEGIN",
+                {"prime_series_id": stored_series["local_id"]})
             self.physical.project_series(stored_series["local_id"])
         if placement.get("library_type")=="movie":
             LOGGER.info("Mediator placed Prime item %s through %s in Movies as %s",

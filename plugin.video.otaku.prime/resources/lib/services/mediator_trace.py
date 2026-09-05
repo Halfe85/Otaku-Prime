@@ -9,14 +9,31 @@ from __future__ import annotations
 
 import json
 import threading
+from contextlib import contextmanager
 
 from resources.lib.logging_config import get_logger
 
 
 LOGGER = get_logger(__name__)
-_SENSITIVE_MARKERS = ("token", "password", "secret", "cookie", "authorization", "credential")
+_SENSITIVE_MARKERS = ("token", "password", "secret", "cookie", "authorization", "credential", "api_key", "apikey", "client_id")
 _SEQUENCE_LOCK = threading.Lock()
 _SEQUENCES = {}
+_CONTEXT = threading.local()
+
+
+@contextmanager
+def mediation_log_context(watchlist_local_id):
+    """Correlate lower-level Simkl calls without sharing state between workers."""
+    previous = getattr(_CONTEXT, "trace", None)
+    _CONTEXT.trace = MediatorTrace(watchlist_local_id)
+    try:
+        yield _CONTEXT.trace
+    finally:
+        _CONTEXT.trace = previous
+
+
+def current_mediation_trace():
+    return getattr(_CONTEXT, "trace", None)
 
 
 def _redact(value, key=None):
@@ -131,7 +148,17 @@ def placement_facts(placement):
             "simkl_id": show.get("simkl_id"),
             "source": show.get("source"),
         },
-        "season": placement.get("season"),
+        "metadata": {
+            "cast_count": len(show.get("cast") or []),
+            "cast_source": show.get("cast_source"),
+            "genres": show.get("genres"), "themes": show.get("themes"),
+            "age_rating": show.get("age_rating"), "mature": show.get("mature"),
+            "artwork_present": {key: bool(show.get(key)) for key in
+                                ("poster_url", "banner_url", "clearlogo_url")},
+        },
+        "season": {key: value for key, value in (placement.get("season") or {}).items()
+                   if key not in ("cast", "staff", "characters")},
+        "season_credit_count": len((placement.get("season") or {}).get("cast") or []),
         "season_count": len(components) if components else 1,
         "episode_mapping_count": len(mappings),
         "episode_mappings": mappings,

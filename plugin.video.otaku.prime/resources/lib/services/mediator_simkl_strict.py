@@ -8,6 +8,7 @@ never used for ownership or numbering.
 from __future__ import annotations
 
 import re
+from resources.lib.services.mediator_trace import MediatorTrace, mediation_log_context, current_mediation_trace
 
 from resources.lib.services.mediator_endpoint_simkl import SimklMediatorEndpoint, _LOCATOR
 from resources.lib.services.mediator_helper_simkl import (
@@ -30,6 +31,14 @@ class _MappedRowsClient:
 
     def episodes(self, simkl_id):
         rows = self._client.episodes(simkl_id)
+        trace = current_mediation_trace()
+        if trace:
+            trace.info("EPISODES", "RAW_PROVIDER_ROWS", {
+                "simkl_id": simkl_id,
+                "rows": [{key: row.get(key) for key in
+                          ("episode", "number", "type", "ids", "tvdb", "date", "first_aired")}
+                         for row in rows or []],
+            }, reason="original provider rows before mapped-coordinate type normalization")
         result = []
         for row in rows or []:
             value = dict(row)
@@ -101,7 +110,7 @@ class StrictStructuralSimklMediatorEndpoint(SimklMediatorEndpoint):
             "1", "true", "yes"
         )
 
-    def _direct_season_owner(self, client, target, coordinate_seasons):
+    def _direct_season_owner(self, client, target, coordinate_seasons, trace=None):
         """Resolve a target through one explicit Simkl season-owner edge.
 
         Simkl can put a later cour on a separate anime TVDB identity even while
@@ -110,7 +119,9 @@ class StrictStructuralSimklMediatorEndpoint(SimklMediatorEndpoint):
         related item owns N and its mapped range ends before the target range.
         Generic/non-direct PREQUEL relations are never ownership evidence.
         """
+        trace = trace or MediatorTrace(None)
         if not coordinate_seasons:
+            trace.info("OWNER", "DIRECT_LOOKUP_SKIPPED", reason="no explicit coordinate seasons")
             return None
         target_first = min(coordinate_seasons)
         for relation in self._relations(target):
@@ -119,32 +130,44 @@ class StrictStructuralSimklMediatorEndpoint(SimklMediatorEndpoint):
             ).strip().lower().replace("_", " ")
             match = re.fullmatch(r"season\s+(\d+)", relation_type)
             candidate_id = (relation.get("ids") or {}).get("simkl")
+            facts = {"candidate_simkl_id": candidate_id, "relation_type": relation_type,
+                     "is_direct": relation.get("is_direct"), "target_seasons": coordinate_seasons}
             if (
                 not match
                 or not self._is_direct(relation.get("is_direct"))
                 or candidate_id in (None, "")
             ):
+                trace.info("OWNER", "CANDIDATE_REJECTED", facts,
+                           reason="requires direct season N relation with Simkl identity")
                 continue
+            trace.info("OWNER", "CANDIDATE_FETCH", facts)
             candidate = client.anime(str(candidate_id))
             candidate_mapped = sorted({
                 int(value) for value in candidate.get("mapped_tvdb_seasons") or []
             })
             relation_season = int(match.group(1))
+            facts["candidate_mapped_seasons"] = candidate_mapped
             if (
                 relation_season not in candidate_mapped
                 or not candidate_mapped
                 or max(candidate_mapped) >= target_first
             ):
+                trace.info("OWNER", "CANDIDATE_REJECTED", facts,
+                           reason="related season must be mapped and end before target seasons")
                 continue
             owner = self._structural_owner(client, candidate, candidate)
+            facts["structural_owner"] = owner
             if owner.get("tvdb_id") in (None, ""):
+                trace.info("OWNER", "CANDIDATE_REJECTED", facts, reason="missing TVDB owner")
                 continue
+            trace.info("OWNER", "CANDIDATE_ACCEPTED", facts)
             return {
                 "owner": owner,
                 "franchise": self._franchise_identity(candidate, candidate),
                 "root": candidate,
                 "relation": relation,
             }
+        trace.info("OWNER", "NO_DIRECT_OWNER", {"target_seasons": coordinate_seasons})
         return None
 
     @staticmethod
@@ -218,23 +241,31 @@ class StrictStructuralSimklMediatorEndpoint(SimklMediatorEndpoint):
         return matches
 
     def _exact(self, item, client):
+        trace = MediatorTrace(item.get("local_id"))
         simkl_id = str(item["simkl_id"])
         target = client.anime(simkl_id)
+        trace.info("SIMKL", "TARGET_RECEIVED", self._target_evidence(target, None, None))
         self._validate_exact_target(simkl_id, target)
 
         target_type = str(target.get("anime_type") or "").lower()
 
         # Episode coordinates are the primary structural fact.  They must be
         # read before choosing the owning TV series.
-        candidates = _episodes(
-            client.episodes(simkl_id), target_type in SPECIAL_MEDIA_TYPES
-        )
+        raw_rows = client.episodes(simkl_id)
+        candidates = _episodes(raw_rows, target_type in SPECIAL_MEDIA_TYPES)
+        trace.info("EPISODES", "ROWS_RECEIVED", {
+            "simkl_id": simkl_id, "target_type": target_type,
+            "raw_count": len(raw_rows), "candidate_count": len(candidates),
+            "candidate_coordinates": [{key: row.get(key) for key in
+                ("source_episode_number", "season_number", "episode_number", "simkl_id")}
+                for row in candidates],
+        })
         coordinate_seasons = sorted({
             int(row["season_number"])
             for row in candidates if row.get("season_number") is not None
         })
         direct_owner = self._direct_season_owner(
-            client, target, coordinate_seasons
+            client, target, coordinate_seasons, trace=trace
         )
         if direct_owner:
             franchise = direct_owner["franchise"]
@@ -253,7 +284,14 @@ class StrictStructuralSimklMediatorEndpoint(SimklMediatorEndpoint):
                 and target_tvdb == str(structural_owner.get("tvdb_id") or "")
             )
 
+        trace.info("OWNER", "SELECTED", self._target_evidence(
+            target, structural_owner, "explicit_tvdb_coordinates",
+            root_identity_verified=root_identity_verified, structural_owner_source=owner_source))
         if target_type == "movie" and structural_owner.get("tvdb_id") in (None, ""):
+            trace.info("CLASSIFICATION", "STANDALONE_MOVIE",
+                       {"simkl_id": simkl_id, "watchlist_format": item.get("media_format"),
+                        "watchlist_episode_count": item.get("episode_count")},
+                       reason="Simkl movie has no TVDB series owner")
             return {
                 "provider_path": "simkl",
                 "provider_id": simkl_id,
@@ -328,6 +366,7 @@ class StrictStructuralSimklMediatorEndpoint(SimklMediatorEndpoint):
         return result
 
     def _referenced_special(self, item, client):
+        trace = MediatorTrace(item.get("local_id"))
         reference = str(item.get("simkl_reference_id") or "")
         match = _LOCATOR.match(str(item.get("special_locator") or "").upper())
         if not reference or not match:
@@ -352,6 +391,11 @@ class StrictStructuralSimklMediatorEndpoint(SimklMediatorEndpoint):
         exact_matches = self._special_exact_matches(
             item, raw_rows, season_number, first_episode, last_episode
         )
+        trace.info("SPECIAL", "EXACT_ID_CHECK", {
+            "reference": reference, "locator": item.get("special_locator"),
+            "raw_count": len(raw_rows), "matches": exact_matches,
+            "structural_owner": structural_owner,
+        })
         if not exact_matches:
             raise MediatorPlacementError(
                 "Simkl special reference {} {} has no exact AniList/MAL/Kitsu ID evidence; "
@@ -408,13 +452,14 @@ class StrictStructuralSimklMediatorEndpoint(SimklMediatorEndpoint):
             from resources.lib.services.mediator_helper_simkl import SimklMediatorClient
             base = SimklMediatorClient()
         mapped = _MappedRowsClient(base)
-        if item.get("simkl_id") not in (None, ""):
-            return self._exact(item, mapped)
-        if (
-            item.get("simkl_reference_id") not in (None, "")
-            and item.get("special_locator") not in (None, "")
-        ):
-            return self._referenced_special(item, mapped)
-        raise MediatorPlacementError(
-            "watchlist item has no Simkl identity or Simkl special reference"
-        )
+        with mediation_log_context(item.get("local_id")):
+            if item.get("simkl_id") not in (None, ""):
+                return self._exact(item, mapped)
+            if (
+                item.get("simkl_reference_id") not in (None, "")
+                and item.get("special_locator") not in (None, "")
+            ):
+                return self._referenced_special(item, mapped)
+            raise MediatorPlacementError(
+                "watchlist item has no Simkl identity or Simkl special reference"
+            )

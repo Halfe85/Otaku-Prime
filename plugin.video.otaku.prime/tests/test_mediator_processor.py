@@ -74,9 +74,9 @@ class MediatorProcessorTests(unittest.TestCase):
             "episode_count": 2,
         }
 
-    def test_production_processor_constructs_provider_priority_endpoints(self):
+    def test_production_processor_constructs_only_simkl(self):
         processor = MediatorProcessor(network_timeout=3)
-        self.assertEqual({"simkl", "anilist", "mal", "kitsu"}, set(processor.endpoints))
+        self.assertEqual({"simkl"}, set(processor.endpoints))
         self.assertEqual(3, processor.endpoints["simkl"].client.timeout)
 
     def test_simkl_success_remains_first_priority(self):
@@ -90,30 +90,26 @@ class MediatorProcessorTests(unittest.TestCase):
         self.assertEqual(0, ignored.calls)
         self.assertEqual("simkl", result["provider_path"])
 
-    def test_simkl_failure_falls_back_to_native_anilist(self):
+    def test_simkl_failure_never_calls_other_providers(self):
         simkl = Endpoint(error=RuntimeError("HTTP 503"))
-        native_value = placement()
-        native_value["provider_path"] = "anilist"
-        native = Endpoint(result=native_value, provider="anilist")
-        processor = MediatorProcessor(endpoints={"simkl": simkl, "anilist": native})
-
-        result = processor.resolve(self.item())
-
-        self.assertEqual("anilist", result["provider_path"])
+        native = {name: Endpoint(result=placement(), provider=name)
+                  for name in ("anilist", "mal", "kitsu")}
+        processor = MediatorProcessor(endpoints=dict(native, simkl=simkl))
+        with self.assertRaisesRegex(MediatorPlacementError, "HTTP 503"):
+            processor.resolve(self.item())
         self.assertEqual(1, simkl.calls)
-        self.assertEqual(1, native.calls)
+        self.assertTrue(all(endpoint.calls == 0 for endpoint in native.values()))
 
-    def test_missing_simkl_identity_uses_native_provider(self):
+    def test_missing_simkl_identity_never_calls_native_provider(self):
         item = self.item()
         item["simkl_id"] = None
         native_value = placement()
         native_value["provider_path"] = "anilist"
         endpoint = Endpoint(result=native_value, provider="anilist")
 
-        result = MediatorProcessor(endpoints={"anilist": endpoint}).resolve(item)
-
-        self.assertEqual("anilist", result["provider_path"])
-        self.assertEqual(1, endpoint.calls)
+        with self.assertRaisesRegex(MediatorPlacementError, "Simkl identity"):
+            MediatorProcessor(endpoints={"anilist": endpoint}).resolve(item)
+        self.assertEqual(0, endpoint.calls)
 
     def test_conflicted_exact_identity_is_not_bypassed(self):
         item = self.item()

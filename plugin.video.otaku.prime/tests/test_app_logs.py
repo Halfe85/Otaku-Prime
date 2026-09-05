@@ -1,4 +1,5 @@
 import os
+import logging
 import sys
 import tempfile
 import unittest
@@ -11,6 +12,12 @@ from resources.lib.logging_config import configure_logging,get_logger
 
 
 class AppLogStoreTests(unittest.TestCase):
+    def tearDown(self):
+        logger = logging.getLogger("otaku_prime")
+        for handler in list(logger.handlers):
+            logger.removeHandler(handler)
+            handler.close()
+
     def test_central_logger_flushes_entries_buffered_while_database_is_missing(self):
         class Store:
             def __init__(self):
@@ -65,7 +72,7 @@ class AppLogStoreTests(unittest.TestCase):
             logger=get_logger("test-levels")
             logger.info("information"); logger.warning("warning"); logger.error("failure")
             self.assertEqual(["INFO","WARNING","ERROR"],
-              [row["level"] for row in store.list()])
+              [row["level"] for row in store.list() if row["source"] == "test-levels"])
             configure_logging()
 
 

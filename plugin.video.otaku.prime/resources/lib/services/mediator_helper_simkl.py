@@ -22,6 +22,11 @@ from resources.lib.services.remote_identity import (
 )
 from resources.lib.watchlist.simkl import PACKAGED_CLIENT_ID,SIMKL_API_URL
 from resources.lib.service_lifecycle import ServiceWorkHalted
+from resources.lib.logging_config import get_logger
+from resources.lib.services.mediator_trace import current_mediation_trace
+
+
+LOGGER = get_logger(__name__)
 
 
 MAX_PREQUEL_DEPTH=64
@@ -50,8 +55,17 @@ class SimklMediatorClient:
         self._halt_requested=halt_requested or (lambda:False)
         self._anime_cache={}; self._tv_cache={}; self._episode_cache={}; self._search_cache={}
 
+    @staticmethod
+    def _log_request(event, facts, level="info", stage="SIMKL_HTTP"):
+        trace = current_mediation_trace()
+        if trace:
+            getattr(trace, level)(stage, event, facts)
+        else:
+            getattr(LOGGER, level)("Simkl %s: %s", event, facts)
+
     def _get(self,path,params=None):
         if self._halt_requested():
+            self._log_request("HALTED", {"endpoint": path}, "warning")
             raise ServiceWorkHalted("Simkl mediation halted for addon shutdown")
         query={"client_id":self.client_id,"app-name":"otaku-prime","app-version":"0.1.2"}
         query.update(params or {})
@@ -60,25 +74,46 @@ class SimklMediatorClient:
         with self._lock:
             remaining=self.request_delay-(time.monotonic()-self._last_request)
             if remaining>0:
+                self._log_request("THROTTLED", {"endpoint": path, "delay_seconds": round(remaining, 3)})
                 deadline=time.monotonic()+remaining
                 while time.monotonic()<deadline:
                     if self._halt_requested():
+                        self._log_request("HALTED", {"endpoint": path, "during": "pacing"}, "warning")
                         raise ServiceWorkHalted("Simkl pacing halted for addon shutdown")
                     time.sleep(min(0.05,max(0.0,deadline-time.monotonic())))
+            started = time.monotonic()
+            # Deliberately never log request.full_url, query credentials or headers.
+            facts = {"endpoint": path, "timeout_seconds": self.timeout}
+            facts["parameters"] = {key: value for key, value in (params or {}).items()
+                if key in ("tvdb", "tmdb", "anilist", "mal", "kitsu", "simkl", "q", "limit", "extended")}
+            self._log_request("REQUEST", facts)
             try:
                 with self._open(request,timeout=self.timeout) as response:
                     value=json.loads(response.read().decode("utf-8"))
+                    status = getattr(response, "status", None)
                 if self._halt_requested():
                     raise ServiceWorkHalted(
                         "Simkl mediation response discarded for addon shutdown")
+                self._log_request("RESPONSE", dict(facts, status=status,
+                    duration_seconds=round(time.monotonic()-started, 3),
+                    payload_type=type(value).__name__,
+                    entry_count=len(value) if isinstance(value, (list, dict)) else None))
                 return value
             except ServiceWorkHalted:
+                self._log_request("HALTED", dict(facts, during="response"), "warning")
                 raise
             except HTTPError as exc:
+                self._log_request("FAILED", dict(facts, status=exc.code,
+                    duration_seconds=round(time.monotonic()-started, 3),
+                    error_type=type(exc).__name__), "error")
+                exc.close()
                 raise MediatorPlacementError(
                     "Simkl {} returned HTTP {}".format(path,exc.code)) from exc
             except (URLError,TimeoutError,OSError,ValueError,json.JSONDecodeError) as exc:
-                raise MediatorPlacementError("Simkl {} failed: {}".format(path,exc)) from exc
+                self._log_request("FAILED", dict(facts,
+                    duration_seconds=round(time.monotonic()-started, 3),
+                    error_type=type(exc).__name__, errno=getattr(exc, "errno", None)), "error")
+                raise MediatorPlacementError("Simkl {} failed: {}".format(path,type(exc).__name__)) from exc
             finally: self._last_request=time.monotonic()
 
     def anime(self,simkl_id):
@@ -88,6 +123,8 @@ class SimklMediatorClient:
             if not isinstance(payload,dict) or not (payload.get("ids") or {}).get("simkl"):
                 raise MediatorPlacementError("Simkl returned an invalid anime detail record")
             self._anime_cache[key]=payload
+        else:
+            self._log_request("CACHE_HIT", {"endpoint": "/anime/"+key})
         return self._anime_cache[key]
 
     def episodes(self,simkl_id):
@@ -98,6 +135,8 @@ class SimklMediatorClient:
             if not isinstance(payload,list):
                 raise MediatorPlacementError("Simkl returned an invalid anime episode list")
             self._episode_cache[key]=payload
+        else:
+            self._log_request("CACHE_HIT", {"endpoint": "/anime/episodes/"+key})
         return self._episode_cache[key]
 
     def tv(self,simkl_id):
@@ -107,6 +146,8 @@ class SimklMediatorClient:
             if not isinstance(payload,dict):
                 raise MediatorPlacementError("Simkl returned an invalid TV detail record")
             self._tv_cache[key]=payload
+        else:
+            self._log_request("CACHE_HIT", {"endpoint": "/tv/"+key})
         return self._tv_cache[key]
 
     def search_id(self,provider,value):
@@ -114,6 +155,8 @@ class SimklMediatorClient:
         if key not in self._search_cache:
             payload=self._get("/search/id",{str(provider):str(value)})
             self._search_cache[key]=payload if isinstance(payload,list) else []
+        else:
+            self._log_request("CACHE_HIT", {"endpoint": "/search/id", "provider": provider, "id": value})
         return self._search_cache[key]
 
     def search_anime(self,query,limit=20):
@@ -122,6 +165,8 @@ class SimklMediatorClient:
             payload=self._get("/search/anime",{
                 "q":str(query),"extended":"full","limit":int(limit)})
             self._search_cache[key]=payload if isinstance(payload,list) else []
+        else:
+            self._log_request("CACHE_HIT", {"endpoint": "/search/anime", "q": query})
         return self._search_cache[key]
 
     def _candidate_details(self,item,exclude=None):
@@ -206,17 +251,26 @@ class SimklMediatorClient:
         anime_ids=anime_detail.get("ids") or {}; tvdb_id=anime_ids.get("tvdb")
         tmdb_id=anime_ids.get("tmdb")
         expected_titles=self._franchise_titles(root_detail,anime_detail)
+        def decision(event, **facts):
+            self._log_request(event, dict(facts, target_ids=anime_ids), stage="TVDB_CROSSMAP")
+        decision("BEGIN", expected_titles=expected_titles)
 
         if tvdb_id not in (None,""):
             payload=self.search_id("tvdb",tvdb_id)
             for row in payload or []:
-                if row.get("type")!="tv": continue
+                if row.get("type")!="tv":
+                    decision("CANDIDATE_SKIPPED", ids=row.get("ids"), media_type=row.get("type"), reason="not TV; evaluated separately as anime")
+                    continue
                 simkl_id=(row.get("ids") or {}).get("simkl")
-                if simkl_id in (None,""): continue
+                if simkl_id in (None,""):
+                    decision("CANDIDATE_REJECTED", reason="missing Simkl identity")
+                    continue
                 detail=self.tv(simkl_id)
                 if not self._tv_title_ok(expected_titles,detail,row):
+                    decision("CANDIDATE_REJECTED", simkl_id=simkl_id, titles=payload_titles(detail), reason="title similarity below 0.62")
                     continue
                 ids=detail.get("ids") or {}; row_ids=row.get("ids") or {}
+                decision("OWNER_ACCEPTED", simkl_id=simkl_id, ids=ids, source="tv_crossmap")
                 return {"name":_remote_title(detail) or _remote_title(row),
                         "simkl_id":str(simkl_id),
                         "tvdb_id":str(ids.get("tvdb") or row_ids.get("tvdb") or tvdb_id),
@@ -230,12 +284,16 @@ class SimklMediatorClient:
                 detail=self.anime(simkl_id)
                 if self._tv_title_ok(expected_titles,detail,row):
                     valid.append((row,detail))
+                    decision("ANIME_CANDIDATE_ACCEPTED", simkl_id=simkl_id, year=row.get("year"))
+                else:
+                    decision("CANDIDATE_REJECTED", simkl_id=simkl_id, titles=payload_titles(detail), reason="anime title similarity below 0.62")
             if valid:
                 row,detail=sorted(valid,key=lambda value:(
                     int(value[0].get("year") or 9999),
                     int((value[0].get("ids") or {}).get("simkl") or 0)))[0]
                 simkl_id=(row.get("ids") or {}).get("simkl")
                 ids=detail.get("ids") or {}; row_ids=row.get("ids") or {}
+                decision("OWNER_ACCEPTED", simkl_id=simkl_id, ids=ids, source="anime_group", reason="earliest year then lowest Simkl ID among accepted candidates")
                 return {"name":_remote_title(detail) or _remote_title(row),
                         "simkl_id":str(simkl_id),
                         "tvdb_id":str(ids.get("tvdb") or row_ids.get("tvdb") or tvdb_id),
@@ -261,22 +319,29 @@ class SimklMediatorClient:
                 tmdb_match=tmdb_id not in (None,"") and str(candidate_tmdb or "")==str(tmdb_id)
                 if (tvdb_id not in (None,"") and candidate_tvdb not in (None,"")
                         and str(candidate_tvdb)!=str(tvdb_id) and not tmdb_match):
+                    decision("CANDIDATE_REJECTED", simkl_id=simkl_id, candidate_tvdb=candidate_tvdb, reason="TVDB identity differs without TMDB corroboration")
                     continue
                 similarity=best_title_similarity(expected_titles,payload_titles(detail)+payload_titles(row))
-                if not tmdb_match and similarity<0.82: continue
+                if not tmdb_match and similarity<0.82:
+                    decision("CANDIDATE_REJECTED", simkl_id=simkl_id, similarity=similarity, reason="no TMDB match and title similarity below 0.82")
+                    continue
+                decision("SEARCH_CANDIDATE_ACCEPTED", simkl_id=simkl_id, similarity=similarity, tmdb_match=tmdb_match)
                 candidates.append((1 if tmdb_match else 0,similarity,row,detail))
         if candidates:
             candidates.sort(key=lambda value:(value[0],value[1]),reverse=True)
             best=candidates[0]
             if len(candidates)>1 and best[0]==candidates[1][0] and best[1]-candidates[1][1]<0.05:
+                decision("AMBIGUOUS", candidate_count=len(candidates), scores=[row[1] for row in candidates], reason="top candidates within 0.05")
                 return None
             _,_,row,detail=best; ids=detail.get("ids") or {}; row_ids=row.get("ids") or {}
             simkl_id=ids.get("simkl") or row_ids.get("simkl") or row_ids.get("simkl_id")
             resolved_tvdb=ids.get("tvdb") or row_ids.get("tvdb")
+            decision("OWNER_ACCEPTED", simkl_id=simkl_id, tvdb_id=resolved_tvdb, source="search_repair")
             return {"name":_remote_title(detail) or _remote_title(row),
                     "simkl_id":str(simkl_id),
                     "tvdb_id":str(resolved_tvdb) if resolved_tvdb not in (None,"") else None,
                     "source":"simkl_franchise_lookup_repaired"}
+        decision("NOT_FOUND", queries=list(seen))
         return None
 
 

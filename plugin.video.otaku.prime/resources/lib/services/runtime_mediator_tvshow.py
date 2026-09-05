@@ -10,6 +10,7 @@ from resources.lib.services.mediator_trace import (
     MediatorTrace,
     placement_facts,
     watchlist_input_facts,
+    mediation_log_context,
 )
 from resources.lib.services.mediator_tvshow import TVShowMediatorService
 from resources.lib.service_lifecycle import ServiceWorkHalted
@@ -39,12 +40,16 @@ class RuntimeTVShowMediatorService(TVShowMediatorService):
         return MediatorTrace((item or {}).get("local_id"), reset=reset)
 
     def process_item(self, item):
+        with mediation_log_context(item.get("local_id")):
+            return self._process_traced_item(item)
+
+    def _process_traced_item(self, item):
         """Trace the complete live path around the existing service boundary."""
         trace = self._trace(item, reset=True)
         trace.info(
             "SERVICE", "MEDIATION_BEGIN",
             watchlist_input_facts(item),
-            reason="watchdog handed item to provider-priority mediator",
+            reason="watchdog handed item to Simkl-only mediator; native provider fallback disabled",
         )
         try:
             placement = super().process_item(item)
