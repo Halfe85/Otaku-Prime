@@ -35,11 +35,15 @@ from resources.lib.watchlist.mal import MALAuthenticator
 from resources.lib.watchlist.kitsu import KitsuAuthenticator
 from resources.lib.web import create_server
 from resources.lib.logging_config import configure_logging,get_logger
-from resources.lib.service_lifecycle import ServiceInstanceLock,initialize_service_stores,stop_service_components
+from resources.lib.service_lifecycle import (
+    ServiceInstanceLock,ServiceWorkHalted,initialize_service_stores,stop_service_components,
+)
 
 
 WEB_HOST="0.0.0.0"; WEB_PORT=9898; USERS_DB_NAME="users.sqlite"
-BACKGROUND_NETWORK_TIMEOUT=3; TIMESTAMP_NETWORK_TIMEOUT=8; WATCHLIST_NETWORK_TIMEOUT=15
+# Kodi gives Python services roughly five seconds to stop. Background socket
+# operations must therefore time out before the service shutdown deadline.
+BACKGROUND_NETWORK_TIMEOUT=3; TIMESTAMP_NETWORK_TIMEOUT=3; WATCHLIST_NETWORK_TIMEOUT=3
 
 
 class PrimeMonitor(xbmc.Monitor): pass
@@ -104,7 +108,12 @@ def _run_service(profile):
     artwork_store.start()
     prime_physical=PrimePhysicalService(catalog,artwork_store=artwork_store,halt_requested=monitor.abortRequested)
 
-    structural_rebuild=prime_physical.rebuild_structural_catalog_if_required()
+    try:
+        structural_rebuild=prime_physical.rebuild_structural_catalog_if_required()
+    except ServiceWorkHalted:
+        log("INFO","service","Startup structural rebuild halted for Kodi shutdown")
+        artwork_store.stop(timeout=1)
+        return
     if structural_rebuild.get("cleanup_failed"):
         log("ERROR","structural-mediator",
             "Prime structural catalogue rebuild could not safely remove the old generated library; startup stopped")
@@ -129,9 +138,9 @@ def _run_service(profile):
         error_handler=lambda exc:log("ERROR","watchlist-watchdog","Watchlist watchdog failed: {}".format(exc)))
     identity_enricher.on_progress=watchlist_watchdog.identity_progress
     identity_enricher.on_complete=watchlist_watchdog.identity_complete
-    watch_state_projector=CatalogWatchStateProjector(catalog,watchlist_watchdog)
+    watch_state_projector=CatalogWatchStateProjector(
+        catalog,watchlist_watchdog,halt_requested=monitor.abortRequested)
     watchlist_watchdog.subscribe(watch_state_projector.handle_watchlist_event)
-    watch_state_projector.project_all(watchlist_items.list_all())
 
     def queue_timestamp_backfill():
         timestamp_mediator=getattr(tvshow_mediator,"timestamp_mediator",None)
@@ -146,6 +155,7 @@ def _run_service(profile):
             "Timestamp mediator startup backfill queued: items={} episodes={}".format(items,episodes))
         return {"items":items,"episodes":episodes}
 
+    server=None; server_thread=None
     try:
         server=create_server(
             WEB_HOST,WEB_PORT,user_store,app_logs,
@@ -155,32 +165,68 @@ def _run_service(profile):
             artwork_store=artwork_store,network_timeout=BACKGROUND_NETWORK_TIMEOUT)
         attach_timestamp_api(server,catalog,on_age_policy_changed=prime_physical.reconcile_age_policy)
     except OSError as exc:
+        if server is not None:
+            try: server.server_close()
+            except Exception: pass
+            server=None
         log("WARNING","service",
-            "Web server could not bind {}:{} ({}); watchlist service remains active".format(WEB_HOST,WEB_PORT,exc))
-        prime_physical.project_all(); queue_timestamp_backfill(); watchlist_watchdog.start(); monitor.waitForAbort()
+            "Web server setup failed on {}:{} ({}); watchlist service remains active".format(WEB_HOST,WEB_PORT,exc))
+    except Exception:
+        if server is not None:
+            try: server.server_close()
+            except Exception: pass
+        artwork_store.stop(timeout=1)
+        log("ERROR","service","Web server setup failed unexpectedly; startup resources were stopped")
+        raise
+    if server:
+        server_thread=threading.Thread(target=server.serve_forever,name="OtakuPrimeWeb",daemon=True)
+        server_thread.start()
+
+    try:
+        log("INFO","service","Startup watch-state projection beginning")
+        watch_state_projector.project_all(watchlist_items.list_all())
+        log("INFO","service","Startup physical projection beginning")
+        prime_physical.project_all()
+        if monitor.abortRequested():
+            raise ServiceWorkHalted("startup projection completed after shutdown request")
+        queue_timestamp_backfill()
+        if monitor.abortRequested():
+            raise ServiceWorkHalted("timestamp backfill completed after shutdown request")
+        watchlist_watchdog.start()
+        if server:
+            log("INFO","service","Web service listening on all IPv4 interfaces at port {}".format(WEB_PORT))
+            network_urls=_network_web_urls(WEB_PORT)
+            if network_urls: log("INFO","service","Web UI network access: {}".format(", ".join(network_urls)))
+            else: log("INFO","service","Web UI network access: http://<Kodi-device-LAN-IP>:{}/".format(WEB_PORT))
+            xbmc.log("OTAKU PRIME: web service listening on all IPv4 interfaces at port {}".format(WEB_PORT),xbmc.LOGINFO)
+            for url in network_urls: xbmc.log("OTAKU PRIME: web UI network access: {}".format(url),xbmc.LOGINFO)
+        log("INFO","watchlist-watchdog",
+            "Watchlist watchdog active: provider sync, #->Z identity work, 10% mediator batches, release scheduling")
+        xbmc.log("OTAKU PRIME: user database: {}".format(users_db),xbmc.LOGINFO)
+        monitor.waitForAbort()
+    except ServiceWorkHalted as exc:
+        log("INFO","service","Startup/background work halted cleanly: {}".format(exc))
+    finally:
         xbmc.log("OTAKU PRIME: pausing background work for addon shutdown",xbmc.LOGINFO)
-        watchlist_watchdog.pause(); configure_logging(None,kodi_log); watchlist_watchdog.stop(timeout=3)
-        artwork_store.stop(timeout=1); return
+        configure_logging(None,kodi_log)
+        get_logger("shutdown").info(
+            "Shutdown thread snapshot before cleanup: %s",
+            [{"name":thread.name,"daemon":thread.daemon,"alive":thread.is_alive()}
+             for thread in threading.enumerate()])
 
-    server_thread=threading.Thread(target=server.serve_forever,name="OtakuPrimeWeb",daemon=True)
-    server_thread.start(); prime_physical.project_all(); queue_timestamp_backfill(); watchlist_watchdog.start()
-    log("INFO","service","Web service listening on all IPv4 interfaces at port {}".format(WEB_PORT))
-    network_urls=_network_web_urls(WEB_PORT)
-    if network_urls: log("INFO","service","Web UI network access: {}".format(", ".join(network_urls)))
-    else: log("INFO","service","Web UI network access: http://<Kodi-device-LAN-IP>:{}/".format(WEB_PORT))
-    log("INFO","watchlist-watchdog",
-        "Watchlist watchdog active: provider sync, #->Z identity work, 10% mediator batches, release scheduling")
-    xbmc.log("OTAKU PRIME: web service listening on all IPv4 interfaces at port {}".format(WEB_PORT),xbmc.LOGINFO)
-    for url in network_urls: xbmc.log("OTAKU PRIME: web UI network access: {}".format(url),xbmc.LOGINFO)
-    xbmc.log("OTAKU PRIME: user database: {}".format(users_db),xbmc.LOGINFO)
+        def shutdown_event(component,action,facts):
+            get_logger("shutdown").info(
+                "Shutdown component=%s action=%s facts=%s",component,action,facts)
 
-    monitor.waitForAbort(); xbmc.log("OTAKU PRIME: pausing background work for addon shutdown",xbmc.LOGINFO)
-    configure_logging(None,kodi_log)
-    shutdown=stop_service_components(server,server_thread,watchlist_watchdog,web_join_timeout=1,worker_timeout=3)
-    if shutdown["stopped"]: xbmc.log("OTAKU PRIME: service stopped",xbmc.LOGINFO)
-    else:
-        xbmc.log("OTAKU PRIME: shutdown deadline reached; active components: {}".format(
-            ", ".join(shutdown["active"])),xbmc.LOGWARNING)
+        shutdown=stop_service_components(
+            server,server_thread,watchlist_watchdog,physical=prime_physical,
+            artwork_store=artwork_store,web_join_timeout=1,worker_timeout=3,
+            on_event=shutdown_event)
+        if shutdown["stopped"]:
+            xbmc.log("OTAKU PRIME: service stopped in {}s".format(shutdown["elapsed"]),xbmc.LOGINFO)
+        else:
+            xbmc.log("OTAKU PRIME: shutdown deadline reached; active components: {}".format(
+                ", ".join(shutdown["active"])),xbmc.LOGWARNING)
 
 
 def main():

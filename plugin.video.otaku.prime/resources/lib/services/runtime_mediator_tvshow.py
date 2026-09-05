@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import time
 
 from resources.lib.services.mediator_helper_simkl import MediatorMetadataPending
 from resources.lib.services.mediator_timestamp import MediatorTimestampService
@@ -233,9 +234,12 @@ class RuntimeTVShowMediatorService(TVShowMediatorService):
         return super().request_stop()
 
     def stop(self, timeout=35):
+        deadline=time.monotonic()+max(0.0,float(timeout))
         if self.timestamp_mediator is not None:
             self.timestamp_mediator.request_stop()
-        stopped = super().stop(timeout=timeout)
+        stopped = super().stop(timeout=max(0.0,deadline-time.monotonic()))
+        timestamp_stopped=True
         if self.timestamp_mediator is not None:
-            self.timestamp_mediator.stop(timeout=min(2, max(0, timeout)))
-        return stopped
+            timestamp_stopped=self.timestamp_mediator.stop(
+                timeout=max(0.0,deadline-time.monotonic()))
+        return bool(stopped and timestamp_stopped)

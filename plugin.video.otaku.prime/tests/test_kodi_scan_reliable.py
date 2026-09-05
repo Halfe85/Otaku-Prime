@@ -32,6 +32,16 @@ class FakeNotifications:
 
 
 class ReliableKodiScanTests(unittest.TestCase):
+    def test_stop_discards_pending_scans_and_rejects_new_work(self):
+        queue = ReliableKodiVideoLibraryScanQueue(
+            execute_scan=lambda path: "OK", scan_active=lambda:False)
+        queue._pending=[("/prime/old/","old")]
+        self.assertTrue(queue.stop(timeout=0))
+        self.assertEqual([],queue._pending)
+        result=queue.request("/prime/new/",reason="shutdown-test")
+        self.assertFalse(result["queued"])
+        self.assertEqual("service_stopping",result["reason"])
+
     def test_physical_scan_refreshes_parent_and_target_through_kodi_vfs(self):
         opened = []
         deleted = []

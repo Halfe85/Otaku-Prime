@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+import threading
 import unittest
 
 
@@ -42,6 +43,9 @@ class _Thread:
     def join(self, timeout=None):
         self.events.append(("web-join", timeout))
 
+    def is_alive(self):
+        return False
+
 
 class _Watchdog:
     def __init__(self, events):
@@ -53,6 +57,14 @@ class _Watchdog:
 
     def pause(self):
         self.events.append("worker-pause")
+
+
+class _Physical:
+    def __init__(self,events):
+        self.events=events
+        self._scan_queue=type("Queue",(),{"_thread":None})()
+    def request_stop(self): self.events.append("physical-request-stop")
+    def stop(self,timeout=None): self.events.append(("physical-stop",timeout)); return True
 
 
 class _Store:
@@ -152,6 +164,31 @@ class ServiceLifecycleTests(unittest.TestCase):
             "worker-pause","artwork-request-stop","web-shutdown","web-close"
         ],events[:4])
         self.assertEqual("artwork-stop",events[5][0])
+
+    def test_cleanup_without_web_server_still_stops_physical_and_workers(self):
+        events=[]; reports=[]
+        result=stop_service_components(
+            None,None,_Watchdog(events),physical=_Physical(events),
+            artwork_store=_Artwork(events),worker_timeout=3,
+            on_event=lambda component,action,facts: reports.append((component,action,facts)))
+        self.assertTrue(result["stopped"])
+        self.assertIn("physical-request-stop",events)
+        self.assertIn("worker-stop",[value[0] if isinstance(value,tuple) else value for value in events])
+        self.assertEqual("shutdown-begin",reports[0][1])
+        self.assertEqual("shutdown-complete",reports[-1][1])
+
+    def test_untracked_named_prime_thread_is_reported(self):
+        stop=threading.Event()
+        thread=threading.Thread(
+            target=stop.wait,name="OtakuPrimeUntrackedTest",daemon=True)
+        thread.start()
+        try:
+            result=stop_service_components(
+                None,None,_Watchdog([]),worker_timeout=0)
+            self.assertFalse(result["stopped"])
+            self.assertIn("thread:OtakuPrimeUntrackedTest",result["active"])
+        finally:
+            stop.set(); thread.join(timeout=1)
 
 
 if __name__ == "__main__":

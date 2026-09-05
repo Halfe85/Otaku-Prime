@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from resources.lib.logging_config import get_logger
 from resources.lib.services.watchlist_watchdog import WATCHLIST_ADDED,WATCHLIST_UPDATED
+from resources.lib.service_lifecycle import ServiceWorkHalted
 
 
 LOGGER=get_logger(__name__)
@@ -13,9 +14,10 @@ LOGGER=get_logger(__name__)
 class CatalogWatchStateProjector:
     """Keep catalogue booleans as a sequential projection of tracker progress."""
 
-    def __init__(self,catalog_store,watchlist_manager):
+    def __init__(self,catalog_store,watchlist_manager,halt_requested=None):
         self.catalog=catalog_store
         self.watchlist=watchlist_manager
+        self._halt_requested=halt_requested or (lambda:False)
 
     def project_item(self,item):
         if not item or not item.get("local_id"):
@@ -30,9 +32,15 @@ class CatalogWatchStateProjector:
 
     def project_all(self,items=None):
         rows=list(items if items is not None else self.watchlist.list_items())
-        episode_count=watched_count=0
+        episode_count=watched_count=processed=0
         for item in rows:
+            if self._halt_requested():
+                LOGGER.info(
+                    "Catalogue watch-state startup projection halted: completed=%s total=%s",
+                    processed,len(rows))
+                raise ServiceWorkHalted("watch-state projection halted for addon shutdown")
             result=self.project_item(item)
+            processed+=1
             episode_count+=int(result.get("episode_count") or 0)
             watched_count+=int(result.get("watched_count") or 0)
         LOGGER.info(

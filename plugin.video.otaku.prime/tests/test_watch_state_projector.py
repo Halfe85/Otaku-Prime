@@ -11,6 +11,7 @@ from resources.lib.services.watchlist_watchdog import (
     WatchlistWatchdogService,
     WatchlistWatchdogStore,
 )
+from resources.lib.service_lifecycle import ServiceWorkHalted
 
 
 class SegmentFactory:
@@ -81,6 +82,21 @@ class WatchStateProjectorTests(unittest.TestCase):
         unwatched=self.projector.update_episode(self.episodes[1]["local_id"],False)
         self.assertEqual(1,unwatched["progress"])
         self.assertEqual([1,0,0],self.statuses())
+
+    def test_startup_projection_stops_before_next_item_on_kodi_abort(self):
+        halted=[False]
+        projector=CatalogWatchStateProjector(
+            self.catalog,self.manager,halt_requested=lambda:halted[0])
+        original=projector.project_item
+        calls=[]
+        def project(item):
+            calls.append(item["local_id"])
+            halted[0]=True
+            return original(item)
+        projector.project_item=project
+        with self.assertRaises(ServiceWorkHalted):
+            projector.project_all([self.item,dict(self.item,local_id="second")])
+        self.assertEqual([self.item["local_id"]],calls)
 
 
 if __name__=="__main__":

@@ -206,7 +206,9 @@ class KodiVideoLibraryScanQueue:
 
     def __init__(self, halt_requested=None, execute_scan=None, scan_active=None,
                  sleep=None, refresh_series=None, refresh_movie=None):
-        self._halt_requested = halt_requested or (lambda: False)
+        external_halt = halt_requested or (lambda: False)
+        self._stop = threading.Event()
+        self._halt_requested = lambda: self._stop.is_set() or external_halt()
         self._execute_scan = execute_scan or _kodi_video_scan
         self._scan_active = scan_active or _kodi_video_scan_active
         self._refresh_series = refresh_series or _kodi_refresh_tvshow
@@ -219,6 +221,9 @@ class KodiVideoLibraryScanQueue:
 
     def request(self, directory, reason="prime_physical"):
         path = _normalized_directory(directory)
+        if self._halt_requested():
+            LOGGER.info("Kodi video library scan rejected during shutdown: reason=%s path=%s", reason, path)
+            return {"queued": False, "path": path, "reason": "service_stopping"}
         if not path:
             return {"queued": False, "path": path, "reason": "empty_directory"}
         with self._lock:
@@ -234,6 +239,23 @@ class KodiVideoLibraryScanQueue:
                 self._thread.start()
         LOGGER.info("Queued Kodi video library scan: reason=%s path=%s", reason, path)
         return {"queued": True, "path": path, "reason": str(reason or "prime_physical")}
+
+    def request_stop(self):
+        self._stop.set()
+        with self._lock:
+            discarded = len(self._pending)
+            self._pending = []
+        LOGGER.info("Kodi video library scan queue stopping: active=%s discarded=%s",
+                    self._active_directory, discarded)
+
+    def stop(self, timeout=1):
+        self.request_stop()
+        thread = self._thread
+        if thread:
+            thread.join(timeout=max(0.0, float(timeout)))
+        stopped = not bool(thread and thread.is_alive())
+        LOGGER.info("Kodi video library scan queue stopped=%s", stopped)
+        return stopped
 
     def _wait_for_current_scan(self):
         while not self._halt_requested():
@@ -343,6 +365,15 @@ class RuntimePrimePhysicalService(PrimePhysicalService):
         )
         self._movies = PrimeMoviePhysicalSupport(self, artwork_store=artwork_store)
         self._bulk_projection = False
+
+    def request_stop(self):
+        requester = getattr(self._scan_queue, "request_stop", None)
+        if requester:
+            requester()
+
+    def stop(self, timeout=1):
+        stopper = getattr(self._scan_queue, "stop", None)
+        return bool(stopper(timeout=timeout)) if stopper else True
 
     @property
     def movie_source_url(self):
